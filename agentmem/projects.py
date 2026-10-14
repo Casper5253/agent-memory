@@ -42,8 +42,10 @@ def title_case(folder: str) -> str:
 def _derive(cwd: str) -> "tuple[str, str] | None":
     """(name, root) for an unmapped directory, or None for Unsorted."""
     n = _norm(cwd)
-    if n in (_norm(HOME), _norm(PROJECTS_ROOT)):  # sessions at the top level are about the environment itself
+    if n == _norm(HOME):  # home-level sessions are about the agent environment itself
         return ENVIRONMENT, os.path.normpath(cwd)
+    if n == _norm(PROJECTS_ROOT):  # the Projects root itself is generic (tests, cross-project work): Unsorted
+        return None
     for h in (HOME / ".codex", HOME / ".claude", HOME / ".agents", HOME / ".config" / "opencode"):
         if _is_under(n, _norm(h)):
             return ENVIRONMENT, str(h)

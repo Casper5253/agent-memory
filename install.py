@@ -157,6 +157,10 @@ def main():
             (BIN / s).unlink(missing_ok=True)
         print("uninstalled hooks, plugin and shims; vault and ~/.agents/memory left in place")
         return
+    tests = subprocess.run([str(PY), "-I", "-m", "unittest", "discover", "-s", str(REPO / "tests")], capture_output=True,
+                           text=True, cwd=REPO, timeout=600)
+    if tests.returncode != 0:
+        sys.exit("tests failed; refusing to deploy a broken build into live hooks:\n" + tests.stderr[-2000:])
     deploy_app()
     if not a.no_hooks:
         wire_claude()

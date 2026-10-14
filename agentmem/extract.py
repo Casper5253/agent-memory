@@ -24,6 +24,7 @@ class Digest:
     files: list = field(default_factory=list)           # modified files, deduped, in order
     decision_lines: list = field(default_factory=list)
     assistant_chars: int = 0
+    recent: list = field(default_factory=list)          # last assistant messages (for prompt-less ranges)
     tool_calls: int = 0
     text: str = ""                                      # bounded summarizer input
     sha: str = ""
@@ -64,6 +65,7 @@ def build(t: Transcript, min_prompts: int, min_chars: int, cap: int) -> Digest:
             d.assistant_chars += len(ev.text)
             if ev.final:
                 d.answers.append(redact(ev.text))
+            d.recent = (d.recent + [redact(ev.text)])[-15:]
             for sent in _SENTENCE.split(ev.text):
                 if _DECISION.search(sent) and 20 <= len(sent) <= 400:
                     d.decision_lines.append(redact(sent.strip()))
@@ -89,7 +91,9 @@ def build(t: Transcript, min_prompts: int, min_chars: int, cap: int) -> Digest:
 
 def _gate(d: Digest, min_prompts: int, min_chars: int) -> tuple:
     if not d.prompts:
-        return False, "no user prompts"
+        if len(d.files) >= 3 or (d.tool_calls >= 20 and d.assistant_chars >= min_chars):
+            return True, f"autonomous continuation ({d.tool_calls} tool calls, {len(d.files)} files)"
+        return False, "no user prompts and little work"
     if d.files and (len(d.prompts) >= min_prompts or len(d.files) >= 3):
         return True, f"{len(d.files)} files modified"
     if len(d.prompts) >= min_prompts and (d.tool_calls >= 5 or d.assistant_chars >= min_chars):
@@ -111,6 +115,9 @@ def _render(t: Transcript, d: Digest, cap: int) -> str:
         a = next(answers, None)
         if a:
             turns.append(f"--- ASSISTANT {i}:\n{_short(a, 3000)}")
+    if not d.prompts:
+        turns = ["--- (no new user prompts in this range: the agent continued autonomously)"]
+        turns += [f"--- ASSISTANT (recent {i}):\n{_short(a, 2500)}" for i, a in enumerate(d.recent, 1)]
     budget = cap - sum(len(x) + 1 for x in head + tail)
     keep_head, middle = turns[:2], turns[2:]
     trimmed = False
@@ -124,13 +131,13 @@ def _render(t: Transcript, d: Digest, cap: int) -> str:
 
 def fallback_summary(t: Transcript, d: Digest) -> dict:
     """Model-free summary. Clearly labelled; never invents decisions beyond quoted sentences."""
-    first = _short(d.prompts[0], 300) if d.prompts else "(no prompt)"
+    first = _short(d.prompts[0], 300) if d.prompts else "(autonomous continuation, no new prompt)"
     title = _short(t.title or (d.prompts[0] if d.prompts else "session"), 60)
     return {
         "title": title,
         "summary": (f"Deterministic capture (no model summary). The session started with: \"{first}\". "
                     f"It had {len(d.prompts)} prompts, {d.tool_calls} tool calls and modified {len(d.files)} files."),
-        "what_happened": [_short(p, 240) for p in d.prompts[:12]],
+        "what_happened": [_short(p, 240) for p in d.prompts[:12]] or [_short(a, 240) for a in d.recent[-8:]],
         "decisions": [{"decision": _short(s, 300), "rationale": "(quoted from the agent; not reconciled)"}
                       for s in _dedupe(d.decision_lines)[:8]],
         "facts": [],

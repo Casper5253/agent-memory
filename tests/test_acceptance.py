@@ -91,6 +91,19 @@ class Acceptance(Base):
         self.assertIn("Postgres", text)
         self.assertNotIn("Set up storage for the demo app", text, "part 2 must only cover the new range")
 
+    def test_03b_promptless_continuation_is_captured(self):
+        src = self.claude_session("s-cont", fx.SUBSTANTIAL, 120)
+        self.end("claude", "s-cont", src)
+        self.run_worker()
+        lines = fx.claude_lines("s-cont", self.cwd, [("x", "Implemented the installer and verified hooks. " * 20,
+                                                      ["install.py", "hook.py", "plugin.js", "README.md"], ["pytest -q"] * 3)], 10)
+        fx.write_jsonl(src, [l for l in lines if not (l["type"] == "user" and isinstance(l["message"]["content"], str))], append=True)
+        self.end("claude", "s-cont", src)
+        self.run_worker()
+        part2 = [p for p in self.session_notes() if p.stem.endswith("-p2")]
+        self.assertEqual(len(part2), 1, "work without new prompts must still be captured")
+        self.assertIn("install.py", part2[0].read_text(encoding="utf-8"))
+
     def test_04_concurrent_sessions_do_not_corrupt_metadata(self):
         home = self.tmp / "rt"
         home.mkdir()
