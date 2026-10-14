@@ -69,6 +69,8 @@ Writes by unattended capture are limited to the vault (`0-Sessions`, `1-Projects
 
 ## 4. Implementation plan and Herdr assignment
 
+> **As executed:** Casper chose to have Claude build this solo (no Herdr distribution). The stages below ran in order inside one Claude session. Codex's review/validation role was replaced by the automated acceptance suite plus live runs against real Claude, Codex and OpenCode transcripts. An independent Codex review (`interrogate`) is still a recommended follow-up.
+
 | Stage | Owner | Deliverable | Gate |
 |---|---|---|---|
 | 0 | dev-claude | backups; repo; interface spec (`docs/SPEC.md`: normalized event schema, manifest schema, note template, CLI contract); vault reorganization (migration script, dry-run, apply) | dry-run reviewed by Codex |

@@ -117,9 +117,8 @@ def cmd_projects(args):
         for proj in sorted(data["projects"], key=lambda p: p["name"].lower()):
             if proj.get("status") != "active" and not args.all:
                 continue
-            note = cfg.projects_dir / proj["name"] / f"{proj['name']}.md"
-            if not note.exists():
-                note = cfg.vault / "4-Archive" / proj["name"] / f"{proj['name']}.md"
+            from .projects import note_path
+            note = note_path(cfg.vault, proj["name"])
             last = man.query_captures(project=proj["name"], limit=1)
             pend = 0
             state = ""

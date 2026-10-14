@@ -103,7 +103,7 @@ def search(cfg: Config, terms: str, n: int = 8, layers=None, semantic: bool = Fa
             "label": _label(os.path.relpath(path, cfg.vault) if os.path.isabs(path) else path),
             "path": path, "title": it.get("title", ""), "score": it.get("score"),
             "line": it.get("line"), "docid": it.get("docid", ""),
-            "snippet": " ".join(str(it.get("snippet") or it.get("context") or "").split())[:400],
+            "snippet": re.sub(r"^@@[^@]*@@\s*(\([^)]*\))?\s*", "", " ".join(str(it.get("snippet") or "").split()))[:400],
         })
     return hits
 

@@ -60,6 +60,13 @@ def _derive(cwd: str) -> "tuple[str, str] | None":
     return title_case(first.name), str(first)
 
 
+def note_path(vault: Path, project: str) -> Path:
+    """Active projects live in 1-Projects; an archived project keeps its note in 4-Archive."""
+    active = vault / "1-Projects" / project / f"{project}.md"
+    archived = vault / "4-Archive" / project / f"{project}.md"
+    return archived if archived.exists() and not active.exists() else active
+
+
 def resolve(cwd: str, map_path: Path, create: bool = True) -> str:
     if not cwd:
         return UNSORTED
@@ -77,6 +84,8 @@ def resolve(cwd: str, map_path: Path, create: bool = True) -> str:
     if derived is None:
         return UNSORTED
     name, root = derived
+    if _norm(root) in (_norm(HOME), _norm(PROJECTS_ROOT)):
+        return name  # never persist a root that would prefix-match every directory below it
     if create:
         with file_lock(map_path.with_suffix(".lock"), timeout=10):
             data = load_map(map_path)

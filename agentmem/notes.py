@@ -33,7 +33,7 @@ def project_link(project: str) -> str:
 
 
 def render_session(*, agent, session_id, project, part, when, started, ended, source, start, end, summarizer,
-                   summary, files, commands, gate_reason, prev_link=None) -> str:
+                   summary, files, commands, gate_reason, prev_link=None, project_note=None) -> str:
     tags = ["session", f"agent/{agent}", f"project/{slug(project, 8)}"]
     fm = [
         "---", "type: session", f"agent: {agent}", f"session_id: {_yaml_str(session_id)}",
@@ -47,7 +47,7 @@ def render_session(*, agent, session_id, project, part, when, started, ended, so
 
     decisions = "\n".join(f"- **{redact(d['decision'])}**" + (f" — {redact(d['rationale'])}" if d.get("rationale") else "")
                           for d in summary.get("decisions", [])) or "- none recorded"
-    plink = project_link(project) if project != "Unsorted" else "Unsorted (no project note)"
+    plink = (f"[[{project_note}|{project}]]" if project_note else project_link(project)) if project != "Unsorted" else "Unsorted (no project note)"
     body = [
         f"# {redact(summary.get('title') or 'Session')}", "",
         f"> Historical record of a {agent} session on {when:%Y-%m-%d}. It may be outdated: the current state lives in {plink}.",

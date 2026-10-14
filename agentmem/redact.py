@@ -53,8 +53,9 @@ def _high_entropy(match: re.Match) -> str:
     core = tok.rstrip("=")
     if _UUID.match(core) or (_HEX.match(core) and len(core) <= 64):  # commit hashes, sha256, uuids
         return tok
-    if "/" in core and core.count("/") >= 2 and not re.search(r"[A-Z].*\d|\d.*[A-Z]", core):
-        return tok  # path-like
+    segments = re.split(r"[\\/]", core)
+    if len(segments) >= 2 and max(len(s) for s in segments) < 25:
+        return tok  # path-like: base64 secrets that contain "/" still have long random segments
     classes = sum(bool(re.search(p, core)) for p in (r"[a-z]", r"[A-Z]", r"\d"))
     if classes >= 3 and _entropy(core) >= 4.0:
         return MASK

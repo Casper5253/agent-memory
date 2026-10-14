@@ -105,7 +105,8 @@ def finalize(cfg: Config, man: Manifest, row, summarizer=None, consolidator=None
             agent=agent, session_id=sid, project=project, part=part, when=when, started=t.started, ended=t.ended,
             source=t.source, start=t.start, end=t.end, summarizer=summary_kind, summary=summary, files=d.files,
             commands=d.commands, gate_reason=d.gate_reason,
-            prev_link=Path(prev["note_path"]).with_suffix("").as_posix() if prev else None)
+            prev_link=Path(prev["note_path"]).with_suffix("").as_posix() if prev else None,
+            project_note=_link(cfg, projects.note_path(cfg.vault, project)))
         if contains_secret(text):  # belt and braces: everything was redacted upstream
             text = redact(text)
         create_once(path, text)
@@ -135,7 +136,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                              summary_kind: str, consolidator=None) -> tuple:
     """Reconcile one session into its project note. Returns (cost, consolidated?)."""
     consolidator = consolidator or llm.consolidate
-    note_path = cfg.projects_dir / project / f"{project}.md"
+    note_path = projects.note_path(cfg.vault, project)
     date = f"{when:%Y-%m-%d}"
     session_line = f"- {date} [[{link}|{summary.get('title') or 'session'}]]"
     with file_lock(cfg.locks_dir / f"project-{notes.slug(project, 12)}.lock", timeout=cfg.lock_timeout_s):

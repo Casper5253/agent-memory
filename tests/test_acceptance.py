@@ -277,7 +277,8 @@ class Safeguards(Base):
                                       'api_key = "q8Xv2LmN0pRsT4"', "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"]:
             self.assertTrue(contains_secret(s), s)
         for ok in ["git commit 3f2a9c1e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a", "C:/Users/caspe/Documents/Projects/agent-memory/run.py",
-                   "session 01a13a34-04b6-75c0-8998-21d7db60ac4b", "Use SQLite for storage"]:
+                   "session 01a13a34-04b6-75c0-8998-21d7db60ac4b", "Use SQLite for storage",
+                   "~/.codex/backups/herdr-modernize-20261014/ROLLBACK.md"]:
             self.assertEqual(redact(ok), ok, ok)
 
     def test_atomic_write_leaves_no_temp_files(self):

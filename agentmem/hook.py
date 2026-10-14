@@ -20,7 +20,7 @@ def _context(cfg, cwd: str) -> str:
     lines.append("When asked what was previously decided, implemented or configured, search the vault first: "
                  '`mem search "<terms>"` (memory skill), never guess.')
     if project != projects.UNSORTED:
-        note = cfg.projects_dir / project / f"{project}.md"
+        note = projects.note_path(cfg.vault, project)
         lines.append(f"Project: {project} — {note}")
         if note.exists():
             try:
