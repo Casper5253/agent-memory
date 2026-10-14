@@ -37,6 +37,8 @@ mem projects [--all]
 mem stats | mem doctor
 mem index [--no-embed]            # create collections, update index, embed
 mem capture [--agent A --session ID --transcript PATH]
+mem capture --current             # /obsidian: sync the running session now
+mem remember "<sentence>" --kind fact|decision|preference|next [--why ...] [--project P]   # /remember
 mem consolidate                   # apply pending reconciliation (after a model outage)
 mem retry [--session ID]
 mem pause | mem resume
@@ -50,7 +52,9 @@ python -I install.py                           # redeploy app, hooks, plugin, sk
 python -I tools/migrate_vault.py VAULT         # (one-off, already applied) PARA migration, dry run by default
 ```
 
-Config: `~/.agents/memory/config.json` keys `summarizer` (`claude-haiku` or `none`), `settle_minutes`, `embeddings`, `min_user_prompts`, `digest_char_cap`, `excluded_roots`, `qmd_index`. Project mapping: `<vault>/_meta/projects.json`. Unknown folders under `Documents\Projects` become projects automatically; others are captured as *Unsorted*.
+Config: `~/.agents/memory/config.json` keys `summarizer` (`claude-haiku` or `none`), `settle_minutes`, `embeddings`, `min_user_prompts`, `digest_char_cap`, `excluded_roots`, `qmd_index`. Project mapping: `<vault>/_meta/projects.json`. Routing: the working folder decides when it maps to a project. Generic folders (home, `Documents\Projects` itself, Documents, Codex scratch folders) are resolved from the edited files' locations, then paths or project names in the first prompt; no signal means *Unsorted* (home falls back to Agent Environment). Later parts of a session keep the first part's project. Unknown folders under `Documents\Projects` become projects automatically.
+
+Slash commands (shared skills, all agents): `/obsidian` → `mem capture --current`; `/remember` → `mem remember` (immutable evidence note + reconciliation; no-project items go to `3-Resources/Remembered.md`).
 
 ## Rollback
 

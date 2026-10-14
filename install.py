@@ -124,10 +124,11 @@ def wire_opencode(remove=False):
 
 
 def install_skills():
-    """memory skill (ours) + qmd skill (pinned copy from the installed QMD) -> shared pstack sync -> all agents."""
-    dst = SKILLS_LOCAL / "memory"
-    dst.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(REPO / "integrations" / "skill" / "memory" / "SKILL.md", dst / "SKILL.md")
+    """our skills (memory, remember, obsidian) + qmd skill (pinned copy from the installed QMD) -> shared pstack sync -> all agents."""
+    for src_dir in sorted((REPO / "integrations" / "skill").iterdir()):  # memory, remember, obsidian
+        if (src_dir / "SKILL.md").exists():
+            shutil.rmtree(SKILLS_LOCAL / src_dir.name, ignore_errors=True)
+            shutil.copytree(src_dir, SKILLS_LOCAL / src_dir.name)
     qmd = shutil.which("qmd")
     if qmd:
         src = Path(qmd).parent / "node_modules" / "@tobilu" / "qmd" / "skills" / "qmd"

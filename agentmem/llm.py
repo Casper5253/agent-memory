@@ -48,7 +48,7 @@ state_markdown must contain exactly these four headings, in order, each followed
 ### Active decisions
 ### Superseded decisions
 ### Open questions and next steps
-Decision bullets: "- YYYY-MM-DD — <decision> — <rationale> ([[link]])". Max 5000 characters. No secrets."""
+Decision bullets: "- YYYY-MM-DD — <decision> — <rationale> (<session wikilink exactly as given>)". Max 5000 characters. No secrets."""
 
 
 def _run(system: str, prompt: str, model: str, timeout: int) -> dict:
@@ -127,4 +127,6 @@ def consolidate(state_md: str, summary: dict, link: str, date: str, model: str =
         raise LLMError("consolidation output missing required headings")
     if len(md) > 8000:
         raise LLMError("consolidation output too long")
+    while "[[[[" in md or "]]]]" in md:  # models sometimes re-wrap a link that already has brackets
+        md = md.replace("[[[[", "[[").replace("]]]]", "]]")
     return redact(md), data.get("_cost_usd", 0.0)

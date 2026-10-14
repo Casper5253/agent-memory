@@ -15,7 +15,7 @@ CONTEXT_CAP = 1500
 def _context(cfg, cwd: str) -> str:
     from . import notes, projects
     from .manifest import Manifest
-    project = projects.resolve(cwd, cfg.projects_map, create=False)
+    project = projects.resolve_session(cwd, cfg.projects_map, create=False)
     lines = [f"Agent memory: Obsidian vault at {cfg.vault}. Session notes (0-Sessions) are HISTORICAL; project notes (1-Projects) are CURRENT state."]
     lines.append("When asked what was previously decided, implemented or configured, search the vault first: "
                  '`mem search "<terms>"` (memory skill), never guess.')

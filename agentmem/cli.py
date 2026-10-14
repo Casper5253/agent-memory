@@ -177,10 +177,37 @@ def cmd_index(args):
     return 0 if not res.get("error") else 1
 
 
+def cmd_remember(args):
+    from .remember import capture_current, remember_item
+    cfg = _cfg(args)
+    text = " ".join(args.text).strip()
+    out = {}
+    if text:
+        out["remembered"] = remember_item(cfg, text, kind=args.kind, project=args.project or "", cwd=args.cwd or "",
+                                          agent=args.agent or _detect_agent(), rationale=args.why or "")
+    if args.session or not text:
+        out["session"] = capture_current(cfg, agent=args.agent or "", cwd=args.cwd or "")
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _detect_agent() -> str:
+    if os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        return "claude"
+    if os.environ.get("CODEX_THREAD_ID"):
+        return "codex"
+    return "opencode" if os.environ.get("OPENCODE") or os.environ.get("OPENCODE_SESSION") else "user"
+
+
 def cmd_capture(args):
     from . import worker
     from .manifest import Manifest
     cfg = _cfg(args)
+    if args.current:
+        from .remember import capture_current
+        print(json.dumps(capture_current(cfg, agent=args.agent if args.agent_given else "", cwd=args.cwd or "",
+                                         budget_s=args.budget), indent=2))
+        return 0
     if args.session:
         man = Manifest(cfg.manifest_path)
         try:
@@ -322,10 +349,21 @@ def main(argv=None):
     s.set_defaults(fn=cmd_index)
 
     s = sub.add_parser("capture", help="capture now: a given session, or everything ready")
-    s.add_argument("--agent", choices=["claude", "codex", "opencode"], default="claude")
+    s.add_argument("--agent", choices=["claude", "codex", "opencode"])
     s.add_argument("--session"), s.add_argument("--transcript"), s.add_argument("--cwd")
+    s.add_argument("--current", action="store_true", help="capture the agent session running this command, now")
     s.add_argument("--budget", type=float, default=900)
     s.set_defaults(fn=cmd_capture)
+
+    s = sub.add_parser("remember", help="record something now (routed to the right project); no text = sync this session")
+    s.add_argument("text", nargs="*")
+    s.add_argument("--kind", choices=["fact", "decision", "preference", "next"], default="fact")
+    s.add_argument("--why", help="rationale (for decisions)")
+    s.add_argument("--project", help="override automatic routing")
+    s.add_argument("--session", action="store_true", help="also sync the current session")
+    s.add_argument("--agent", choices=["claude", "codex", "opencode"])
+    s.add_argument("--cwd")
+    s.set_defaults(fn=cmd_remember)
 
     s = sub.add_parser("consolidate", help="retry reconciliation of pending captures")
     s.add_argument("--limit", type=int, default=20)
@@ -355,6 +393,9 @@ def main(argv=None):
     s.set_defaults(fn=cmd_worker)
 
     args = p.parse_args(argv)
+    if args.cmd == "capture":
+        args.agent_given = args.agent is not None
+        args.agent = args.agent or "claude"
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     return args.fn(args) or 0

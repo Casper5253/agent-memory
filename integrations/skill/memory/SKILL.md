@@ -26,8 +26,10 @@ QMD can be used directly too (see the `qmd` skill): collections `vault-projects`
 
 ## Capture
 
+Slash commands: `/remember` saves one item now (`mem remember "…" --kind …`); `/obsidian` syncs the running session now (`mem capture --current`). Both route to the right project automatically: the working folder first, then edited files and the first prompt's paths or project names when the folder is generic.
+
 Capture is automatic. Claude Code and Codex hooks, plus the OpenCode plugin, record each session. It's captured after it ends, or after 20 idle minutes. Trivial sessions are skipped.
-- "Remember this" / "save this to memory": capture is already running. For something that must be in the *current state* now, edit the project note **inside** `<!-- agentmem:state:begin -->…end` (keep the four headings), or add a note in `3-Resources/` for reusable knowledge. Never edit `0-Sessions/` notes: they are immutable.
+- "Remember this" / "save this to memory": use `/remember` (`mem remember "<self-contained sentence>" --kind fact|decision|preference|next`). Manual edits to current state go **inside** the project note's `agentmem:state` block (keep the four headings). Never edit `0-Sessions/` notes: they are immutable.
 - Force a capture of everything that's ready: `mem capture`. One specific session: `mem capture --agent claude --session <id> --transcript <path>`.
 - Privacy: `mem pause` stops all capture; `mem resume` restarts it.
 

@@ -108,7 +108,7 @@ class Manifest:
             db.execute("INSERT OR REPLACE INTO captures VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (agent, session_id, part, note_path, project, title, date, start, end, summarizer,
                         int(consolidated), cost, sha, now, summary_json))
-            db.execute("UPDATE sessions SET status='captured', captured_until=?, parts=?, project=?, attempts=0,"
+            db.execute("UPDATE sessions SET status='captured', captured_until=?, parts=?, project=?, attempts=0, skip_reason=NULL,"
                        " next_try=0, last_error=NULL, end_seen=0, updated=? WHERE agent=? AND session_id=?",
                        (end, part, project, now, agent, session_id))
 

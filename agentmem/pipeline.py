@@ -81,7 +81,11 @@ def finalize(cfg: Config, man: Manifest, row, summarizer=None, consolidator=None
         log(cfg, "skip", agent=agent, session=sid, reason=d.gate_reason)
         return "trivial"
 
-    project = projects.resolve(cwd, cfg.projects_map)
+    if row["parts"] and row["project"]:
+        project = row["project"]  # later parts of a session stay with the project of its first part
+    else:
+        edited = [p for ev in t.events if ev.kind == "edit" for p in ev.paths]
+        project = projects.resolve_session(cwd, cfg.projects_map, files=edited, text=d.prompts[0] if d.prompts else "")
     part = row["parts"] + 1
     when = _parse_time(t.started)
     cost = 0.0
@@ -128,6 +132,7 @@ def finalize(cfg: Config, man: Manifest, row, summarizer=None, consolidator=None
 
 def _pending_lines(summary: dict, link: str, date: str) -> list:
     out = [f"- [ ] {date} [[{link}]] — {d['decision']}" for d in summary.get("decisions", [])[:6]]
+    out += [f"- [ ] {date} [[{link}]] — fact: {s}" for s in summary.get("facts", [])[:4]]
     out += [f"- [ ] {date} [[{link}]] — next: {s}" for s in summary.get("next_steps", [])[:4]]
     return out or [f"- [ ] {date} [[{link}]] — review session for state changes"]
 

@@ -62,6 +62,95 @@ def _derive(cwd: str) -> "tuple[str, str] | None":
     return title_case(first.name), str(first)
 
 
+GENERIC_DIRS = (HOME, PROJECTS_ROOT, HOME / "Documents", HOME / "Desktop", HOME / "Downloads")
+CODEX_SCRATCH = HOME / "Documents" / "Codex"   # Codex desktop's per-task scratch folders
+_ABS_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|~[\\/])[^\s\"'<>|*?`]+")
+_STOP_NAMES = {"projects", "project", "documents", "codex", "claude", "opencode", "agents", "memory", "notes", "archive", "work", "src", "app"}
+
+
+def is_generic(cwd: str) -> bool:
+    """A working directory that says nothing about which project the session was about."""
+    n = _norm(cwd)
+    return any(n == _norm(g) for g in GENERIC_DIRS) or _is_under(n, _norm(CODEX_SCRATCH))
+
+
+def _explicit(path: str, data: dict) -> "str | None":
+    best, best_len = None, -1
+    target = _norm(path)
+    for proj in data["projects"]:
+        for root in proj.get("roots", []):
+            r = _norm(root)
+            if _is_under(target, r) and len(r) > best_len:
+                best, best_len = proj["name"], len(r)
+    return best
+
+
+def infer_from_paths(paths, data: dict) -> "str | None":
+    """Majority project among concrete file locations (explicit roots or a real folder under Documents\\Projects)."""
+    votes = {}
+    for p in paths:
+        p = os.path.expanduser(str(p).strip().rstrip(".,;:)"))
+        if not os.path.isabs(p) or is_generic(p):
+            continue
+        name = _explicit(p, data)
+        if name is None:
+            d = _derive(p if os.path.isdir(p) else os.path.dirname(p))
+            name = d[0] if d and d[0] != ENVIRONMENT else None
+        if name:
+            votes[name] = votes.get(name, 0) + 1
+    if not votes:
+        return None
+    ranked = sorted(votes.items(), key=lambda kv: -kv[1])
+    return ranked[0][0] if len(ranked) == 1 or ranked[0][1] > ranked[1][1] else None
+
+
+def infer_from_text(text: str, data: dict) -> "str | None":
+    """Paths mentioned in the text first, then project names / folder names mentioned (unique best match)."""
+    if not text:
+        return None
+    by_path = infer_from_paths(_ABS_PATH.findall(text), data)
+    if by_path:
+        return by_path
+    low = text.lower()
+    scores = {}
+    for proj in data["projects"]:
+        names = {proj["name"]} | {Path(r).name for r in proj.get("roots", [])}
+        for n in names:
+            n = n.strip()
+            if len(n) < 4 or n.lower() in _STOP_NAMES:
+                continue
+            pattern = r"(?<![\w-])" + re.escape(n.lower()).replace(r"\ ", r"[\s_-]+").replace(r"\-", r"[\s_-]+") + r"(?![\w-])"
+            hits = len(re.findall(pattern, low))
+            if hits:
+                scores[proj["name"]] = scores.get(proj["name"], 0) + hits
+    if not scores:
+        return None
+    ranked = sorted(scores.items(), key=lambda kv: -kv[1])
+    return ranked[0][0] if len(ranked) == 1 or ranked[0][1] > ranked[1][1] else None
+
+
+def resolve_session(cwd: str, map_path: Path, files=(), text: str = "", create: bool = True) -> str:
+    """Project for a session or a remembered item: cwd, then file locations, then first-prompt content."""
+    data = load_map(map_path)
+    if cwd:
+        explicit = _explicit(cwd, data)
+        if explicit:
+            return explicit
+        if not is_generic(cwd):
+            return resolve(cwd, map_path, create=create)
+    guess = infer_from_paths(files, data) or infer_from_text(text, data)
+    if guess:
+        if create and not any(p["name"] == guess for p in data["projects"]):
+            for f in list(files) + _ABS_PATH.findall(text or ""):
+                if os.path.isabs(os.path.expanduser(f)) and not is_generic(f):
+                    resolve(os.path.dirname(os.path.expanduser(f)), map_path, create=True)
+                    break
+        return guess
+    if cwd and _norm(cwd) == _norm(HOME):
+        return ENVIRONMENT
+    return UNSORTED
+
+
 def note_path(vault: Path, project: str) -> Path:
     """Active projects live in 1-Projects; an archived project keeps its note in 4-Archive."""
     active = vault / "1-Projects" / project / f"{project}.md"

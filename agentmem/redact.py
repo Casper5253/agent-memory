@@ -56,6 +56,9 @@ def _high_entropy(match: re.Match) -> str:
     segments = re.split(r"[\\/]", core)
     if len(segments) >= 2 and max(len(s) for s in segments) < 25:
         return tok  # path-like: base64 secrets that contain "/" still have long random segments
+    words = [w for w in re.split(r"[-_./\\]", core) if w]
+    if len(words) >= 3 and max(len(w) for w in words) < 20:
+        return tok  # slug-like (note names, kebab-case ids): secrets have long random runs
     classes = sum(bool(re.search(p, core)) for p in (r"[a-z]", r"[A-Z]", r"\d"))
     if classes >= 3 and _entropy(core) >= 4.0:
         return MASK
