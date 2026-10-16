@@ -49,7 +49,6 @@ mem pause | mem resume
 ```
 python -I -m unittest discover -s tests -v     # 17 tests: the 12 required scenarios + safeguards, no network
 python -I install.py                           # redeploy app, hooks, plugin, skills, index (idempotent, backs up configs)
-python -I tools/migrate_vault.py VAULT         # (one-off, already applied) PARA migration, dry run by default
 ```
 
 Config: `~/.agents/memory/config.json` keys `summarizer` (`claude-haiku` or `none`), `settle_minutes`, `embeddings`, `min_user_prompts`, `digest_char_cap`, `excluded_roots`, `qmd_index`. Project mapping: `<vault>/_meta/projects.json`. Routing: the working folder decides when it maps to a project. Generic folders (home, `Documents\Projects` itself, Documents, Codex scratch folders) are resolved from the edited files' locations, then paths or project names in the first prompt; no signal means *Unsorted* (home falls back to Agent Environment). Later parts of a session keep the first part's project. Unknown folders under `Documents\Projects` become projects automatically.
