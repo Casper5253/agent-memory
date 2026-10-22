@@ -279,6 +279,83 @@ class StoreCase(unittest.TestCase):
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0], 2)
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM claims").fetchone()[0], 1)
 
+    def test_model_contradicts_relation_stores_edge_without_demoting_claims(self):
+        a = self.applied(predicate="storage_backend").created_claim_ids[0]
+        self.store.review_claim(self.review(a))
+        self.assertEqual(self.store.get_claim(self.pid, a)["status"], "accepted")
+        imp = self.imported("contradict-source", excerpt="Postgres is better.")
+        payload = self.payload(imp.source_ids[0], "postgres", predicate="other", statement="Postgres claim.")
+        rev_a = self.store.get_claim(self.pid, a)["revision"]
+        payload["relations"] = [{"from": {"ref": "c1"}, "kind": "contradicts",
+                                  "to": {"claim_id": a, "expected_revision": rev_a}, "rationale": "model says so"}]
+        rev = self.store.get_project(self.pid)["revision"]
+        proposal_id = self.store.save_proposal(self.pid, imp.source_ids[0], payload, rev)
+        result = self.store.apply_proposal(self.pid, proposal_id, rev, proposal_id)
+        self.assertEqual(self.store.get_claim(self.pid, a)["status"], "accepted")
+        rel = self.store.db.execute("SELECT * FROM relations WHERE kind='contradicts'").fetchall()
+        self.assertTrue(any(r["from_id"] == result.created_claim_ids[0] and r["to_id"] == a for r in rel))
+
+    def test_retract_requires_operator_approval_and_quarantine_allows_system(self):
+        a = self.applied().created_claim_ids[0]
+        self.store.review_claim(self.review(a))
+        before = self.snapshot()
+        self.assertCode("approval_required", lambda: self.store.review_claim(
+            self.review(a, "retract", actor_kind="agent", approval_ref=None)))
+        self.assertEqual(self.snapshot(), before)
+        b = self.applied(self.imported("b"), "postgres", predicate="other").created_claim_ids[0]
+        self.store.review_claim(self.review(b))
+        before = self.snapshot()
+        self.assertCode("approval_required", lambda: self.store.review_claim(
+            self.review(b, "quarantine", actor_kind="agent", approval_ref=None)))
+        self.assertEqual(self.snapshot(), before)
+        self.store.review_claim(self.review(b, "quarantine", actor_kind="system", approval_ref=None))
+        self.assertEqual(self.store.get_claim(self.pid, b)["status"], "quarantined")
+        c = self.applied(self.imported("c"), "redis", predicate="other").created_claim_ids[0]
+        self.store.review_claim(self.review(c))
+        self.store.review_claim(self.review(c, "quarantine", actor_kind="operator", approval_ref="q-1"))
+        self.assertEqual(self.store.get_claim(self.pid, c)["status"], "quarantined")
+        self.store.review_claim(self.review(a, "retract", actor_kind="operator", approval_ref="r-1"))
+        self.assertEqual(self.store.get_claim(self.pid, a)["status"], "retracted")
+
+    def test_supersede_boundary_preserves_content_identity(self):
+        imported = self.imported()
+        payload = self.payload(imported.source_ids[0])
+        payload["claims"][0].update(valid_from="2026-10-01", valid_precision="day", valid_end_state="open")
+        prop = self.store.save_proposal(self.pid, imported.source_ids[0], payload, 1)
+        old = self.store.apply_proposal(self.pid, prop, 1, prop).created_claim_ids[0]
+        old_sha = self.store.get_claim(self.pid, old)["content_sha"]
+        new = self.applied(self.imported("succ"), "postgres").created_claim_ids[0]
+        s = self.store.get_claim(self.pid, new)
+        self.store.review_claim(self.review(old, "supersede", successor_claim_id=new,
+                                            expected_successor_revision=s["revision"], effective_boundary="2026-10-22"))
+        old_claim = self.store.get_claim(self.pid, old)
+        self.assertEqual(old_claim["content_sha"], old_sha)
+        self.assertEqual((old_claim["valid_from"], old_claim["valid_to"], old_claim["valid_end_state"]),
+                         ("2026-10-01", "2026-10-22", "closed"))
+        imp3 = self.imported("again")
+        p3 = self.payload(imp3.source_ids[0])
+        p3["claims"][0].update(valid_from="2026-10-01", valid_precision="day", valid_end_state="open")
+        rev = self.store.get_project(self.pid)["revision"]
+        pr = self.store.save_proposal(self.pid, imp3.source_ids[0], p3, rev)
+        result = self.store.apply_proposal(self.pid, pr, rev, pr)
+        self.assertIn(old, result.changed_claim_ids)
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM claims WHERE id=?", (old,)).fetchone()[0], 1)
+
+    def test_accept_conflict_member_returns_unresolved_conflict_and_writes_nothing(self):
+        a = self.applied().created_claim_ids[0]
+        b = self.applied(self.imported("b", excerpt="Use Postgres for storage."), "postgres").created_claim_ids[0]
+        a_rev = self.store.get_claim(self.pid, a)["revision"]
+        self.assertEqual(self.store.get_claim(self.pid, a)["status"], "disputed")
+        before = self.snapshot()
+        rev_before = self.store.get_project(self.pid)["revision"]
+        changes = self.store.db.total_changes
+        self.assertCode("unresolved_conflict", lambda: self.store.review_claim(self.review(a)))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.store.db.total_changes, changes)
+        self.assertEqual(self.store.get_project(self.pid)["revision"], rev_before)
+        self.assertEqual(self.store.get_claim(self.pid, a)["revision"], a_rev)
+        self.assertCode("unresolved_conflict", lambda: self.store.review_claim(self.review(b)))
+
     def test_accept_requires_explicit_operator_and_evidence(self):
         result = self.applied()
         claim_id = result.created_claim_ids[0]
@@ -313,8 +390,9 @@ class StoreCase(unittest.TestCase):
         new_id = newer.created_claim_ids[0]
         self.assertEqual(set(newer.conflict_ids), {old_id, new_id})
         self.assertEqual(self.store.get_claim(self.pid, old_id)["status"], "disputed")
-        self.store.review_claim(self.review(new_id))
-        self.assertEqual(self.store.get_claim(self.pid, new_id)["status"], "disputed")
+        before = self.snapshot()
+        self.assertCode("unresolved_conflict", lambda: self.store.review_claim(self.review(new_id)))
+        self.assertEqual(self.snapshot(), before)
         old = self.store.get_claim(self.pid, old_id)
         new = self.store.get_claim(self.pid, new_id)
         request = self.review(old_id, "supersede", successor_claim_id=new_id, expected_successor_revision=new["revision"])
@@ -424,11 +502,113 @@ class StoreCase(unittest.TestCase):
         for stop in range(1, count + 1):
             before = self.snapshot()
             remaining = stop
-            self.store.fault = fail
+            def fail2():
+                nonlocal remaining
+                remaining -= 1
+                if remaining == 0:
+                    raise RuntimeError("injected")
+            self.store.fault = fail2
             with self.assertRaises(RuntimeError):
                 self.store.review_claim(self.review(claim_id, "quarantine"))
             self.store.fault = None
             self.assertEqual(self.snapshot(), before)
+
+        def rollback_each_write(prepare, act):
+            writes = 0
+            def writer_counter():
+                nonlocal writes
+                writes += 1
+            prepare()
+            self.store.fault = writer_counter
+            act()
+            self.store.fault = None
+            total = writes
+            for stop in range(1, total + 1):
+                remaining = stop
+                def writer_fail():
+                    nonlocal remaining
+                    remaining -= 1
+                    if remaining == 0:
+                        raise RuntimeError("injected")
+                prepare()
+                before = self.snapshot()
+                self.store.fault = writer_fail
+                with self.assertRaises(RuntimeError):
+                    act()
+                self.store.fault = None
+                self.assertEqual(self.snapshot(), before)
+                self.assertEqual(self.store.integrity_check(), "ok")
+
+        seed_imp = self.imported("conflict-seed")
+        seed_prop, seed_rev = self.proposal(seed_imp, "postgres", predicate="storage_backend")
+        self.store.apply_proposal(self.pid, seed_prop, seed_rev, seed_prop)
+        state = {}
+        def prepare_conflict():
+            imp = self.imported("conflict-" + str(len(state)))
+            prop, rev = self.proposal(imp, "postgres", predicate="storage_backend")
+            state["proposal_id"] = prop
+            state["rev"] = rev
+        def act_conflict():
+            self.store.apply_proposal(self.pid, state["proposal_id"], state["rev"], state["proposal_id"])
+        rollback_each_write(prepare_conflict, act_conflict)
+
+        target_imp = self.imported("edge-target")
+        target_prop, target_rev = self.proposal(target_imp, "target", predicate="nonexclusive")
+        target_result = self.store.apply_proposal(self.pid, target_prop, target_rev, target_prop)
+        target_id = target_result.created_claim_ids[0]
+        self.store._write("UPDATE claims SET status='disputed' WHERE id=?", (target_id,))
+        state.clear()
+        def prepare_edge():
+            imp = self.imported("edge-" + str(len(state)))
+            payload = self.payload(imp.source_ids[0], "edge", predicate="other", statement="Edge claim.")
+            rev_target = self.store.get_claim(self.pid, target_id)["revision"]
+            payload["relations"] = [{"from": {"ref": "c1"}, "kind": "contradicts",
+                                      "to": {"claim_id": target_id, "expected_revision": rev_target},
+                                      "rationale": "edge"}]
+            rev = self.store.get_project(self.pid)["revision"]
+            prop = self.store.save_proposal(self.pid, imp.source_ids[0], payload, rev)
+            state["proposal_id"] = prop
+            state["rev"] = rev
+        def act_edge():
+            self.store.apply_proposal(self.pid, state["proposal_id"], state["rev"], state["proposal_id"])
+        rollback_each_write(prepare_edge, act_edge)
+
+        base_imp = self.imported("base-supersede")
+        base_payload = self.payload(base_imp.source_ids[0], value="base", predicate="nonexclusive", statement="Base claim.")
+        base_payload["claims"][0].update(valid_from="2026-10-01", valid_precision="day", valid_end_state="open")
+        base_rev = self.store.get_project(self.pid)["revision"]
+        base_prop = self.store.save_proposal(self.pid, base_imp.source_ids[0], base_payload, base_rev)
+        base_id = self.store.apply_proposal(self.pid, base_prop, base_rev, base_prop).created_claim_ids[0]
+        self.store.review_claim(self.review(base_id))
+        succ_imp = self.imported("succ")
+        succ_payload = self.payload(succ_imp.source_ids[0], value="postgres", predicate="nonexclusive", statement="Successor claim.")
+        succ_rev = self.store.get_project(self.pid)["revision"]
+        succ_prop = self.store.save_proposal(self.pid, succ_imp.source_ids[0], succ_payload, succ_rev)
+        new_id = self.store.apply_proposal(self.pid, succ_prop, succ_rev, succ_prop).created_claim_ids[0]
+        state.clear()
+        def prepare_supersede():
+            self.store._write("UPDATE claims SET status='accepted',reviewed_at=NULL WHERE id=?", (base_id,))
+            self.store._write("DELETE FROM relations WHERE from_id=? AND kind='supersedes' AND to_id=?", (new_id, base_id))
+            new = self.store.get_claim(self.pid, new_id)
+            req = self.review(base_id, "supersede", successor_claim_id=new_id,
+                              expected_successor_revision=new["revision"], effective_boundary="2026-10-22")
+            state["request"] = req
+        def act_supersede():
+            self.store.review_claim(state["request"])
+        rollback_each_write(prepare_supersede, act_supersede)
+
+        conflict_a = self.applied(self.imported("conflict-a"), "redis").created_claim_ids[0]
+        self.applied(self.imported("comp"), "postgres")
+        before = self.snapshot()
+        writes = 0
+        def conflict_counter():
+            nonlocal writes
+            writes += 1
+        self.store.fault = conflict_counter
+        self.assertCode("unresolved_conflict", lambda: self.store.review_claim(self.review(conflict_a)))
+        self.store.fault = None
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(writes, 0)
 
     def test_busy_exhaustion_is_typed_and_writes_nothing(self):
         with KnowledgeStore(self.path, writable=True, timeout=0.01) as other:
@@ -592,7 +772,7 @@ class StoreCase(unittest.TestCase):
                                             expected_successor_revision=successor["revision"], effective_boundary="2026-10-22"))
         old = self.store.get_claim(self.pid, old_id)
         self.assertEqual((old["valid_from"], old["valid_to"], old["valid_end_state"]), ("2026-10-01", "2026-10-22", "closed"))
-        self.assertNotEqual(old["content_sha"], old_sha)
+        self.assertEqual(old["content_sha"], old_sha)
         self.assertIsNone(self.store.get_claim(self.pid, new_id)["valid_to"])
 
     def test_scope_identity_excluded_and_archived_guards(self):
