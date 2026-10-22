@@ -1,0 +1,17 @@
+{
+  "case": "pause",
+  "env": {},
+  "golden": {
+    "queue": [],
+    "spawn_calls": 0,
+    "stdout": {}
+  },
+  "input": {
+    "cwd": "{WORK}/alpha",
+    "hook_event_name": "SessionEnd",
+    "session_id": "synthetic-codex-pause",
+    "transcript_path": "{WORK}/transcripts/synthetic-codex-pause.jsonl"
+  },
+  "pause": true,
+  "provider": "codex"
+}

@@ -1,0 +1,18 @@
+{
+  "case": "recursion",
+  "env": {
+    "AGENTMEM_CAPTURE": "1"
+  },
+  "golden": {
+    "queue": [],
+    "spawn_calls": 0,
+    "stdout": {}
+  },
+  "input": {
+    "cwd": "{WORK}/alpha",
+    "hook_event_name": "SessionEnd",
+    "session_id": "synthetic-codex-recursion",
+    "transcript_path": "{WORK}/transcripts/synthetic-codex-recursion.jsonl"
+  },
+  "provider": "codex"
+}

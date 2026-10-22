@@ -1,0 +1,11 @@
+{
+  "case": "malformed",
+  "env": {},
+  "golden": {
+    "queue": [],
+    "spawn_calls": 0,
+    "stdout": {}
+  },
+  "input_raw": "{not valid json",
+  "provider": "claude"
+}

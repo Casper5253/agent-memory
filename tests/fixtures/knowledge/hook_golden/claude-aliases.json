@@ -1,0 +1,25 @@
+{
+  "case": "aliases",
+  "env": {},
+  "golden": {
+    "queue": [
+      {
+        "agent": "claude",
+        "cwd": "{WORK}/alpha",
+        "event": "end",
+        "session_id": "synthetic-claude-aliases",
+        "source": "{WORK}/transcripts/synthetic-claude-aliases.jsonl",
+        "ts": "{TIME}"
+      }
+    ],
+    "spawn_calls": 1,
+    "stdout": {}
+  },
+  "input": {
+    "cwd": "{WORK}/alpha",
+    "hookEventName": "SessionEnd",
+    "sessionId": "synthetic-claude-aliases",
+    "transcript_path": "{WORK}/transcripts/synthetic-claude-aliases.jsonl"
+  },
+  "provider": "claude"
+}

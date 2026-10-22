@@ -1,0 +1,370 @@
+"""Conservative synthetic retrieval grading from persisted, scoped evidence.
+
+This grades literal supported retrieval, not general paraphrase entailment or
+downstream answer quality. Missing structured fields fail visibly. Operational
+fault cases remain unmeasured here; prose cannot prove a mutation was executed.
+"""
+import json
+import math
+import re
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path, PurePosixPath
+
+
+OPERATIONAL_CASES = frozenset({"T12", "T13", "T14", "T16", "T17", "T18", "T19", "T20", "T24"})
+LABELS = {
+    "reported": r"\b(?:reported|historical record|according to|source says)\b",
+    "user_stated": r"\b(?:user stated|stated by the user|user explicitly chose|user directly stated)\b",
+    "disputed": r"\b(?:disputed|conflicting reports|unresolved alternatives)\b",
+    "verification_scope": r"\b(?:verification scope|scope is|scope:)\b",
+    "unknown_time_excluded": r"\b(?:unknown time excluded|unknown time.*excluded|undated.*excluded)\b",
+    "repo_moved": r"\b(?:repo moved|repository moved|repository head changed)\b",
+    "live_verification_required": r"\b(?:live verification required|requires live verification|needs live verification)\b",
+    "missing_evidence": r"\b(?:missing evidence|no evidence|not recorded|unrecorded|no .{0,60} recorded)\b",
+    "command_attempt": r"\b(?:command attempt|command was attempted|command attempted)\b",
+    "current_access_rejected": r"\b(?:current access rejected|current context rejected|current access denied)\b",
+}
+UNCERTAINTY = re.compile(r"\b(?:unresolved|uncertain|disputed|conflicting reports|disagree|no evidence|not recorded|unrecorded|missing evidence|no .{0,60} recorded)\b")
+RESOLUTION = re.compile(r"\b(?:no unresolved|not uncertain|no uncertainty|no contradiction|no disagreement|only current truth|only correct choice|resolved|accepted current|sole current|the only alternative|with certainty|winner)\b")
+CURRENT_ASSERTION = r"\b(?:accepted.{0,35}(?:current|use now)|current (?:decision|choice|truth)|use .{0,60} now|now use)\b"
+
+
+def _space(text):
+    return " ".join(text.split())
+
+
+def _plain(text):
+    return re.sub(r"[^\w]+", " ", text.casefold().replace("_", " ")).strip()
+
+
+def _positive(text, pattern):
+    for line in re.split(r"[.!?\n]", text.casefold().replace("_", " ")):
+        match = re.search(pattern, line)
+        if match and not re.search(r"\b(?:not|never|no|without|none|neither)\s+(?:\w+\s+){0,3}$", line[:match.start()]):
+            return True
+    return False
+
+
+def _supports(text, statement):
+    needle = _plain(statement)
+    if not needle:
+        return False
+    haystack = " " + _plain(text) + " "
+    for match in re.finditer(re.escape(" " + needle + " "), haystack):
+        prefix, suffix = haystack[:match.start()], haystack[match.end():]
+        if re.search(r"\b(?:not|never|avoid|reject|no longer|don t|instead of)\s+(?:\w+\s+){0,2}$", prefix):
+            continue
+        if re.search(r"^\s*(?:is false|was rejected|did not happen)\b", suffix):
+            continue
+        return True
+    return False
+
+
+def _header(text):
+    if not text.startswith("---\n") and not text.startswith("---\r\n"):
+        return {}
+    chunks = re.split(r"\r?\n---\r?\n", text, maxsplit=1)
+    if len(chunks) != 2:
+        return {}
+    fields = {}
+    for line in chunks[0].splitlines()[1:]:
+        match = re.fullmatch(r"([a-z_]+):\s*(.*?)\s*", line)
+        if not match:
+            continue
+        key, value = match.groups()
+        try:
+            fields[key] = json.loads(value)
+        except (ValueError, TypeError):
+            fields[key] = value
+    return fields
+
+
+def _contained(vault, value):
+    if not isinstance(value, str) or not value or ":" in value:
+        raise ValueError("invalid_note_path")
+    relative = PurePosixPath(value.replace("\\", "/"))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("escaped_note_path")
+    resolved = (vault / Path(*relative.parts)).resolve()
+    if not resolved.is_relative_to(vault) or resolved.suffix != ".md":
+        raise ValueError("escaped_note_path")
+    return resolved
+
+
+def _rows(vault):
+    database = vault / "_meta" / "manifest.sqlite"
+    connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)
+    try:
+        connection.row_factory = sqlite3.Row
+        return [dict(row) for row in connection.execute("SELECT * FROM captures")]
+    finally:
+        connection.close()
+
+
+def _identity(row):
+    return row.get("agent"), row.get("session_id"), row.get("part", 1)
+
+
+@dataclass(frozen=True)
+class Citation:
+    path: str
+    text: str
+    source_ids: frozenset
+
+
+class EvidenceIndex:
+    def __init__(self, corpus, vault):
+        self.vault = Path(vault).resolve()
+        self.projects = {p["id"]: p for p in corpus.get("projects", [])}
+        self.claims = {c["id"]: c for c in corpus.get("claims", [])}
+        self.sources = {s["id"]: s for s in corpus.get("sources", [])}
+        self.paths = {}
+        for row in _rows(self.vault):
+            path = _contained(self.vault, row.get("note_path"))
+            self.paths.setdefault(path, []).append(row)
+
+    def _session_sources(self, path, project):
+        rows = self.paths.get(path, [])
+        if len(rows) != 1:
+            raise ValueError("missing_or_colliding_capture")
+        row = rows[0]
+        note = path.read_text(encoding="utf-8")
+        fields = _header(note)
+        if fields.get("type") != "session" or _identity(fields) != _identity(row):
+            raise ValueError("capture_note_identity_mismatch")
+        if fields.get("project") != project["name"] or row.get("project") != project["name"]:
+            raise ValueError("foreign_project_note")
+        return {source_id for source_id, source in self.sources.items()
+                if _identity(source) == _identity(row) and source.get("project_id") == project["id"]}
+
+    def cite(self, snippet, project_id):
+        project = self.projects.get(project_id)
+        if not project or project.get("policy") == "excluded":
+            raise ValueError("unknown_or_excluded_project")
+        path = _contained(self.vault, snippet.get("path"))
+        visible = snippet.get("content")
+        if not isinstance(visible, str) or not visible.strip():
+            raise ValueError("empty_snippet")
+        persisted = path.read_text(encoding="utf-8")
+        if _space(visible) not in _space(persisted):
+            raise ValueError("snippet_not_in_persisted_note")
+        if path in self.paths:
+            source_ids = self._session_sources(path, project)
+        else:
+            expected_path = self.vault / "1-Projects" / project["name"] / (project["name"] + ".md")
+            if path != expected_path.resolve() or _header(persisted).get("type") != "project":
+                raise ValueError("unmapped_or_foreign_note")
+            source_ids = set()
+            for target in re.findall(r"\[\[([^\]|#]+)(?:[^\]]*)\]\]", visible):
+                linked = _contained(self.vault, target if target.endswith(".md") else target + ".md")
+                source_ids.update(self._session_sources(linked, project))
+        return Citation(str(path.relative_to(self.vault)), visible, frozenset(source_ids))
+
+    def moved_heads(self, citation, claim, project_id):
+        live = self.projects[project_id].get("repo", {}).get("head")
+        return {self.sources[source].get("repo_head") for source in citation.source_ids.intersection(claim.get("source_ids", []))
+                if live and self.sources[source].get("repo_head") and self.sources[source]["repo_head"] != live}
+
+
+def _freshness_warning(citation, heads):
+    return (bool(heads) and all(head in citation.text for head in heads)
+            and _positive(citation.text, LABELS["repo_moved"])
+            and _positive(citation.text, LABELS["live_verification_required"]))
+
+
+def grade_query(query, gold, context, *, corpus, vault):
+    """Score visible prose against authored facts and trusted note identities.
+
+    A claim can be supported by any of its independently registered source spans.
+    No source or claim identifier in the prose itself earns retrieval credit.
+    """
+    failures = []
+    outcome = {"query_id": query["query_id"], "pass": False, "failures": failures,
+               "snippet_count": 0, "packed_bytes": 0, "unmeasured": []}
+    try:
+        encoded = json.dumps(context, sort_keys=True, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        outcome["packed_bytes"] = len(encoded)
+        snippets = context.get("snippets", [])
+        if not isinstance(snippets, list):
+            raise ValueError("invalid_snippets")
+        outcome["snippet_count"] = len(snippets)
+        budget = query.get("budget", 2400)
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+            raise ValueError("invalid_budget")
+        unit = context.get("budget_unit", "tokens_est_3b")
+        if unit not in ("bytes", "tokens_est_3b"):
+            raise ValueError("unmeasured_tokenizer")
+        used = len(encoded) if unit == "bytes" else math.ceil(len(encoded) / 3)
+        outcome.update(budget_unit=unit, used=used)
+        if used > budget:
+            failures.append("budget_exceeded")
+        if not snippets:
+            failures.append("empty_context")
+        for forbidden in gold.get("forbidden_strings", []):
+            if forbidden in encoded.decode("utf-8"):
+                failures.append("forbidden_string_present:" + forbidden)
+        if context.get("project_id", query["project"]) != query["project"]:
+            failures.append("foreign_context_project")
+        index = EvidenceIndex(corpus, vault)
+        citations = []
+        for snippet in snippets:
+            try:
+                if snippet.get("project_id", query["project"]) != query["project"]:
+                    raise ValueError("foreign_snippet_project")
+                citations.append(index.cite(snippet, query["project"]))
+            except (ValueError, OSError) as error:
+                failures.append("invalid_citation:" + str(error))
+        visible = "\n".join(c.text for c in citations)
+        supports = {}
+        for claim_id in gold.get("required_claims", []):
+            claim = index.claims.get(claim_id)
+            if not claim or claim.get("project_id") != query["project"]:
+                failures.append("unmapped_required_claim:" + claim_id)
+                continue
+            matches = [c for c in citations if c.source_ids.intersection(claim.get("source_ids", []))
+                       and _supports(c.text, claim["statement"])]
+            supports[claim_id] = matches
+            if not matches:
+                failures.append("missing_supported_claim:" + claim_id)
+        retrieved_sources = {source for citation in citations for source in citation.source_ids}
+        for source_id in gold.get("required_sources", []):
+            alternatives = {source_id}
+            for claim_id in gold.get("required_claims", []):
+                source_ids = set(index.claims.get(claim_id, {}).get("source_ids", []))
+                if source_id in source_ids:
+                    alternatives.update(source_ids)
+            if not alternatives.intersection(retrieved_sources):
+                failures.append("missing_required_source:" + source_id)
+        supporting_texts = {c.text for matches in supports.values() for c in matches}
+        if gold.get("required_rationale") and not any(_supports(text, gold["required_rationale"]) for text in supporting_texts):
+            failures.append("missing_supported_rationale")
+        label_text = "\n".join(supporting_texts) if supports else visible
+        for label in gold.get("expected_labels", []):
+            pattern = LABELS.get(label, r"\b" + re.escape(label.replace("_", " ")) + r"\b")
+            if not _positive(label_text, pattern):
+                failures.append("missing_label:" + label)
+        accepted = {a["claim_id"] for a in corpus.get("acceptances", [])}
+        for citation in citations:
+            matching_claims = [claim for claim in index.claims.values()
+                               if citation.source_ids.intersection(claim.get("source_ids", []))
+                               and _supports(citation.text, claim["statement"])]
+            for claim in matching_claims:
+                moved = index.moved_heads(citation, claim, query["project"])
+                if moved and not _freshness_warning(citation, moved):
+                    failures.append("unqualified_moved_repository_fact:" + claim["id"])
+            if _positive(citation.text, r"\baccepted\b") and not any(
+                    claim["id"] in accepted or claim.get("status") in ("accepted", "superseded") for claim in matching_claims):
+                failures.append("unsupported_acceptance")
+            if _positive(citation.text, r"\bverified\b") and not any(
+                    claim.get("evidence_level") == "verified" for claim in matching_claims):
+                failures.append("unsupported_verification")
+            if query.get("case") == "T15" and (not matching_claims or any(
+                    claim.get("rationale") and not _supports(citation.text, claim["rationale"]) for claim in matching_claims)):
+                failures.append("incomplete_budget_bundle")
+        normalized = visible.casefold().replace("_", " ")
+        if gold.get("expected_uncertainty"):
+            if not _positive(normalized, UNCERTAINTY.pattern) or _positive(normalized, RESOLUTION.pattern):
+                failures.append("uncertainty_missing_or_denied")
+        for claim_id in gold.get("forbidden_current_claims", []):
+            claim = index.claims.get(claim_id)
+            if not claim:
+                failures.append("unmapped_forbidden_claim:" + claim_id)
+                continue
+            for citation in citations:
+                if not _supports(citation.text, claim["statement"]):
+                    continue
+                historical = _positive(citation.text, r"\b(?:superseded|no longer current)\b")
+                historical = historical or _freshness_warning(citation, index.moved_heads(citation, claim, query["project"]))
+                disputed = gold.get("expected_uncertainty") and _positive(citation.text, LABELS["disputed"])
+                asserts_current = _positive(citation.text, CURRENT_ASSERTION)
+                if asserts_current or (not historical and not (disputed and not _positive(normalized, RESOLUTION.pattern))):
+                    failures.append("forbidden_current_claim:" + claim_id)
+        if query.get("mode") == "as_of":
+            instant = datetime.fromisoformat(query["as_of"].replace("Z", "+00:00"))
+            for claim_id, matches in supports.items():
+                if not matches:
+                    continue
+                claim = index.claims[claim_id]
+                start, end = claim.get("valid_from"), claim.get("valid_to")
+                if not start or datetime.fromisoformat(start.replace("Z", "+00:00")) > instant:
+                    failures.append("ineligible_as_of_claim:" + claim_id)
+                elif end and datetime.fromisoformat(end.replace("Z", "+00:00")) <= instant:
+                    failures.append("expired_as_of_claim:" + claim_id)
+        if query.get("case") in OPERATIONAL_CASES or (query.get("case") == "T21" and query.get("mode") == "current"):
+            outcome["unmeasured"].append("fault_execution:" + query["case"])
+            failures.append("operational_evidence_not_measured")
+    except (ValueError, TypeError, KeyError, OSError, sqlite3.Error) as error:
+        failures.append("invalid_grading_setup:" + str(error))
+    outcome["pass"] = not failures
+    return outcome
+
+
+def lifecycle_check(vault, corpus):
+    """Require exactly the eligible capture identities and their own valid notes."""
+    vault = Path(vault).resolve()
+    errors = []
+    result = {"passed": False, "notes_written": 0, "captures_recorded": 0, "missing_note_files": 0,
+              "colliding_captures": 0, "expected_sessions": 0, "errors": errors}
+    projects = {p["id"]: p for p in corpus.get("projects", [])}
+    expected = {}
+    for session in corpus.get("sessions", []):
+        project = projects.get(session.get("project_id"), {})
+        if project.get("policy") != "excluded":
+            identity = _identity(session)
+            if identity in expected:
+                errors.append("duplicate_expected_identity")
+            expected[identity] = session
+    result["expected_sessions"] = len(expected)
+    try:
+        rows = _rows(vault)
+        result["captures_recorded"] = len(rows)
+        actual = [_identity(row) for row in rows]
+        if len(actual) != len(set(actual)) or set(actual) != set(expected):
+            errors.append("capture_identity_set_mismatch")
+        paths = []
+        ranges = {}
+        for row in rows:
+            identity = _identity(row)
+            path = _contained(vault, row.get("note_path"))
+            paths.append(path)
+            if not path.is_file():
+                result["missing_note_files"] += 1
+                errors.append("missing_note:" + str(row.get("note_path")))
+                continue
+            text = path.read_text(encoding="utf-8")
+            fields = _header(text)
+            if not text.strip() or fields.get("type") != "session" or _identity(fields) != identity:
+                errors.append("note_identity_or_content_mismatch")
+                continue
+            project = projects.get(expected.get(identity, {}).get("project_id"))
+            if project and (fields.get("project") != project["name"] or row.get("project") != project["name"]):
+                errors.append("note_project_mismatch")
+            body = re.split(r"\r?\n---\r?\n", text, maxsplit=1)[-1]
+            summary_response = expected.get(identity, {}).get("summary_response")
+            if summary_response:
+                summary = json.loads(summary_response).get("summary", "")
+                if not summary or _space(summary) not in _space(body):
+                    errors.append("note_summary_mismatch")
+            elif not re.search(r"\w{3}", re.sub(r"(?m)^#+[^\n]*", "", body)):
+                errors.append("empty_note_body")
+            start, end = row.get("start_offset"), row.get("end_offset")
+            if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end <= start:
+                errors.append("invalid_capture_range")
+            else:
+                ranges.setdefault(identity[:2], []).append((identity[2], start, end))
+            result["notes_written"] += 1
+        result["colliding_captures"] = len(paths) - len(set(paths))
+        if result["colliding_captures"]:
+            errors.append("colliding_capture_paths")
+        for parts in ranges.values():
+            previous_end = None
+            for part, start, end in sorted(parts):
+                if previous_end is not None and start != previous_end:
+                    errors.append("noncontiguous_capture_ranges")
+                previous_end = end
+    except (ValueError, TypeError, KeyError, OSError, sqlite3.Error) as error:
+        errors.append("invalid_lifecycle_setup:" + str(error))
+    result["passed"] = not errors and result["notes_written"] == len(expected)
+    return result

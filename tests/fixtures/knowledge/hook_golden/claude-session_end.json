@@ -1,0 +1,25 @@
+{
+  "case": "session_end",
+  "env": {},
+  "golden": {
+    "queue": [
+      {
+        "agent": "claude",
+        "cwd": "{WORK}/alpha",
+        "event": "end",
+        "session_id": "synthetic-claude-session_end",
+        "source": "{WORK}/transcripts/synthetic-claude-session_end.jsonl",
+        "ts": "{TIME}"
+      }
+    ],
+    "spawn_calls": 1,
+    "stdout": {}
+  },
+  "input": {
+    "cwd": "{WORK}/alpha",
+    "hook_event_name": "SessionEnd",
+    "session_id": "synthetic-claude-session_end",
+    "transcript_path": "{WORK}/transcripts/synthetic-claude-session_end.jsonl"
+  },
+  "provider": "claude"
+}

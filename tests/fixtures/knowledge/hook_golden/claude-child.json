@@ -1,0 +1,16 @@
+{
+  "case": "child",
+  "env": {},
+  "golden": {
+    "queue": [],
+    "spawn_calls": 0,
+    "stdout": {}
+  },
+  "input": {
+    "cwd": "{WORK}/alpha",
+    "hook_event_name": "SubagentStop",
+    "session_id": "synthetic-claude-child",
+    "transcript_path": "{WORK}/transcripts/synthetic-claude-child.jsonl"
+  },
+  "provider": "claude"
+}

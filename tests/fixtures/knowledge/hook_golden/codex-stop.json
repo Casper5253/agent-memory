@@ -1,0 +1,25 @@
+{
+  "case": "stop",
+  "env": {},
+  "golden": {
+    "queue": [
+      {
+        "agent": "codex",
+        "cwd": "{WORK}/alpha",
+        "event": "turn",
+        "session_id": "synthetic-codex-stop",
+        "source": "{WORK}/transcripts/synthetic-codex-stop.jsonl",
+        "ts": "{TIME}"
+      }
+    ],
+    "spawn_calls": 1,
+    "stdout": {}
+  },
+  "input": {
+    "cwd": "{WORK}/alpha",
+    "hook_event_name": "Stop",
+    "session_id": "synthetic-codex-stop",
+    "transcript_path": "{WORK}/transcripts/synthetic-codex-stop.jsonl"
+  },
+  "provider": "codex"
+}

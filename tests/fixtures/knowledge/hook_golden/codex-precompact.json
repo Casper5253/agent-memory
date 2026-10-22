@@ -1,0 +1,25 @@
+{
+  "case": "precompact",
+  "env": {},
+  "golden": {
+    "queue": [
+      {
+        "agent": "codex",
+        "cwd": "{WORK}/alpha",
+        "event": "turn",
+        "session_id": "synthetic-codex-precompact",
+        "source": "{WORK}/transcripts/synthetic-codex-precompact.jsonl",
+        "ts": "{TIME}"
+      }
+    ],
+    "spawn_calls": 1,
+    "stdout": {}
+  },
+  "input": {
+    "cwd": "{WORK}/alpha",
+    "hook_event_name": "PreCompact",
+    "session_id": "synthetic-codex-precompact",
+    "transcript_path": "{WORK}/transcripts/synthetic-codex-precompact.jsonl"
+  },
+  "provider": "codex"
+}

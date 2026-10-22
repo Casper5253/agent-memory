@@ -1,0 +1,15 @@
+{
+  "case": "missing_id",
+  "env": {},
+  "golden": {
+    "queue": [],
+    "spawn_calls": 1,
+    "stdout": {}
+  },
+  "input": {
+    "cwd": "{WORK}/alpha",
+    "hook_event_name": "SessionEnd",
+    "transcript_path": "{WORK}/transcripts/synthetic-codex-missing_id.jsonl"
+  },
+  "provider": "codex"
+}

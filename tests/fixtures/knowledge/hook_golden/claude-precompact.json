@@ -1,0 +1,25 @@
+{
+  "case": "precompact",
+  "env": {},
+  "golden": {
+    "queue": [
+      {
+        "agent": "claude",
+        "cwd": "{WORK}/alpha",
+        "event": "turn",
+        "session_id": "synthetic-claude-precompact",
+        "source": "{WORK}/transcripts/synthetic-claude-precompact.jsonl",
+        "ts": "{TIME}"
+      }
+    ],
+    "spawn_calls": 1,
+    "stdout": {}
+  },
+  "input": {
+    "cwd": "{WORK}/alpha",
+    "hook_event_name": "PreCompact",
+    "session_id": "synthetic-claude-precompact",
+    "transcript_path": "{WORK}/transcripts/synthetic-claude-precompact.jsonl"
+  },
+  "provider": "claude"
+}

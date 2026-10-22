@@ -4,6 +4,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +93,39 @@ class KnowledgeGrader(unittest.TestCase):
         self.corpus["claims"][0]["source_ids"].append("source-alternate")
         self.assertTrue(self.grade(self.package([alternate]))["pass"])
 
+    def test_project_overview_must_visibly_cite_its_supporting_session(self):
+        path = "1-Projects/Synthetic Project/Synthetic Project.md"
+        (self.vault / path).parent.mkdir(parents=True)
+        text = ('---\ntype: project\n---\nUse SQLite for synthetic storage.\nReason: atomic cursor updates.\n'
+                'Status: reported.\n[[0-Sessions/session-current]]\n')
+        (self.vault / path).write_text(text, encoding="utf-8")
+        snippet = {"path": path, "label": "CURRENT", "content": text}
+        self.assertTrue(self.grade(self.package([snippet]))["pass"])
+        snippet["content"] = text.split("[[")[0]
+        self.assertFalse(self.grade(self.package([snippet]))["pass"])
+
+    def test_real_canonical_claim_baseline_note_passes_without_uuid_aliasing(self):
+        from agentmem import notes
+        fixtures = ROOT / "tests/fixtures/knowledge"
+        corpus = json.loads((fixtures / "corpus.json").read_text())
+        query = next(q for q in map(json.loads, (fixtures / "queries.jsonl").read_text().splitlines()) if q["query_id"] == "T09-v01")
+        gold = next(r["gold"] for r in map(json.loads, (fixtures / "expected.jsonl").read_text().splitlines()) if r["query_id"] == query["query_id"])
+        source = next(s for s in corpus["sources"] if s["id"] == gold["required_sources"][0])
+        session = next(s for s in corpus["sessions"] if s["session_id"] == source["session_id"])
+        project = next(p for p in corpus["projects"] if p["id"] == source["project_id"])
+        text = notes.render_session(agent=session["agent"], session_id=session["session_id"], project=project["name"], part=1,
+            when=datetime.fromisoformat(session["ended"].replace("Z", "+00:00")), started=session["started"], ended=session["ended"],
+            source=session["transcript"], start=source["start"], end=source["end"], summarizer="replay",
+            summary=json.loads(session["summary_response"]), files=[], commands=[], gate_reason="synthetic regression")
+        path = "0-Sessions/canonical.md"
+        (self.vault / path).write_text(text, encoding="utf-8")
+        self.db.execute("INSERT INTO captures(agent,session_id,part,note_path,project,start_offset,end_offset) VALUES (?,?,?,?,?,?,?)",
+                        (session["agent"], session["session_id"], 1, path, project["name"], 0, source["end"]))
+        self.db.commit()
+        self.assertNotIn(gold["required_claims"][0], text)
+        result = grade_query(query, gold, self.package([{"path": path, "label": "HISTORICAL", "content": text}]), corpus=corpus, vault=self.vault)
+        self.assertTrue(result["pass"], result)
+
     def test_rationale_in_an_unrelated_note_does_not_satisfy_the_choice(self):
         path = self.vault / "0-Sessions/session-current.md"
         path.write_text(path.read_text().replace("Reason: atomic cursor updates.", ""))
@@ -135,11 +169,31 @@ class KnowledgeGrader(unittest.TestCase):
         path.write_text(path.read_text() + "Status: disputed. Speaker: user_stated. Conflicting reports remain unresolved.\n")
         self.assertTrue(self.grade()["pass"])
 
+    def test_reported_or_disputed_labels_cannot_hide_automatic_acceptance(self):
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() + "This is accepted.\n")
+        self.assertFalse(self.grade()["pass"])
+
+    def test_superseded_label_cannot_hide_a_current_recommendation(self):
+        old = self.add_note("old", "Use JSON for synthetic storage.", "old-copy", "old-source",
+                            "Status: superseded. This is the current choice. Use this now.")
+        self.assertFalse(self.grade(self.package(self.package()["snippets"] + [old]))["pass"])
+
     def test_as_of_rejects_future_or_unknown_time_claim(self):
         self.query.update(mode="as_of", as_of="2026-10-03T00:00:00Z")
         self.assertFalse(self.grade()["pass"])
         self.corpus["claims"][0]["valid_from"] = None
         self.assertFalse(self.grade()["pass"])
+
+    def test_moved_repository_requires_visible_recorded_commit_and_freshness_warning(self):
+        self.corpus["projects"][0]["repo"] = {"head": "b" * 40}
+        self.corpus["sources"][0]["repo_head"] = "a" * 40
+        self.gold["forbidden_current_claims"] = ["claim-current"]
+        self.gold["expected_labels"] = ["repo_moved", "live_verification_required"]
+        self.assertFalse(self.grade()["pass"])
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() + "Freshness: repo_moved. Live verification required. Recorded commit: " + "a" * 40 + ".\n")
+        self.assertTrue(self.grade()["pass"])
 
     def test_empty_context_fails_every_answerable_and_operational_case(self):
         for case in ("T01", "T13", "T14", "T18", "T20", "T21"):

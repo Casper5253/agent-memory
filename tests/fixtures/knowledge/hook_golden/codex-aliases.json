@@ -1,0 +1,25 @@
+{
+  "case": "aliases",
+  "env": {},
+  "golden": {
+    "queue": [
+      {
+        "agent": "codex",
+        "cwd": "{WORK}/alpha",
+        "event": "end",
+        "session_id": "synthetic-codex-aliases",
+        "source": "{WORK}/transcripts/synthetic-codex-aliases.jsonl",
+        "ts": "{TIME}"
+      }
+    ],
+    "spawn_calls": 1,
+    "stdout": {}
+  },
+  "input": {
+    "cwd": "{WORK}/alpha",
+    "hookEventName": "SessionEnd",
+    "sessionId": "synthetic-codex-aliases",
+    "transcript_path": "{WORK}/transcripts/synthetic-codex-aliases.jsonl"
+  },
+  "provider": "codex"
+}
