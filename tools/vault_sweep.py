@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import random
 import re
 import sys
 from pathlib import Path
@@ -327,6 +328,99 @@ def _scan_unsorted(vault: Path) -> list[dict]:
     return items
 
 
+def _parse_frontmatter(text: str) -> dict[str, str]:
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        return {}
+    fields = {}
+    for line in text[4:end].splitlines():
+        if not line or line[0].isspace() or ": " not in line:
+            continue
+        key, value = line.split(": ", 1)
+        key = key.strip()
+        value = value.strip()
+        if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+            value = value[1:-1]
+        fields[key] = value
+    return fields
+
+
+def _extract_artifact_paths(text: str) -> list[str]:
+    match = re.search(r"(?ms)^## Artifacts and modified files\n\n(.*?)(?=\n## |\Z)", text)
+    if not match:
+        return []
+    paths = []
+    for line in match.group(1).splitlines():
+        m = re.match(r"^- `(.+?)`$", line.strip())
+        if m and m.group(1) not in ("none recorded", "none"):
+            paths.append(m.group(1))
+    return paths
+
+
+def _extract_note_text(text: str) -> str:
+    parts = []
+    title = re.search(r"(?m)^# (.+)$", text)
+    if title:
+        parts.append(title.group(1))
+    cmds = re.search(r"(?ms)^## Commands run\n\n(.*?)(?=\n## |\Z)", text)
+    if cmds:
+        for line in cmds.group(1).splitlines():
+            m = re.match(r"^- `(.+?)`$", line.strip())
+            if m and m.group(1) != "none":
+                parts.append(m.group(1))
+    return " ".join(parts)
+
+
+def _scan_re_attribution(vault: Path) -> dict:
+    from agentmem.projects import attribute
+    map_path = vault / "_meta" / "projects.json"
+    sess_dir = vault / "0-Sessions"
+    if not map_path.exists() or not sess_dir.is_dir():
+        return {"items": [], "calibration_sample": [],
+                "note": "Re-scored using A-5 content-based attribution. auto_apply is false for all items."}
+    items = []
+    for md in sorted(_iter_md(sess_dir)):
+        text = _read(md)
+        if not text:
+            continue
+        fm = _parse_frontmatter(text)
+        if fm.get("type") != "session":
+            continue
+        filed = fm.get("project", "").strip()
+        if not filed:
+            continue
+        files = _extract_artifact_paths(text)
+        note_text = _extract_note_text(text)
+        try:
+            result = attribute(cwd="", map_path=map_path, files=files, text=note_text, create=False)
+        except Exception:
+            continue
+        if result.method != "content":
+            continue
+        if result.project == filed:
+            continue
+        items.append({
+            "note": _rel(md, vault),
+            "filed_project": filed,
+            "proposed_project": result.project,
+            "method": result.method,
+            "signals": result.signals,
+            "auto_apply": False,
+        })
+    rng = random.Random(1701)
+    k = min(30, len(items))
+    calibration = rng.sample(items, k) if k else []
+    return {
+        "items": items,
+        "calibration_sample": calibration,
+        "note": ("Re-scored using A-5 content-based attribution. "
+                 "auto_apply is false for all items. "
+                 "calibration_sample uses seed 1701; user must accept before auto-re-attribution."),
+    }
+
+
 def build_plan(vault: Path) -> dict:
     proj_dir = vault / "1-Projects"
     proj_folders = {}
@@ -340,10 +434,7 @@ def build_plan(vault: Path) -> dict:
         "stale_state_lines": _scan_stale(vault, proj_folders),
         "broken_links": _scan_broken(vault),
         "unsorted_sessions": _scan_unsorted(vault),
-        "re_attribution": {
-            "items": [],
-            "note": "TODO: requires WP-01 A-5 content-based scoring, not yet merged.",
-        },
+        "re_attribution": _scan_re_attribution(vault),
     }
 
 
