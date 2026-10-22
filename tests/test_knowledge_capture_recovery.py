@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentmem import adapters, llm, notes, pipeline, projects, search
 from agentmem.manifest import Manifest
 from agentmem.redact import redact
-from fixtures import make_vault, claude_lines, opencode_export, SUBSTANTIAL, SWITCH, write_jsonl, fake_summarize, fake_consolidate
+from fixtures import make_vault, claude_lines, codex_lines, opencode_export, SUBSTANTIAL, SWITCH, write_jsonl, fake_summarize, fake_consolidate
 
 
 class CaptureBase(unittest.TestCase):
@@ -58,6 +58,28 @@ class RecoveryTests(CaptureBase):
         self.assertEqual(2, len({r['note_path'] for r in rows}))
         for r in rows:
             self.assertIn('session_id: "' + r['session_id'] + '"', (self.cfg.vault / r['note_path']).read_text(encoding='utf-8'))
+
+    def test_identical_session_ids_from_different_agents_are_distinct(self):
+        sid, _ = self.source()
+        self.finish(sid)
+        path = self.root / 'codex-transcript.jsonl'
+        write_jsonl(path, codex_lines(sid, self.cwd, SUBSTANTIAL))
+        self.man.touch('codex', sid, source=str(path), cwd=self.cwd, end=True)
+        pipeline.finalize(self.cfg, self.man, self.man.get('codex', sid), fake_summarize, fake_consolidate)
+        rows = self.man.query_captures()
+        self.assertEqual({'claude', 'codex'}, {r['agent'] for r in rows})
+        self.assertEqual(2, len({r['note_path'] for r in rows}))
+
+    def test_malformed_tail_keeps_valid_prefix_and_cannot_be_consumed(self):
+        sid, path = self.source()
+        end = path.stat().st_size
+        with path.open('ab') as f:
+            f.write(b'{"type": invalid}\n')
+        self.assertEqual(end, adapters.read('claude', sid, str(path)).end)
+        with self.assertRaisesRegex(ValueError, 'source contains malformed'):
+            adapters.read('claude', sid, str(path), start=end)
+        with self.assertRaisesRegex(ValueError, 'source contains malformed'):
+            adapters.read('claude', sid, str(path), end=path.stat().st_size)
 
     def test_retry_uses_first_evidence_without_model_or_source(self):
         sid, path = self.source()
