@@ -18,11 +18,23 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT))
+from tools.knowledge_grader import grade_query, lifecycle_check, formulate_query, QUERY_STOPWORDS
+
 EXIT_PASS, EXIT_FAIL, EXIT_SETUP, EXIT_INCONCLUSIVE = 0, 1, 2, 3
+
+
+def repo_tmp():
+    """Return the repository-local scratch directory; never use /tmp or %TEMP%."""
+    tmp = ROOT / ".audit" / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    return tmp
 
 
 class SetupError(Exception):
@@ -63,8 +75,11 @@ def load_fixtures(fixtures_dir):
                 row = json.loads(line)
                 expected[row["query_id"]] = row["gold"]
     hashes = {}
-    for name in required:
-        hashes[name] = sha256_file(fixtures_dir / name)
+    for name in set(required) | set(manifest.get("files", {})):
+        target = (fixtures_dir / name).resolve()
+        if not target.is_relative_to(fixtures_dir.resolve()) or not target.is_file():
+            return None, None, None, None, None, ["invalid or missing fixture: " + name]
+        hashes[name] = sha256_file(target)
     return manifest, corpus, queries, expected, hashes, None
 
 
@@ -175,7 +190,7 @@ def _noop_consolidator(state, summary, link, date, timeout=0):
 
 def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index):
     sys.path.insert(0, str(ROOT))
-    from agentmem.adapters import read as adapter_read
+    from agentmem.adapters import read as adapter_read, read_opencode
     from agentmem.config import Config
     from agentmem.extract import build as extract_build
     from agentmem import llm
@@ -241,10 +256,14 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index)
             agent = sess["agent"]
             part = sess.get("part", 1)
             source = source_paths[(agent, sid, part)]
+            start = 0
+            previous = source_paths.get((agent, sid, part - 1))
+            if previous:
+                start = len(json.loads(Path(previous).read_text(encoding="utf-8"))["messages"]) if agent == "opencode" else adapter_read(agent, sid, previous).end
             if agent == "opencode":
-                t = adapter_read(agent, sid, sid, start=0)
+                t = read_opencode(sid, start, json.loads(Path(source).read_text(encoding="utf-8")))
             else:
-                t = adapter_read(agent, sid, source, start=0)
+                t = adapter_read(agent, sid, source, start=start)
             d = extract_build(t, cfg.min_user_prompts, cfg.min_assistant_chars, cfg.digest_char_cap)
             key = sha256_bytes(d.text.encode("utf-8"))
             responses_by_digest[key] = sess["summary_response"]
@@ -261,14 +280,13 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index)
                     sid = sess["session_id"]
                     agent = sess["agent"]
                     source = source_paths[(agent, sid, part)]
+                    if agent == "opencode":
+                        opencode_sources[sid] = source
                     cwd = _replace_placeholders(sess.get("cwd", ""), work, vault)
                     man = Manifest(cfg.manifest_path)
                     try:
                         man.touch(agent, sid, now=time.time() - 7200, source=source,
                                   end=True, cwd=cwd)
-                        # Each fixture part ships in its own file; reset the cursor so the
-                        # adapter reads the whole file as one part.
-                        man.mark(agent, sid, captured_until=0)
                     finally:
                         man.close()
                     worker.enqueue(cfg, agent, sid, event="end", source=source, cwd=cwd)
@@ -285,32 +303,76 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index)
     return cfg
 
 
-def detect_qmd():
+def detect_qmd(env=None, cwd=None):
     shim = shutil.which("qmd")
     if not shim:
         return "unavailable", ""
     node = shutil.which("node")
     js = Path(shim).parent / "node_modules" / "@tobilu" / "qmd" / "bin" / "qmd" if node else None
-    version = ""
     try:
-        cmd = [str(js)] if (node and js and js.exists()) else [shim]
+        if node and js and js.exists():
+            cmd = [node, str(js)]
+        else:
+            cmd = [shim]
         r = subprocess.run(cmd + ["--version"], capture_output=True, timeout=10,
-                           env=dict(os.environ, NO_COLOR="1"))
+                           env=env or dict(os.environ, NO_COLOR="1"), cwd=cwd)
         version = r.stdout.decode("utf-8", "replace").strip()[:120]
-    except Exception:
-        pass
-    return "ok", version
+        if r.returncode != 0 or not version:
+            return "unavailable", version
+        return "ok", version
+    except Exception as e:
+        return "unavailable", str(e)[:120]
 
 
-def run_mem_command(vault, home, args, timeout=30):
-    env = dict(os.environ,
-               OBSIDIAN_VAULT_PATH=str(vault),
-               AGENTMEM_HOME=str(home))
-    env.pop("AGENTMEM_CAPTURE", None)
+def isolated_environment(vault, home, cache_dir=None):
+    base = Path(home).resolve().parent
+    cache = Path(cache_dir).resolve() if cache_dir else base / "cache"
+    if not Path(vault).resolve().is_relative_to(base) or not cache.is_relative_to(base):
+        raise SetupError("vault, runtime and cache must share the isolated root")
+    directories = {
+        "HOME": base / "os-home", "USERPROFILE": base / "os-home",
+        "APPDATA": base / "os-home/AppData/Roaming", "LOCALAPPDATA": base / "os-home/AppData/Local",
+        "XDG_CACHE_HOME": cache, "XDG_CONFIG_HOME": base / "config", "XDG_DATA_HOME": base / "data",
+        "QMD_CONFIG_DIR": base / "config/qmd", "TMP": base / "tmp", "TEMP": base / "tmp", "TMPDIR": base / "tmp",
+        "NODE_COMPILE_CACHE": cache / "node", "HF_HOME": cache / "huggingface",
+    }
+    env = dict(os.environ)
+    for key, path in directories.items():
+        path.mkdir(parents=True, exist_ok=True)
+        env[key] = str(path)
+    for key in ("AGENTMEM_CAPTURE", "NODE_OPTIONS", "QMD_WRAPPER_CAPTURE"):
+        env.pop(key, None)
+    env.update(OBSIDIAN_VAULT_PATH=str(vault), AGENTMEM_HOME=str(home),
+               INDEX_PATH=str(cache / "qmd/index.sqlite"), NO_COLOR="1")
+    (cache / "qmd").mkdir(exist_ok=True)
+    return env
+
+
+def run_mem_command(vault, home, args, timeout=30, cwd=None, cache_dir=None):
+    env = isolated_environment(vault, home, cache_dir)
+    command = [sys.executable, "-B", "-X", "utf8", "-I", str(ROOT / "run.py")] + args
+    if args and args[0] == "search":
+        observer = '''import json,runpy,sys
+sys.path.insert(0,sys.argv[1])
+from agentmem import search
+original=search._qmd
+def observed(*args,**kwargs):
+ try:
+  result=original(*args,**kwargs)
+ except Exception as error:
+  sys.stderr.write("EVAL_QMD:"+json.dumps({"error":type(error).__name__})+"\\n")
+  raise
+ sys.stderr.write("EVAL_QMD:"+json.dumps({"returncode":result.returncode})+"\\n")
+ return result
+search._qmd=observed
+runner=sys.argv[1]+"/run.py"
+sys.argv=[runner]+sys.argv[2:]
+runpy.run_path(runner,run_name="__main__")'''
+        command = [sys.executable, "-B", "-X", "utf8", "-I", "-c", observer, str(ROOT)] + args
     try:
         r = subprocess.run(
-            [sys.executable, "-I", str(ROOT / "run.py")] + args,
-            capture_output=True, timeout=timeout, env=env, cwd=str(ROOT)
+            command,
+            capture_output=True, timeout=timeout, env=env, cwd=str(cwd or Path(home).resolve().parent)
         )
         return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
     except subprocess.TimeoutExpired:
@@ -319,98 +381,53 @@ def run_mem_command(vault, home, args, timeout=30):
         return -1, "", str(e)
 
 
-def package_baseline_context(vault, home, query, max_bytes=None):
+def package_baseline_context(vault, home, query, qmd_available=True, cwd=None, cache_dir=None, max_bytes=None):
     budget = query.get("budget", 2400)
-    limit = max_bytes or budget
+    limit = max_bytes if max_bytes is not None else budget
     terms = query["query"]
-    rc, stdout, stderr = run_mem_command(vault, home, ["search", *terms.split(), "--json", "-n", "8"])
+    rc, stdout, stderr = run_mem_command(vault, home, ["search", terms, "--json", "-n", "8"],
+                                         cwd=cwd, cache_dir=cache_dir)
     hits = []
-    if rc == 0 and stdout.strip():
+    error = ""
+    if rc != 0:
+        error = f"search_exit:{rc}:" + stderr[:200]
+    else:
         try:
             hits = json.loads(stdout)
-        except json.JSONDecodeError:
-            pass
-
+            if not isinstance(hits, list):
+                raise ValueError("search response must be a list")
+        except ValueError as exc:
+            error = "invalid_search_json:" + str(exc)
+            hits = []
+    traces = [json.loads(line.split("EVAL_QMD:", 1)[1]) for line in stderr.splitlines() if line.startswith("EVAL_QMD:")]
+    fallback = bool(hits and any("fallback" in hit for hit in hits)) or bool(traces and traces[-1].get("returncode") != 0)
+    backend = "error" if error else ("fallback" if fallback else ("qmd" if traces else "unknown"))
     snippets = []
     total = 0
     for hit in hits:
         if total >= limit:
             break
-        path = hit.get("path", "")
-        note_rc, note_out, _ = run_mem_command(vault, home, ["note", path])
-        content = note_out if note_rc == 0 else hit.get("snippet", "")
-        snippet = {"path": path, "label": hit.get("label", ""), "score": hit.get("score"),
-                    "content": content[:800]}
+        candidate = Path(hit.get("path", ""))
+        path = candidate.resolve() if candidate.is_absolute() else (Path(vault) / candidate).resolve()
+        if not path.is_relative_to(Path(vault).resolve()):
+            raise SetupError("search returned a path outside the isolated vault")
+        note_rc, note_out, _ = run_mem_command(vault, home, ["note", str(path)], cwd=cwd, cache_dir=cache_dir)
+        if note_rc != 0:
+            continue
+        normalized = note_out.replace("\r\n", "\n")
+        if not normalized.startswith("# source: ") or "\n\n" not in normalized:
+            raise SetupError("unexpected mem note provenance envelope")
+        content = normalized.split("\n\n", 1)[1].rstrip("\n")
+        snippet = {"path": path.relative_to(Path(vault).resolve()).as_posix(), "label": hit.get("label", ""),
+                   "score": hit.get("score"), "content": content[:800]}
         blob = json.dumps(snippet, ensure_ascii=False)
         if total + len(blob.encode("utf-8")) > limit:
             break
         snippets.append(snippet)
         total += len(blob.encode("utf-8"))
-
     return {"snippets": snippets, "hit_count": len(hits), "packed_bytes": total,
-            "qmd_used": True, "budget": limit}
-
-
-def grade_query(query, gold, context):
-    outcome = {"query_id": query["query_id"], "pass": True, "failures": []}
-
-    combined = ""
-    current_combined = ""
-    source_map = {}
-    for sn in context["snippets"]:
-        combined += sn.get("content", "") + "\n"
-        if sn.get("label") == "CURRENT":
-            current_combined += sn.get("content", "") + "\n"
-        source_map[sn.get("path", "")] = sn
-
-    for claim_id in gold.get("required_claims", []):
-        if claim_id not in combined:
-            outcome["failures"].append(f"missing_required_claim: {claim_id}")
-            outcome["pass"] = False
-
-    for claim_id in gold.get("forbidden_current_claims", []):
-        if claim_id in current_combined:
-            outcome["failures"].append(f"forbidden_current_claim_present: {claim_id}")
-            outcome["pass"] = False
-
-    for s in gold.get("forbidden_strings", []):
-        if s in combined:
-            outcome["failures"].append(f"forbidden_string_present: {s[:60]}")
-            outcome["pass"] = False
-
-    rationale = gold.get("required_rationale")
-    if rationale and rationale not in combined:
-        outcome["failures"].append(f"missing_rationale: {rationale[:60]}")
-        outcome["pass"] = False
-
-    if gold.get("expected_uncertainty") and not any(w in combined.lower() for w in ["unresolved", "contradict", "uncertain", "disagree"]):
-        outcome["failures"].append("expected_uncertainty_not_signaled")
-        outcome["pass"] = False
-
-    if not gold.get("expected_uncertainty") and gold.get("required_claims") and not context["snippets"]:
-        outcome["failures"].append("empty_context_for_answerable_query")
-        outcome["pass"] = False
-
-    outcome["snippet_count"] = len(context["snippets"])
-    outcome["packed_bytes"] = context["packed_bytes"]
-    return outcome
-
-
-def lifecycle_check(vault, corpus):
-    """A capture counts only when its own note file exists; captures sharing a note path (T19) collide."""
-    expected_notes = len(corpus.get("sessions", []))
-    from agentmem.manifest import Manifest
-    man = Manifest(vault / "_meta" / "manifest.sqlite")
-    try:
-        paths = [r[0] for r in man.db.execute("SELECT note_path FROM captures")]
-    finally:
-        man.close()
-    distinct = set(paths)
-    existing = {p for p in distinct if (vault / p).is_file()}
-    notes_written = len(existing)
-    return {"passed": notes_written == expected_notes, "notes_written": notes_written,
-            "captures_recorded": len(paths), "missing_note_files": len(distinct - existing),
-            "colliding_captures": len(paths) - len(distinct), "expected_sessions": expected_notes}
+            "qmd_used": backend == "qmd", "fallback": fallback, "backend": backend,
+            "search_error": error, "budget": limit, "budget_unit": "tokens_est_3b"}
 
 
 def write_outputs(output_dir, result, per_query_outcomes, corpus):
@@ -424,10 +441,11 @@ def write_outputs(output_dir, result, per_query_outcomes, corpus):
 
     with open(output_dir / "per_query.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["query_id", "pass", "snippet_count", "packed_bytes", "failures"])
+        w.writerow(["query_id", "pass", "snippet_count", "packed_bytes", "qmd_used", "failures"])
         for o in per_query_outcomes:
             w.writerow([o["query_id"], o["pass"], o.get("snippet_count", 0),
-                        o.get("packed_bytes", 0), "; ".join(o.get("failures", []))])
+                        o.get("packed_bytes", 0), o.get("qmd_used", ""),
+                        "; ".join(o.get("failures", []))])
 
     lines = [f"# Baseline evaluation report",
              f"",
@@ -443,11 +461,13 @@ def write_outputs(output_dir, result, per_query_outcomes, corpus):
              f""]
     passed = sum(1 for o in per_query_outcomes if o["pass"])
     total = len(per_query_outcomes)
-    lines.append(f"Passed: {passed}/{total}")
+    lines.append(f"Primary quality: {result.get('counters', {})}")
+    lines.append(f"Raw-question quality: {result.get('raw_counters', {})}")
     lines.append("")
     for o in per_query_outcomes:
         if not o["pass"]:
-            lines.append(f"- FAIL {o['query_id']}: {'; '.join(o.get('failures', []))}")
+            label = "UNMEASURED" if o.get("unmeasured") else "FAIL"
+            lines.append(f"- {label} {o['query_id']}: {'; '.join(o.get('failures', []))}")
     lines.append("")
     lines.append("## Limitations")
     for lim in result.get("limitations", []):
@@ -464,99 +484,89 @@ def get_commit():
 
 
 def run_baseline(fixtures_dir, output_dir):
-    result = load_fixtures(fixtures_dir)
-    if result[5] is not None:
-        output = {"verdict": "setup_error", "exit_code": EXIT_SETUP, "errors": result[5],
-                  "correctness_pass": False, "adoption_pass": False, "limitations": []}
-        write_outputs(output_dir, output, [], {})
+    loaded = load_fixtures(fixtures_dir)
+    if loaded[5] is not None:
+        result = {"verdict": "setup_error", "errors": loaded[5], "correctness_pass": False, "adoption_pass": False}
+        write_outputs(output_dir, result, [], {})
         return EXIT_SETUP
-    manifest, corpus, queries, expected, hashes, _ = result
-
-    hash_mismatches = check_fixture_hashes(manifest, hashes)
-    if hash_mismatches:
-        result = {"verdict": "setup_error", "exit_code": EXIT_SETUP,
-                  "errors": hash_mismatches, "correctness_pass": False, "adoption_pass": False,
-                  "limitations": []}
-        write_outputs(output_dir, result, [], corpus)
+    manifest, corpus, queries, expected, hashes, _ = loaded
+    mismatch = check_fixture_hashes(manifest, hashes)
+    if mismatch:
+        write_outputs(output_dir, {"verdict": "setup_error", "errors": mismatch}, [], corpus)
         return EXIT_SETUP
-
-    with tempfile.TemporaryDirectory(prefix="agentmem-eval-") as tmp:
-        tmp = Path(tmp)
-        # The corpus transcript field already includes the leading "transcripts/" directory.
-        transcripts_dir = Path(fixtures_dir)
-        corpus["_transcripts_dir"] = str(transcripts_dir) if transcripts_dir.is_dir() else ""
-
-        qmd_index = tmp / "qmd_index"
-        vault, work, home, project_roots = make_temp_vault(tmp, corpus, qmd_index=qmd_index)
-
+    with tempfile.TemporaryDirectory(prefix="agentmem-eval-", dir=str(repo_tmp())) as directory:
+        tmp = Path(directory)
+        corpus["_transcripts_dir"] = str(Path(fixtures_dir).resolve())
+        cache = tmp / "cache"
+        vault, work, home, roots = make_temp_vault(tmp, corpus, qmd_index="index")
         try:
-            cfg = run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index=qmd_index)
-        except SetupError as e:
-            result = {"verdict": "setup_error", "exit_code": EXIT_SETUP,
-                      "errors": [str(e)], "correctness_pass": False, "adoption_pass": False,
-                      "limitations": []}
-            write_outputs(output_dir, result, [], corpus)
+            run_pipeline_for_corpus(vault, work, home, corpus, roots, qmd_index="index")
+            rc, stdout, stderr = run_mem_command(vault, home, ["index", "--no-embed"], timeout=120, cwd=tmp, cache_dir=cache)
+            index_result = {"returncode": rc, "stdout": stdout.strip(), "stderr": stderr[:500]}
+            qmd_status, qmd_version = detect_qmd(env=isolated_environment(vault, home, cache), cwd=tmp)
+            database = cache / "qmd/index.sqlite"
+            index_result["database_exists"] = database.is_file()
+            if database.is_file():
+                with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+                    index_result["active_documents"] = connection.execute("SELECT COUNT(*) FROM documents WHERE active=1").fetchone()[0]
+            outcomes = []
+            for query in queries:
+                primary = dict(query, query=formulate_query(query["query"]))
+                contexts = {}
+                grades = {}
+                for name, request in (("primary", primary), ("raw", query)):
+                    package = package_baseline_context(vault, home, request, qmd_available=qmd_status == "ok", cwd=tmp, cache_dir=cache)
+                    grade = grade_query(query, expected[query["query_id"]], package, corpus=corpus, vault=vault)
+                    grade.update(backend=package["backend"], qmd_used=package["qmd_used"], fallback=package["fallback"],
+                                 hit_count=package["hit_count"], search_terms=request["query"], search_error=package["search_error"])
+                    contexts[name] = package
+                    grades[name] = grade
+                row = dict(grades["primary"], case=query["case"], partition=query["partition"], raw=grades["raw"])
+                row["quality_measured"] = not bool(row["unmeasured"])
+                outcomes.append(row)
+            diagnostics = []
+            for terms in ("historical", "storage"):
+                package = package_baseline_context(vault, home, {"query": terms, "budget": 2400}, cwd=tmp, cache_dir=cache)
+                diagnostics.append({"terms": terms, "backend": package["backend"], "hit_count": package["hit_count"],
+                                    "snippet_count": len(package["snippets"]), "search_error": package["search_error"]})
+            lifecycle = lifecycle_check(vault, corpus)
+        except (SetupError, ValueError, KeyError, sqlite3.Error) as error:
+            write_outputs(output_dir, {"verdict": "setup_error", "errors": [str(error)]}, [], corpus)
             return EXIT_SETUP
 
-        qmd_status, qmd_version = detect_qmd()
-
-        per_query_outcomes = []
-        total_packed = 0
-        total_snippets = 0
-        for q in queries:
-            qid = q["query_id"]
-            gold = expected.get(qid, {})
-            context = package_baseline_context(vault, home, q)
-            outcome = grade_query(q, gold, context)
-            per_query_outcomes.append(outcome)
-            total_packed += context["packed_bytes"]
-            total_snippets += len(context["snippets"])
-
-        lifecycle = lifecycle_check(vault, corpus)
-        if not lifecycle["passed"]:
-            for o in per_query_outcomes:
-                if o["pass"]:
-                    o["pass"] = False
-                    o["failures"].append("lifecycle_grader:no_notes_persisted")
-
-        passed = sum(1 for o in per_query_outcomes if o["pass"])
-        total = len(per_query_outcomes)
-        correctness_pass = passed == total and total > 0 and lifecycle["passed"]
-
-        limitations = []
-        if qmd_status == "unavailable":
-            limitations.append("QMD not installed; baseline used fallback search")
-        if not corpus.get("sessions"):
-            limitations.append("no sessions in corpus")
-
-        result = {
-            "commit": get_commit(),
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            "sqlite_version": sqlite3.sqlite_version,
-            "qmd_status": qmd_status,
-            "qmd_version": qmd_version,
-            "tokenizer": "byte-fallback",
-            "fixture_hashes": hashes,
-            "counters": {
-                "total_queries": total,
-                "passed": passed,
-                "failed": total - passed,
-                "total_packed_bytes": total_packed,
-                "total_snippets": total_snippets,
-            },
-            "costs": {"model_usd": None, "reason": "baseline uses replay model; no real calls"},
-            "lifecycle": lifecycle,
-            "correctness_pass": correctness_pass,
-            "adoption_pass": correctness_pass,
-            "verdict": "pass" if correctness_pass else ("inconclusive" if total == 0 else "fail"),
-            "limitations": limitations,
-        }
-
-        write_outputs(output_dir, result, per_query_outcomes, corpus)
-
-        if total == 0:
-            return EXIT_INCONCLUSIVE
-        return EXIT_PASS if correctness_pass else EXIT_FAIL
+        def summarize(rows):
+            measured = [r for r in rows if not r.get("unmeasured")]
+            return {"queries": len(rows), "quality_measured": len(measured), "quality_passed": sum(r["pass"] for r in measured),
+                    "quality_failed": sum(not r["pass"] for r in measured), "unmeasured": len(rows) - len(measured),
+                    "qmd_queries": sum(r["backend"] == "qmd" for r in rows),
+                    "qmd_hit_queries": sum(r["backend"] == "qmd" and r["hit_count"] > 0 for r in rows),
+                    "fallback_queries": sum(r["backend"] == "fallback" for r in rows),
+                    "fallback_hit_queries": sum(r["backend"] == "fallback" and r["hit_count"] > 0 for r in rows),
+                    "search_errors": sum(bool(r["search_error"]) for r in rows)}
+        counters = summarize(outcomes)
+        raw_counters = summarize([r["raw"] for r in outcomes])
+        per_case = {case: {"primary": summarize([r for r in outcomes if r["case"] == case]),
+                          "raw": summarize([r["raw"] for r in outcomes if r["case"] == case])} for case in sorted({q["case"] for q in queries})}
+        correctness = bool(outcomes) and all(row["pass"] for row in outcomes) and lifecycle["passed"]
+        exit_code = EXIT_FAIL if counters["quality_failed"] or not lifecycle["passed"] else EXIT_INCONCLUSIVE
+        result = {"commit": get_commit(), "evaluator_sha256": sha256_file(Path(__file__)),
+                  "python_version": sys.version.split()[0], "sqlite_version": sqlite3.sqlite_version,
+                  "temp_dir": str(tmp), "qmd_index_path": str(database), "qmd_config_dir": str(tmp / "config/qmd"),
+                  "qmd_status": qmd_status, "qmd_version": qmd_version, "index": index_result,
+                  "tokenizer": "byte-fallback", "fixture_hashes": hashes,
+                  "query_formulation": {"version": 1, "rule": "lowercase, drop fixed stopwords, first 4 remaining words", "stopwords": sorted(QUERY_STOPWORDS)},
+                  "counters": counters, "raw_counters": raw_counters, "per_case": per_case, "diagnostics": diagnostics,
+                  "costs": {"model_usd": None, "model_calls": 0, "reason": "frozen replay summaries; model cost unmeasured"},
+                  "lifecycle": lifecycle, "lifecycle_failure": not lifecycle["passed"], "per_query": outcomes,
+                  "correctness_pass": correctness, "adoption_pass": False, "exit_code": exit_code,
+                  "verdict": "fail" if exit_code == EXIT_FAIL else "inconclusive",
+                  "limitations": ["B0 only; no candidate comparison or adoption decision.",
+                                  "Fault execution is unmeasured and excluded from quality counts.",
+                                  "Frozen replay summaries and no-op consolidation do not establish model extraction or normal current-state quality.",
+                                  "One correctness run; no latency, cost, semantic or exact-token performance claim.",
+                                  "The 800-character snippet cap and conservative byte packaging are frozen for both query forms."]}
+        write_outputs(output_dir, result, outcomes, corpus)
+        return exit_code
 
 
 def main():

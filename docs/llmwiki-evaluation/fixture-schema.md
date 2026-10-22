@@ -48,6 +48,10 @@ All fixture content is synthetic. It must contain no vault content, real session
 
 There are 27 cases with 10 variants each: five `dev` and five `sealed`. Each case appears in both partitions with different entities and values (06).
 
+## Query formulation
+
+Every arm uses `tools.knowledge_grader.formulate_query` version 1 for its primary search. It lowercases the question, tokenizes words while retaining internal hyphens and apostrophes, drops the fixed `QUERY_STOPWORDS` set, and keeps the first four remaining words in order. The rule never consults gold, project metadata, or fixture entity patterns. The full stopword set and the exact primary terms are recorded in the result. An unchanged full-question search is measured separately for every query. Neither form retries with different terms. Raw-CLI positive diagnostics are reported separately and do not contribute to quality scores.
+
 ## expected.jsonl
 
 ```json

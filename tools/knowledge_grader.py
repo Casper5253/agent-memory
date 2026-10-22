@@ -29,6 +29,13 @@ LABELS = {
 UNCERTAINTY = re.compile(r"\b(?:unresolved|uncertain|disputed|conflicting reports|disagree|no evidence|not recorded|unrecorded|missing evidence|no .{0,60} recorded)\b")
 RESOLUTION = re.compile(r"\b(?:no unresolved|not uncertain|no uncertainty|no contradiction|no disagreement|only current truth|only correct choice|resolved|accepted current|sole current|the only alternative|with certainty|winner)\b")
 CURRENT_ASSERTION = r"\b(?:accepted.{0,35}(?:current|use now)|current (?:decision|choice|truth)|use .{0,60} now|now use)\b"
+QUERY_STOPWORDS = frozenset("a an and are as at be been by can could did do does for from had has have how i in is it its may me of on or our should that the their then these this those to was we were what when where which while who why will with would you your".split())
+
+
+def formulate_query(question):
+    """Frozen v1 rule for every arm: lowercase, fixed stopwords, first four words."""
+    words = re.findall(r"\b\w+(?:[-']\w+)*\b", question.lower())
+    return " ".join([word for word in words if word not in QUERY_STOPWORDS][:4])
 
 
 def _space(text):
@@ -107,6 +114,14 @@ def _identity(row):
     return row.get("agent"), row.get("session_id"), row.get("part", 1)
 
 
+def _note_identity_matches(fields, row):
+    if fields.get("type") != "session":
+        return False
+    if fields.get("session_id") == "[REDACTED]":
+        return fields.get("agent") == row.get("agent") and fields.get("part") == row.get("part")
+    return _identity(fields) == _identity(row)
+
+
 @dataclass(frozen=True)
 class Citation:
     path: str
@@ -132,7 +147,7 @@ class EvidenceIndex:
         row = rows[0]
         note = path.read_text(encoding="utf-8")
         fields = _header(note)
-        if fields.get("type") != "session" or _identity(fields) != _identity(row):
+        if not _note_identity_matches(fields, row):
             raise ValueError("capture_note_identity_mismatch")
         if fields.get("project") != project["name"] or row.get("project") != project["name"]:
             raise ValueError("foreign_project_note")
@@ -306,7 +321,7 @@ def lifecycle_check(vault, corpus):
     vault = Path(vault).resolve()
     errors = []
     result = {"passed": False, "notes_written": 0, "captures_recorded": 0, "missing_note_files": 0,
-              "colliding_captures": 0, "expected_sessions": 0, "errors": errors}
+              "colliding_captures": 0, "expected_sessions": 0, "redacted_session_ids": 0, "errors": errors}
     projects = {p["id"]: p for p in corpus.get("projects", [])}
     expected = {}
     for session in corpus.get("sessions", []):
@@ -324,6 +339,10 @@ def lifecycle_check(vault, corpus):
         if len(actual) != len(set(actual)) or set(actual) != set(expected):
             errors.append("capture_identity_set_mismatch")
         paths = []
+        path_counts = {}
+        for row in rows:
+            bound = _contained(vault, row.get("note_path"))
+            path_counts[bound] = path_counts.get(bound, 0) + 1
         ranges = {}
         for row in rows:
             identity = _identity(row)
@@ -335,7 +354,9 @@ def lifecycle_check(vault, corpus):
                 continue
             text = path.read_text(encoding="utf-8")
             fields = _header(text)
-            if not text.strip() or fields.get("type") != "session" or _identity(fields) != identity:
+            if fields.get("session_id") == "[REDACTED]":
+                result["redacted_session_ids"] += 1
+            if not text.strip() or not _note_identity_matches(fields, row) or path_counts[path] != 1:
                 errors.append("note_identity_or_content_mismatch")
                 continue
             project = projects.get(expected.get(identity, {}).get("project_id"))
@@ -349,6 +370,12 @@ def lifecycle_check(vault, corpus):
                     errors.append("note_summary_mismatch")
             elif not re.search(r"\w{3}", re.sub(r"(?m)^#+[^\n]*", "", body)):
                 errors.append("empty_note_body")
+            if fields.get("session_id") == "[REDACTED]" and not summary_response:
+                supporting_sources = {s["id"] for s in corpus.get("sources", []) if _identity(s) == identity}
+                supported = any(supporting_sources.intersection(claim.get("source_ids", [])) and _supports(body, claim["statement"])
+                                for claim in corpus.get("claims", []))
+                if not project or not supported:
+                    errors.append("redacted_identity_without_supported_content")
             start, end = row.get("start_offset"), row.get("end_offset")
             if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end <= start:
                 errors.append("invalid_capture_range")

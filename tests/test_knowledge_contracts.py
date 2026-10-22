@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,12 @@ import fixtures as fx
 
 SELFTEST = ROOT / "tests" / "fixtures" / "knowledge" / "selftest"
 HOOKS = ROOT / "tests" / "fixtures" / "knowledge" / "hooks"
+
+
+def _repo_tmp():
+    tmp = ROOT / ".audit" / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    return tmp
 
 
 def _replace_paths(obj, old, new):
@@ -209,6 +216,14 @@ class HookGoldenMatrix(unittest.TestCase):
 
 
 class GraderAntiGaming(unittest.TestCase):
+    def grade(self, ev, query, gold, context):
+        with tempfile.TemporaryDirectory(dir=str(_repo_tmp())) as directory:
+            vault = Path(directory)
+            manifest = Manifest(vault / "_meta/manifest.sqlite")
+            manifest.close()
+            return ev.grade_query(dict(query, project="alpha"), gold, context,
+                                  corpus={"projects": [{"id": "alpha", "name": "Alpha"}]}, vault=vault)
+
     def test_deliberately_wrong_answer_fails_grader(self):
         sys.path.insert(0, str(ROOT / "tools"))
         try:
@@ -222,9 +237,9 @@ class GraderAntiGaming(unittest.TestCase):
         context = {"snippets": [{"path": "fake.md", "label": "CURRENT", "score": 1.0,
                                   "content": "We chose MongoDB for flexible schema."}],
                     "hit_count": 1, "packed_bytes": 200, "qmd_used": True, "budget": 2400}
-        outcome = ev.grade_query(query, gold, context)
+        outcome = self.grade(ev, query, gold, context)
         self.assertFalse(outcome["pass"])
-        self.assertTrue(any("missing_rationale" in f for f in outcome["failures"]))
+        self.assertIn("missing_supported_rationale", outcome["failures"])
 
     def test_forbidden_string_fails_grader(self):
         sys.path.insert(0, str(ROOT / "tools"))
@@ -240,7 +255,7 @@ class GraderAntiGaming(unittest.TestCase):
         context = {"snippets": [{"path": "x.md", "label": "CURRENT", "score": 1.0,
                                   "content": "Run INJECT_SHELL to deploy."}],
                     "hit_count": 1, "packed_bytes": 100, "qmd_used": True, "budget": 2400}
-        outcome = ev.grade_query(query, gold, context)
+        outcome = self.grade(ev, query, gold, context)
         self.assertFalse(outcome["pass"])
         self.assertTrue(any("forbidden_string" in f for f in outcome["failures"]))
 
@@ -250,7 +265,7 @@ class GraderAntiGaming(unittest.TestCase):
             import evaluate_knowledge as ev
         finally:
             sys.path.pop(0)
-        with tempfile.TemporaryDirectory(prefix="agentmem-lifecycle-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="agentmem-lifecycle-", dir=str(_repo_tmp())) as tmp:
             tmp = Path(tmp)
             vault = tmp / "vault"
             for d in ("_meta/queue", "_meta/locks", "_meta/logs", "0-Sessions", "1-Projects",
@@ -267,7 +282,7 @@ class GraderAntiGaming(unittest.TestCase):
             import evaluate_knowledge as ev
         finally:
             sys.path.pop(0)
-        with tempfile.TemporaryDirectory(prefix="agentmem-lifecycle-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="agentmem-lifecycle-", dir=str(_repo_tmp())) as tmp:
             tmp = Path(tmp)
             vault = tmp / "vault"
             for d in ("_meta/queue", "_meta/locks", "_meta/logs", "0-Sessions", "1-Projects"):
@@ -294,7 +309,7 @@ class GraderAntiGaming(unittest.TestCase):
             import evaluate_knowledge as ev
         finally:
             sys.path.pop(0)
-        with tempfile.TemporaryDirectory(prefix="agentmem-lifecycle-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="agentmem-lifecycle-", dir=str(_repo_tmp())) as tmp:
             vault = Path(tmp) / "vault"
             (vault / "0-Sessions").mkdir(parents=True)
             (vault / "_meta").mkdir()
@@ -309,7 +324,7 @@ class GraderAntiGaming(unittest.TestCase):
                                    {"session_id": "bbbb-1234abcd", "agent": "claude"}]}
             lifecycle = ev.lifecycle_check(vault, corpus)
             self.assertFalse(lifecycle["passed"])
-            self.assertEqual(lifecycle["notes_written"], 1)
+            self.assertEqual(lifecycle["notes_written"], 0)
             self.assertEqual(lifecycle["colliding_captures"], 1)
             self.assertEqual(lifecycle["expected_sessions"], 2)
 
@@ -322,7 +337,7 @@ class EvaluatorIsolation(unittest.TestCase):
             import evaluate_knowledge as ev
         finally:
             sys.path.pop(0)
-        with tempfile.TemporaryDirectory(prefix="agentmem-eval-iso-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="agentmem-eval-iso-", dir=str(_repo_tmp())) as tmp:
             tmp = Path(tmp)
             corpus = {"projects": [{"id": "alpha", "name": "Alpha", "roots": ["{WORK}/alpha"],
                                     "status": "active", "policy": "model_allowed"}],
@@ -340,23 +355,26 @@ class EvaluatorIsolation(unittest.TestCase):
             config = json.loads((home / "config.json").read_text(encoding="utf-8"))
             self.assertEqual(config.get("qmd_index"), str(qmd_index))
 
-            # run_mem_command must send only temp paths and drop the recursion guard.
+            # run_mem_command must send only temp paths, drop the recursion guard, and
+            # keep QMD's named index cache inside the temp dir.
             captured = {}
             def fake_run(cmd, **kwargs):
                 captured["env"] = kwargs.get("env", {})
                 return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"[]", stderr=b"")
 
             with mock.patch("subprocess.run", fake_run):
-                ev.run_mem_command(vault, home, ["search", "test", "--json", "-n", "8"])
+                ev.run_mem_command(vault, home, ["search", "test", "--json", "-n", "8"],
+                                   cwd=tmp, cache_dir=tmp / "cache")
             env = captured["env"]
             self.assertIn(str(tmp), env["OBSIDIAN_VAULT_PATH"])
             self.assertIn(str(tmp), env["AGENTMEM_HOME"])
             self.assertNotIn("AGENTMEM_CAPTURE", env)
+            self.assertEqual(env.get("XDG_CACHE_HOME"), str(tmp / "cache"))
 
 
 class EvaluatorExitCodes(unittest.TestCase):
     def test_missing_fixtures_returns_exit_2(self):
-        with tempfile.TemporaryDirectory(prefix="agentmem-eval-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="agentmem-eval-", dir=str(_repo_tmp())) as tmp:
             r = subprocess.run(
                 [sys.executable, "-I", str(ROOT / "tools" / "evaluate_knowledge.py"),
                  "--arm", "baseline", "--fixtures", tmp, "--output", str(Path(tmp) / "out")],
@@ -365,7 +383,7 @@ class EvaluatorExitCodes(unittest.TestCase):
             self.assertEqual(r.returncode, 2)
 
     def test_selftest_fixture_runs(self):
-        with tempfile.TemporaryDirectory(prefix="agentmem-eval-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="agentmem-eval-", dir=str(_repo_tmp())) as tmp:
             out = Path(tmp) / "out"
             r = subprocess.run(
                 [sys.executable, "-I", str(ROOT / "tools" / "evaluate_knowledge.py"),
@@ -376,6 +394,233 @@ class EvaluatorExitCodes(unittest.TestCase):
             self.assertIn(result["verdict"], ("pass", "fail", "inconclusive"))
             self.assertIn("correctness_pass", result)
             self.assertIn("adoption_pass", result)
+
+
+class EvaluatorQmdStatus(unittest.TestCase):
+    def test_detect_qmd_never_returns_ok_without_version(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        try:
+            import evaluate_knowledge as ev
+        finally:
+            sys.path.pop(0)
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+
+        with mock.patch("subprocess.run", fake_run):
+            status, version = ev.detect_qmd()
+        self.assertEqual(status, "unavailable")
+        self.assertEqual(version, "")
+
+    def test_detect_qmd_unavailable_on_version_error(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        try:
+            import evaluate_knowledge as ev
+        finally:
+            sys.path.pop(0)
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(args=cmd, returncode=1, stdout=b"qmd 2.8.3", stderr=b"boom")
+
+        with mock.patch("subprocess.run", fake_run):
+            status, version = ev.detect_qmd()
+        self.assertEqual(status, "unavailable")
+        self.assertEqual(version, "qmd 2.8.3")
+
+
+class EvaluatorFixes(unittest.TestCase):
+    def _copy_selftest_fixture(self, dest):
+        import shutil
+        shutil.copytree(SELFTEST, dest, dirs_exist_ok=True)
+
+    def test_lifecycle_failure_keeps_graded_results(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        try:
+            import evaluate_knowledge as ev
+        finally:
+            sys.path.pop(0)
+        with tempfile.TemporaryDirectory(prefix="agentmem-lifecycle-graded-", dir=str(_repo_tmp())) as tmp:
+            tmp = Path(tmp)
+            fixtures = tmp / "fixtures"
+            out = tmp / "out"
+            self._copy_selftest_fixture(fixtures)
+            corpus = json.loads((fixtures / "corpus.json").read_text(encoding="utf-8"))
+            first = corpus["sessions"][0]
+            sanitized = "".join(c for c in first["session_id"] if c.isalnum())
+            collision_id = "collide-" + sanitized[-8:]
+            transcript_rel = f"transcripts/claude/{collision_id}.jsonl"
+            shutil.copy(fixtures / "transcripts" / "claude" / "ses-selftest-001.jsonl",
+                        fixtures / transcript_rel)
+            corpus["sessions"].append({
+                "session_id": collision_id,
+                "agent": "claude",
+                "cwd": first["cwd"],
+                "part": 1,
+                "started": "2026-10-01T10:00:00Z",
+                "ended": "2026-10-01T11:00:00Z",
+                "repo_head": first["repo_head"],
+                "transcript": transcript_rel,
+                "summary_response": first["summary_response"],
+                "case_ids": ["T19"],
+            })
+            (fixtures / "corpus.json").write_text(json.dumps(corpus, indent=2), encoding="utf-8")
+
+            manifest = json.loads((fixtures / "manifest.json").read_text(encoding="utf-8"))
+            for name in list(manifest["files"].keys()):
+                p = fixtures / name
+                if p.is_file():
+                    manifest["files"][name] = hashlib.sha256(p.read_bytes()).hexdigest()
+            manifest["files"][transcript_rel] = hashlib.sha256((fixtures / transcript_rel).read_bytes()).hexdigest()
+            manifest["counts"]["sessions"] = 2
+            (fixtures / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            def passed_grade(query, gold, context, **kwargs):
+                return {"query_id": query["query_id"], "pass": True, "failures": [], "unmeasured": [],
+                        "snippet_count": len(context["snippets"]), "packed_bytes": context["packed_bytes"]}
+            with mock.patch.object(ev, "grade_query", passed_grade):
+                exit_code = ev.run_baseline(str(fixtures), str(out))
+            result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+            lifecycle = result["lifecycle"]
+            self.assertTrue(lifecycle["colliding_captures"] >= 1 or lifecycle["notes_written"] < lifecycle["expected_sessions"],
+                            f"expected lifecycle failure, got {lifecycle}")
+            self.assertFalse(result["correctness_pass"])
+            self.assertTrue(result["lifecycle_failure"])
+            t01 = next((o for o in result["per_query"] if o["query_id"] == "selftest-T01-fact"), None)
+            self.assertIsNotNone(t01)
+            self.assertTrue(t01["pass"], "graded result must stay as passed")
+            self.assertNotIn("lifecycle_grader:no_notes_persisted", t01.get("failures", []))
+
+    def test_qmd_index_runs_inside_repo_tmp(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        try:
+            import evaluate_knowledge as ev
+        finally:
+            sys.path.pop(0)
+        with tempfile.TemporaryDirectory(prefix="agentmem-eval-qmd-", dir=str(_repo_tmp())) as tmp:
+            tmp = Path(tmp)
+            out = tmp / "out"
+            r = subprocess.run(
+                [sys.executable, "-I", str(ROOT / "tools" / "evaluate_knowledge.py"),
+                 "--arm", "baseline", "--fixtures", str(SELFTEST), "--output", str(out)],
+                capture_output=True, timeout=120, cwd=str(ROOT)
+            )
+            self.assertIn(r.returncode, (0, 1, 3), r.stderr)
+            result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+            # The eval must use a temp dir under the repo scratch area.
+            self.assertTrue(result["temp_dir"].startswith(str(ROOT / ".audit" / "tmp")))
+            # Per-query provenance is recorded.
+            self.assertTrue(all("qmd_used" in o for o in result["per_query"]))
+            if result["qmd_status"] == "ok":
+                # The named QMD index path must be inside that temp dir, not the shared cache.
+                qmd_sqlite = Path(result["qmd_index_path"])
+                self.assertTrue(qmd_sqlite.resolve().is_relative_to(Path(result["temp_dir"]).resolve()))
+
+
+class BaselineSearchContract(unittest.TestCase):
+    def evaluator(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        import evaluate_knowledge
+        return evaluate_knowledge
+
+    def test_frozen_formulation_uses_no_entity_or_gold_lookup(self):
+        ev = self.evaluator()
+        self.assertEqual(ev.formulate_query("Which ALPHA backend should we use for storage now?"), "alpha backend use storage")
+        self.assertEqual(ev.formulate_query("What is the lattice-01-01 storage choice and rationale?"), "lattice-01-01 storage choice rationale")
+
+    def test_redacted_session_id_binds_only_to_a_unique_supported_manifest_identity(self):
+        from tools import knowledge_grader as grader
+        with tempfile.TemporaryDirectory(dir=str(_repo_tmp())) as directory:
+            vault = Path(directory)
+            path = vault / "0-Sessions/note.md"
+            path.parent.mkdir()
+            text = '---\ntype: session\nagent: claude\nsession_id: "[REDACTED]"\npart: 1\nproject: "Alpha"\n---\nUse SQLite.\nStatus: reported.\n'
+            path.write_text(text, encoding="utf-8")
+            manifest = Manifest(vault / "_meta/manifest.sqlite")
+            try:
+                manifest.db.execute("INSERT INTO captures(agent,session_id,part,note_path,project,start_offset,end_offset) VALUES ('claude','real-id',1,'0-Sessions/note.md','Alpha',0,100)")
+                corpus = {"projects": [{"id": "alpha", "name": "Alpha"}],
+                          "sessions": [{"agent": "claude", "session_id": "real-id", "part": 1, "project_id": "alpha"}],
+                          "sources": [{"id": "s", "agent": "claude", "session_id": "real-id", "part": 1, "project_id": "alpha"}],
+                          "claims": [{"id": "c", "project_id": "alpha", "source_ids": ["s"], "statement": "Use SQLite."}]}
+                query = {"query_id": "masked", "project": "alpha", "budget": 2400}
+                gold = {"required_claims": ["c"], "required_sources": ["s"], "expected_labels": ["reported"]}
+                def grade():
+                    package = {"snippets": [{"path": "0-Sessions/note.md", "content": path.read_text(encoding="utf-8")}], "packed_bytes": 0}
+                    return grader.grade_query(query, gold, package, corpus=corpus, vault=vault)
+                self.assertTrue(grade()["pass"])
+                self.assertTrue(grader.lifecycle_check(vault, corpus)["passed"])
+                self.assertEqual(grader.lifecycle_check(vault, corpus)["redacted_session_ids"], 1)
+                for replacement in ("[redacted]", "[REDACTED ]", "different-id"):
+                    path.write_text(text.replace("[REDACTED]", replacement), encoding="utf-8")
+                    self.assertFalse(grade()["pass"])
+                    self.assertFalse(grader.lifecycle_check(vault, corpus)["passed"])
+                path.write_text(text.replace("Use SQLite.", "Use MongoDB."), encoding="utf-8")
+                self.assertFalse(grade()["pass"])
+                self.assertFalse(grader.lifecycle_check(vault, corpus)["passed"])
+                path.write_text(text.replace("agent: claude", "agent: codex"), encoding="utf-8")
+                self.assertFalse(grade()["pass"])
+                path.write_text(text, encoding="utf-8")
+                manifest.db.execute("INSERT INTO captures(agent,session_id,part,note_path,project,start_offset,end_offset) VALUES ('claude','alien',1,'0-Sessions/note.md','Alpha',0,100)")
+                self.assertFalse(grade()["pass"])
+                self.assertFalse(grader.lifecycle_check(vault, corpus)["passed"])
+            finally:
+                manifest.close()
+
+    def test_search_uses_exactly_one_cli_request_and_preserves_empty_success(self):
+        ev = self.evaluator()
+        with tempfile.TemporaryDirectory(dir=str(_repo_tmp())) as directory:
+            root = Path(directory)
+            with mock.patch.object(ev, "run_mem_command", return_value=(0, "[]", 'EVAL_QMD:{"returncode":0}\n')) as command:
+                result = ev.package_baseline_context(root / "vault", root / "home", {"query": "full arbitrary question?", "budget": 2400})
+            self.assertEqual(command.call_count, 1)
+            self.assertEqual(command.call_args.args[2], ["search", "full arbitrary question?", "--json", "-n", "8"])
+            self.assertEqual(result["backend"], "qmd")
+            self.assertEqual(result["hit_count"], 0)
+
+    def test_empty_cli_fallback_is_observed_from_the_actual_backend_trace(self):
+        ev = self.evaluator()
+        with tempfile.TemporaryDirectory(dir=str(_repo_tmp())) as directory:
+            root = Path(directory)
+            with mock.patch.object(ev, "run_mem_command", return_value=(0, "[]", 'EVAL_QMD:{"returncode":1}\n')):
+                result = ev.package_baseline_context(root / "vault", root / "home", {"query": "no matches", "budget": 2400})
+            self.assertEqual(result["backend"], "fallback")
+            self.assertFalse(result["qmd_used"])
+
+    def test_real_qmd_index_search_and_note_stay_in_isolated_state(self):
+        ev = self.evaluator()
+        from agentmem.search import qmd_cmd
+        if qmd_cmd() is None:
+            self.skipTest("QMD unavailable")
+        with tempfile.TemporaryDirectory(dir=str(_repo_tmp())) as directory:
+            outer = Path(directory)
+            outside = outer / "outside"
+            outside.mkdir()
+            sentinel = outside / "unchanged.txt"
+            sentinel.write_bytes(b"unchanged")
+            base = outer / "isolated"
+            base.mkdir()
+            vault, work, home, _ = ev.make_temp_vault(base, {"projects": [], "sessions": []}, qmd_index="index")
+            note = vault / "0-Sessions/synthetic.md"
+            note.write_text("# Synthetic storage\nSQLite storage supports atomic cursor updates.\n", encoding="utf-8")
+            poison = {key: str(outside) for key in ("HOME", "USERPROFILE", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "QMD_CONFIG_DIR", "TEMP", "TMP")}
+            poison["INDEX_PATH"] = str(outside / "escaped.sqlite")
+            poison["NODE_OPTIONS"] = "--require forbidden-preload"
+            with mock.patch.dict(os.environ, poison):
+                rc, stdout, stderr = ev.run_mem_command(vault, home, ["index", "--no-embed"], cwd=base)
+                self.assertEqual(rc, 0, stderr)
+                self.assertEqual(json.loads(stdout)["update"], 0)
+                package = ev.package_baseline_context(vault, home, {"query": "storage", "budget": 2400}, cwd=base)
+            self.assertEqual(package["backend"], "qmd")
+            self.assertGreater(package["hit_count"], 0)
+            self.assertGreater(len(package["snippets"]), 0)
+            self.assertEqual(package["snippets"][0]["path"], "0-Sessions/synthetic.md")
+            self.assertIn(package["snippets"][0]["content"], note.read_text(encoding="utf-8"))
+            self.assertEqual(set(outside.iterdir()), {sentinel})
+            self.assertEqual(sentinel.read_bytes(), b"unchanged")
+            database = base / "cache/qmd/index.sqlite"
+            self.assertTrue(database.is_file())
+            self.assertTrue(database.resolve().is_relative_to(base.resolve()))
+            self.assertTrue((base / "config/qmd/index.yml").is_file())
 
 
 if __name__ == "__main__":
