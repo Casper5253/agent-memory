@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools.knowledge_grader import grade_query, lifecycle_check
+from agentmem.manifest import Manifest
 
 
 class KnowledgeGrader(unittest.TestCase):
@@ -20,9 +21,10 @@ class KnowledgeGrader(unittest.TestCase):
         self.vault = Path(self.tmp.name)
         (self.vault / "_meta").mkdir()
         (self.vault / "0-Sessions").mkdir()
+        manifest = Manifest(self.vault / "_meta/manifest.sqlite")
+        manifest.close()
         self.db = sqlite3.connect(self.vault / "_meta/manifest.sqlite")
         self.addCleanup(self.db.close)
-        self.db.execute("CREATE TABLE captures(agent,session_id,part,note_path,project,start_offset,end_offset)")
         self.corpus = {"projects": [{"id": "p", "name": "Synthetic Project", "policy": "model_allowed"},
                                    {"id": "foreign", "name": "Other Project", "policy": "model_allowed"}],
                        "sessions": [], "sources": [], "claims": []}
@@ -42,7 +44,7 @@ class KnowledgeGrader(unittest.TestCase):
         text = (f'---\ntype: session\nagent: claude\nsession_id: "{sid}"\npart: {part}\nproject: "{name}"\n---\n'
                 f"## Executive summary\n{statement}\n{suffix}\n")
         (self.vault / path).write_text(text, encoding="utf-8")
-        self.db.execute("INSERT INTO captures VALUES (?,?,?,?,?,?,?)", ("claude", sid, part, path, name, 0, 100))
+        self.db.execute("INSERT INTO captures(agent,session_id,part,note_path,project,start_offset,end_offset) VALUES (?,?,?,?,?,?,?)", ("claude", sid, part, path, name, 0, 100))
         self.db.commit()
         self.corpus["sessions"].append({"agent": "claude", "session_id": sid, "part": part, "project_id": project})
         self.corpus["sources"].append({"id": source, "agent": "claude", "session_id": sid, "part": part, "project_id": project})
@@ -167,7 +169,7 @@ class KnowledgeGrader(unittest.TestCase):
 
     def test_lifecycle_extra_collision_and_missing_rows_fail(self):
         for path in ("0-Sessions/session-current.md", "0-Sessions/missing.md"):
-            self.db.execute("INSERT INTO captures VALUES ('claude','alien',99,?,'Synthetic Project',0,100)", (path,))
+            self.db.execute("INSERT INTO captures(agent,session_id,part,note_path,project,start_offset,end_offset) VALUES ('claude','alien',99,?,'Synthetic Project',0,100)", (path,))
             self.db.commit()
             self.assertFalse(lifecycle_check(self.vault, self.corpus)["passed"])
             self.db.execute("DELETE FROM captures WHERE session_id='alien'")
