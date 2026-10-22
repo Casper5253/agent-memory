@@ -82,3 +82,10 @@ Import is exempt from caller-supplied revision compare-and-swap. An import only 
 ## 5. Gaps found during implementation
 
 For any further gap that does not add or change a stored column, enum value, status transition or authority rule, choose the reading most consistent with 04 and this addendum, list it under Assumptions in the report, and continue. Stop and report only for a gap that would change one of those.
+
+## 6. Authority rulings from the WP-02 review
+
+- A model-proposed `contradicts` relation is stored as a relation only. It never changes any claim's status. Claims become `disputed` only through the exact-slot rule in 04 or an operator-reviewed semantic conflict.
+- `retract` requires `actor_kind="operator"` and an `approval_ref`. `quarantine` may also come from `actor_kind="system"`, which is used for integrity and privacy failures, and requires a reason in every case.
+- `content_sha` is fixed when a claim is created and never rewritten. A review that closes an interval updates `valid_to` and `valid_end_state` and records the change in the revision snapshot. The claim keeps its content identity, so a later exact duplicate still resolves to it.
+- `accept` on a member of an unresolved exact-slot conflict returns `unresolved_conflict` and writes nothing: no claim change, no revision increment, no operation row. Only `supersede`, `retract` or `quarantine` can end the conflict.
