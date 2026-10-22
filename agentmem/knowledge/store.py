@@ -508,12 +508,6 @@ class KnowledgeStore:
             for row in rows:
                 if row["id"] not in excluded and row["value_json"] != claim["value_json"] and p.overlaps(claim, row):
                     competitors.add(row["id"])
-        rows = self.db.execute("SELECT c.* FROM relations r JOIN claims c ON "
-                               "c.id=CASE WHEN r.from_id=? THEN r.to_id ELSE r.from_id END "
-                               "WHERE r.project_id=? AND r.kind='contradicts' AND (r.from_id=? OR r.to_id=?) "
-                               "AND c.project_id=? AND c.status IN ('reported','accepted','disputed')",
-                               (claim_id, project_id, claim_id, claim_id, project_id)).fetchall()
-        competitors.update(row["id"] for row in rows if row["id"] not in excluded)
         return competitors
 
     def _dispute(self, project_id, claim_id, changed, excluded=()):
@@ -608,13 +602,6 @@ class KnowledgeStore:
                 from_id = claims[relation.from_claim.ref] if relation.from_claim.ref else relation.from_claim.claim_id
                 to_id = claims[relation.to_claim.ref] if relation.to_claim.ref else relation.to_claim.claim_id
                 self._edge(project_id, from_id, relation.kind, to_id, relation.rationale)
-                changed.update((from_id, to_id))
-                if relation.kind == "contradicts":
-                    for member in (from_id, to_id):
-                        row = self._claim(project_id, member)
-                        if row["status"] in p.LIVE_STATUSES:
-                            self._write("UPDATE claims SET status='disputed' WHERE id=?", (member,))
-                            conflicts.add(member)
             for claim_id in set(claims.values()):
                 if self._claim(project_id, claim_id)["status"] in p.LIVE_STATUSES:
                     conflicts.update(self._dispute(project_id, claim_id, changed))
@@ -642,6 +629,14 @@ class KnowledgeStore:
         if request.action in ("accept", "supersede") or request.target_status == "accepted":
             if request.actor_kind != "operator" or not request.approval_ref:
                 raise KnowledgeError("approval_required")
+        if request.action == "retract":
+            if request.actor_kind != "operator" or not request.approval_ref:
+                raise KnowledgeError("approval_required")
+        if request.action == "quarantine":
+            if request.actor_kind not in ("operator", "system"):
+                raise KnowledgeError("approval_required")
+            if request.actor_kind == "operator" and not request.approval_ref:
+                raise KnowledgeError("approval_required")
         if request.action == "supersede":
             p.uuid_id(request.successor_claim_id)
             p.integer(request.expected_successor_revision, 1)
@@ -668,12 +663,11 @@ class KnowledgeStore:
             if request.action == "accept":
                 if status not in p.LIVE_STATUSES:
                     raise KnowledgeError("invalid_transition")
-                self._supports(request.project_id, request.claim_id)
                 competitors = self._competitors(request.project_id, request.claim_id)
-                status = "disputed" if competitors else "accepted"
-                conflicts.update(competitors)
                 if competitors:
-                    conflicts.add(request.claim_id)
+                    raise KnowledgeError("unresolved_conflict")
+                self._supports(request.project_id, request.claim_id)
+                status = "accepted"
             elif request.action == "supersede":
                 successor = self._claim(request.project_id, request.successor_claim_id, request.expected_successor_revision)
                 if status not in p.LIVE_STATUSES or successor["status"] not in p.LIVE_STATUSES:
@@ -684,8 +678,8 @@ class KnowledgeStore:
                 if request.effective_boundary is not None:
                     p.temporal(claim["valid_from"], request.effective_boundary, claim["valid_precision"], "closed")
                     updated = dict(claim, valid_to=request.effective_boundary, valid_end_state="closed")
-                    self._write("UPDATE claims SET valid_to=?,valid_end_state='closed',content_sha=? WHERE id=?",
-                                (request.effective_boundary, p.claim_content(updated), request.claim_id))
+                    self._write("UPDATE claims SET valid_to=?,valid_end_state='closed' WHERE id=?",
+                                (request.effective_boundary, request.claim_id))
                 competitors = self._competitors(request.project_id, request.successor_claim_id, (request.claim_id,))
                 successor_status = "disputed" if competitors else "accepted"
                 self._write("UPDATE claims SET status=?,reviewed_at=? WHERE id=?",
