@@ -48,6 +48,7 @@ class Transcript:
     end: int = 0
     events: list = field(default_factory=list)
     prefix_sha: str = ""
+    warnings: list = field(default_factory=list)
 
 
 def _iso(value) -> str:
@@ -63,7 +64,7 @@ def _clean_prompt(text: str) -> str:
     return "" if not text or _INJECTED.match(text) else text
 
 
-def _read_lines(path: Path, start: int, end=None):
+def _read_lines(path: Path, start: int, end=None, warnings=None):
     """Yield (record, end_offset) for complete newline-terminated JSON lines after `start`."""
     with open(path, "rb") as fh:
         size = os.fstat(fh.fileno()).st_size
@@ -84,11 +85,14 @@ def _read_lines(path: Path, start: int, end=None):
                 break  # partial line still being written: stop, it will be read next time
             pos += len(raw)
             try:
-                yield json.loads(raw), pos
-            except json.JSONDecodeError:
-                if end is not None or pos - len(raw) == start:
-                    raise ValueError("source contains malformed JSON record") from None
-                break  # Capture the complete valid prefix, leaving the corrupt record unconsumed.
+                record = json.loads(raw)
+                if not isinstance(record, dict):
+                    raise ValueError("JSONL record is not an object")
+            except (ValueError, UnicodeError):
+                if warnings is not None:
+                    warnings.append({"kind": "malformed_jsonl", "start": pos - len(raw), "end": pos})
+                record = None
+            yield record, pos
         if end is not None and pos != end:
             raise ValueError("source truncated before recorded end")
 
@@ -97,7 +101,7 @@ def _read_lines(path: Path, start: int, end=None):
 def read_claude(path: str, start: int = 0, end=None) -> Transcript:
     p = Path(path)
     t = Transcript(agent="claude", session_id=p.stem, source=str(p), start=start, end=start)
-    for rec, pos in _read_lines(p, start, end):
+    for rec, pos in _read_lines(p, start, end, t.warnings):
         t.end = pos
         if not rec or rec.get("isSidechain"):
             continue
@@ -157,12 +161,14 @@ def read_codex(path: str, start: int = 0, end=None) -> Transcript:
     t = Transcript(agent="codex", session_id=sid.group(1) if sid else p.stem, source=str(p), start=start, end=start)
     if start > 0:  # session_meta (cwd, id) lives on line 1
         for rec, _ in _read_lines(p, 0):
+            if rec is None:
+                continue
             if rec and rec.get("type") == "session_meta":
                 meta = rec.get("payload") or {}
                 t.session_id = meta.get("id") or meta.get("session_id") or t.session_id
                 t.cwd = meta.get("cwd", "")
             break
-    for rec, pos in _read_lines(p, start, end):
+    for rec, pos in _read_lines(p, start, end, t.warnings):
         t.end = pos
         if not rec:
             continue

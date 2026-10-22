@@ -102,7 +102,7 @@ class Manifest:
                                (agent, session_id, part)).fetchone()
 
     def record_capture(self, *, agent, session_id, part, note_path, project, title, date, start, end, summarizer,
-                       cost, sha, consolidated, summary_json):
+                       cost, sha, consolidated, summary_json, error=None):
         now = time.time()
         with self.tx() as db:
             existing = db.execute("SELECT * FROM captures WHERE agent=? AND session_id=? AND part=?",
@@ -117,8 +117,8 @@ class Manifest:
                        (agent, session_id, part, note_path, project, title, date, start, end, summarizer,
                         int(consolidated), cost, sha, now, summary_json))
             db.execute("UPDATE sessions SET status='captured', captured_until=?, parts=?, project=?, attempts=0, skip_reason=NULL,"
-                       " next_try=0, last_error=NULL, end_seen=0, updated=? WHERE agent=? AND session_id=?",
-                       (end, part, project, now, agent, session_id))
+                       " next_try=0, last_error=?, end_seen=0, updated=? WHERE agent=? AND session_id=?",
+                       (end, part, project, error, now, agent, session_id))
 
     def set_consolidated(self, agent, session_id, part, value=1, cost=0.0):
         with self.tx() as db:

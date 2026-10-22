@@ -5,14 +5,15 @@ Mapped roots define candidates. The cwd resolver remains the fallback and Sessio
 Linked worktrees share their parent repository's project.
 """
 import json
-import logging
 import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 from .fsutil import atomic_write, file_lock
+from .logutil import log
 
 HOME = Path.home()
 PROJECTS_ROOT = HOME / "Documents" / "Projects"
@@ -50,6 +51,8 @@ def repository_root(cwd):
 
 
 def repo_head(cwd):
+    if not cwd or not Path(cwd).is_dir():
+        return None
     try:
         result = subprocess.run(["git", "-C", str(cwd), "rev-parse", "HEAD"], capture_output=True, timeout=0.5)
         head = result.stdout.decode("ascii").strip()
@@ -196,27 +199,69 @@ def _paths_in_text(text):
     return {_norm(p.strip().rstrip(".,;:)")) for p in windows + posix}
 
 
+def _fold_candidates(data):
+    merged = {}
+    originals = {p["name"]: p for p in data["projects"]}
+    for proj in data["projects"]:
+        for root in proj.get("roots", []) or [""]:
+            canonical = _routing_cwd(root, data) if root else root
+            name = proj["name"]
+            if canonical != root:
+                derived = _derive(canonical)
+                name = _explicit(canonical, data) or (derived[0] if derived else title_case(Path(canonical).name))
+            base = originals.get(name, proj)
+            candidate = merged.setdefault(name, dict(base, name=name, roots=[], aliases=[]))
+            candidate["roots"] = sorted(set(candidate["roots"]) | {r for r in (root, canonical) if r})
+            aliases = set(candidate["aliases"]) | set(proj.get("aliases", [])) | set(base.get("aliases", []))
+            if name != proj["name"]:
+                aliases.add(proj["name"])
+            candidate["aliases"] = sorted(aliases)
+    return {**data, "projects": list(merged.values())}
+
+
+def _add_path_candidates(data, paths):
+    generated = {}
+    for path in sorted(paths):
+        if not os.path.isabs(path) or is_generic(path) or _explicit(path, data):
+            continue
+        directory = path if os.path.isdir(path) else os.path.dirname(path)
+        derived = _derive(_routing_cwd(directory, data))
+        if not derived or derived[0] == ENVIRONMENT or not Path(derived[1]).is_dir():
+            continue
+        name, root = derived
+        candidate = next((p for p in data["projects"] if p["name"] == name), None)
+        if candidate is None:
+            candidate = {"name": name, "roots": [], "status": "active"}
+            data["projects"].append(candidate)
+        if root not in candidate["roots"]:
+            candidate["roots"].append(root)
+        generated[name] = root
+    return generated
+
+
 def attribute(cwd, map_path, files=(), text="", create=True):
-    data = load_map(map_path)
-    canonical = _routing_cwd(cwd, data)
+    original = load_map(map_path)
+    canonical = _routing_cwd(cwd, original)
     cwd_project = resolve(canonical, map_path, create=create) if canonical else UNSORTED
-    # Refresh candidates after the fallback root was registered.
-    data = load_map(map_path)
-    known = {p["name"] for p in data["projects"]}
+    original = load_map(map_path)
+    data = _fold_candidates(original)
+    edited = set()
+    for path in files:
+        path = os.path.expanduser(str(path))
+        path = path if os.path.isabs(path) else os.path.join(cwd or "", path)
+        edited.add(_norm(path))
+    mentioned = _paths_in_text(text)
+    generated = _add_path_candidates(data, edited | mentioned)
+    known = {p["name"] for p in original["projects"]}
     pins = []
-    for pin in data.get("pins", []):
+    for pin in original.get("pins", []):
         if pin.get("project") not in known:
-            logging.getLogger(__name__).warning("Ignoring project pin with unknown project %r", pin.get("project"))
+            log(SimpleNamespace(log_path=map_path.parent / "logs" / "capture.jsonl"),
+                "invalid-project-pin", reason="unknown project")
             continue
         if pin.get("root") and cwd and _is_under(_norm(cwd), _norm(pin["root"])):
             pins.append(pin)
     pinned = max(pins, key=lambda p: len(_norm(p["root"])))['project'] if pins else None
-    edited = set()
-    for path in files:
-        path = os.path.expanduser(str(path))
-        path = path if os.path.isabs(path) else os.path.join(cwd, path)
-        edited.add(_norm(path))
-    mentioned = _paths_in_text(text)
     signals = {}
     for proj in data["projects"]:
         name = proj["name"]
@@ -224,7 +269,8 @@ def attribute(cwd, map_path, files=(), text="", create=True):
         count_files = min(10, sum(any(_is_under(p, r) for r in roots) for p in edited))
         count_paths = sum(any(_is_under(p, r) for r in roots) for p in mentioned)
         names = {name, *proj.get("aliases", []), *(Path(r).name for r in proj.get("roots", []))}
-        count_names = int(any(n and re.search(r"(?<![\w-])" + re.escape(n).replace(r"\ ", r"[\s_-]+").replace(r"\-", r"[\s_-]+") + r"(?![\w-])", text, re.I) for n in names))
+        names = {n.strip() for n in names if len(n.strip()) >= 4 and n.strip().lower() not in _STOP_NAMES}
+        count_names = int(any(re.search(r"(?<![\w-])" + re.escape(n).replace(r"\ ", r"[\s_-]+").replace(r"\-", r"[\s_-]+") + r"(?![\w-])", text, re.I) for n in names))
         cwd_signal = int(name == cwd_project)
         signals[name] = dict(files=count_files, paths=count_paths, names=count_names, cwd=cwd_signal,
                              score=3 * count_files + 2 * count_paths + count_names + cwd_signal)
@@ -238,6 +284,10 @@ def attribute(cwd, map_path, files=(), text="", create=True):
     if pinned:
         project, method = pinned, "pinned"
     related = sorted(name for name, signal in signals.items() if name != project and signal["score"] >= 3)
+    if create:
+        for name in [project, *related]:
+            if name in generated:
+                resolve(generated[name], map_path, create=True)
     return Attribution(project, method, signals, related)
 
 

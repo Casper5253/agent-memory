@@ -1,5 +1,6 @@
 """Synthetic crash recovery and direction A contract tests."""
 import json
+import io
 import sys
 import tempfile
 import unittest
@@ -70,16 +71,97 @@ class RecoveryTests(CaptureBase):
         self.assertEqual({'claude', 'codex'}, {r['agent'] for r in rows})
         self.assertEqual(2, len({r['note_path'] for r in rows}))
 
-    def test_malformed_tail_keeps_valid_prefix_and_cannot_be_consumed(self):
+    def test_malformed_complete_line_does_not_stall_later_content(self):
         sid, path = self.source()
         end = path.stat().st_size
         with path.open('ab') as f:
             f.write(b'{"type": invalid}\n')
-        self.assertEqual(end, adapters.read('claude', sid, str(path)).end)
-        with self.assertRaisesRegex(ValueError, 'source contains malformed'):
-            adapters.read('claude', sid, str(path), start=end)
-        with self.assertRaisesRegex(ValueError, 'source contains malformed'):
-            adapters.read('claude', sid, str(path), end=path.stat().st_size)
+        write_jsonl(path, claude_lines(sid, self.cwd, SWITCH), append=True)
+        t = adapters.read('claude', sid, str(path))
+        self.assertEqual(path.stat().st_size, t.end)
+        self.assertTrue(any('Postgres' in e.text for e in t.events))
+        self.assertEqual(1, len(t.warnings))
+        self.assertEqual(end, t.warnings[0]['start'])
+        self.finish(sid)
+        self.assertEqual(path.stat().st_size, self.man.get('claude', sid)['captured_until'])
+        self.assertIn('malformed_jsonl', self.man.get('claude', sid)['last_error'])
+        events = [json.loads(line) for line in self.cfg.log_path.read_text(encoding='utf-8').splitlines()]
+        self.assertTrue(any(e['event'] == 'capture-source-warning' for e in events))
+        self.assertEqual(1, len(self.man.query_captures()))
+
+    def test_masked_legacy_pending_identity_is_bound_to_unique_supported_manifest(self):
+        sid, _ = self.source()
+        self.finish(sid)
+        row = self.man.capture('claude', sid, 1)
+        path = self.cfg.vault / row['note_path']
+        text = path.read_text(encoding='utf-8').replace('session_id: "' + sid + '"', 'session_id: [REDACTED]')
+        path.write_text(text, encoding='utf-8', newline='\n')
+        for receipt in (self.cfg.meta / 'capture-receipts').glob('*.json'):
+            receipt.unlink()
+        self.man.set_consolidated('claude', sid, 1, 0)
+        result = pipeline.consolidate_pending(self.cfg, self.man, consolidator=fake_consolidate)
+        self.assertEqual({'consolidated': 1, 'still_pending': 0}, result)
+        self.assertEqual(1, self.man.capture('claude', sid, 1)['consolidated'])
+        self.assertEqual(text, path.read_text(encoding='utf-8'))
+
+    def test_masked_legacy_pending_rejects_wrong_identity_scope_and_unsupported_text(self):
+        for replacement in ('session_id: "different-session"', 'agent: codex',
+                            'project: "Other Tool"', 'part: 2', 'unsupported summary'):
+            with self.subTest(replacement=replacement):
+                sid, _ = self.source('synthetic-' + str(len(self.man.query_captures())))
+                self.finish(sid)
+                row = self.man.capture('claude', sid, 1)
+                path = self.cfg.vault / row['note_path']
+                text = path.read_text(encoding='utf-8').replace('session_id: "' + sid + '"', 'session_id: [REDACTED]')
+                key = replacement.split(':', 1)[0]
+                if key in {'session_id', 'agent', 'project', 'part'}:
+                    import re
+                    text = re.sub(r'(?m)^' + key + r': .*$', replacement, text)
+                else:
+                    text = text.replace('Fake summary of the session.', replacement)
+                path.write_text(text, encoding='utf-8', newline='\n')
+                for receipt in (self.cfg.meta / 'capture-receipts').glob('*.json'):
+                    receipt.unlink()
+                self.man.set_consolidated('claude', sid, 1, 0)
+                result = pipeline.consolidate_pending(self.cfg, self.man, consolidator=fake_consolidate)
+                self.assertEqual(0, result['consolidated'])
+                self.assertEqual(0, self.man.capture('claude', sid, 1)['consolidated'])
+
+    def test_masked_legacy_pending_rejects_duplicate_path_and_nonexact_marker(self):
+        sid, _ = self.source()
+        self.finish(sid)
+        row = self.man.capture('claude', sid, 1)
+        path = self.cfg.vault / row['note_path']
+        original = path.read_text(encoding='utf-8')
+        for receipt in (self.cfg.meta / 'capture-receipts').glob('*.json'):
+            receipt.unlink()
+        self.man.set_consolidated('claude', sid, 1, 0)
+        for marker in ('[redacted]', '[REDACTED] extra'):
+            path.write_text(original.replace('session_id: "' + sid + '"', 'session_id: ' + marker),
+                            encoding='utf-8', newline='\n')
+            self.assertEqual({'consolidated': 0, 'still_pending': 1},
+                             pipeline.consolidate_pending(self.cfg, self.man, consolidator=fake_consolidate))
+        path.write_text(original.replace('session_id: "' + sid + '"', 'session_id: [REDACTED]'),
+                        encoding='utf-8', newline='\n')
+        self.man.record_capture(agent='codex', session_id='duplicate-synthetic', part=1,
+                    note_path=row['note_path'], project=row['project'], title=row['title'], date=row['date'],
+                    start=row['start_offset'], end=row['end_offset'], summarizer=row['summarizer'],
+                    cost=0, sha=row['digest_sha'], consolidated=False, summary_json=row['summary_json'])
+        self.assertEqual({'consolidated': 0, 'still_pending': 2},
+                         pipeline.consolidate_pending(self.cfg, self.man, consolidator=fake_consolidate))
+
+    def test_legacy_masked_remembered_note_reconciles_without_rewriting(self):
+        from agentmem.remember import remember_item
+        result = remember_item(self.cfg, 'Use synthetic port 8443.', cwd=self.cwd, consolidator=fake_consolidate)
+        row = self.man.query_captures()[0]
+        path = Path(result['evidence'])
+        text = path.read_text(encoding='utf-8').replace('session_id: "' + row['session_id'] + '"',
+                                                      'session_id: [REDACTED]')
+        path.write_text(text, encoding='utf-8', newline='\n')
+        self.man.set_consolidated(row['agent'], row['session_id'], 1, 0)
+        self.assertEqual({'consolidated': 1, 'still_pending': 0},
+                         pipeline.consolidate_pending(self.cfg, self.man, consolidator=fake_consolidate))
+        self.assertEqual(text, path.read_text(encoding='utf-8'))
 
     def test_retry_uses_first_evidence_without_model_or_source(self):
         sid, path = self.source()
@@ -248,11 +330,66 @@ class DirectionATests(CaptureBase):
         self.data['pins'] = [{'root': self.cwd, 'project': 'Missing Synthetic Project'}]
         self.save_map()
         before = self.cfg.projects_map.read_bytes()
-        with self.assertLogs('agentmem.projects', level='WARNING') as logs:
+        stderr = io.StringIO()
+        with patch('sys.stderr', stderr):
             attribution = projects.attribute(self.cwd, self.cfg.projects_map, create=False)
         self.assertEqual(('Demo App', 'cwd-fallback'), (attribution.project, attribution.method))
-        self.assertIn('unknown project', logs.output[0])
+        self.assertEqual('', stderr.getvalue())
+        events = [json.loads(line) for line in self.cfg.log_path.read_text(encoding='utf-8').splitlines()]
+        self.assertTrue(any(e['event'] == 'invalid-project-pin' and e['reason'] == 'unknown project' for e in events))
         self.assertEqual(before, self.cfg.projects_map.read_bytes())
+
+    def test_worktree_fragment_is_folded_before_content_scoring(self):
+        parent = Path(self.cwd)
+        gitdir = parent / '.git/worktrees/synthetic'
+        gitdir.mkdir(parents=True)
+        (gitdir / 'commondir').write_text('../..', encoding='utf-8')
+        tree = self.root / 'work/demo-fragment'
+        tree.mkdir()
+        (tree / '.git').write_text('gitdir: ' + str(gitdir), encoding='utf-8')
+        self.data['projects'].append({'name': 'Demo Fragment', 'roots': [str(tree)]})
+        self.save_map()
+        before = self.cfg.projects_map.read_bytes()
+        attr = projects.attribute(str(tree), self.cfg.projects_map, files=[str(tree / 'one.py')], create=False)
+        self.assertEqual('Demo App', attr.project)
+        self.assertEqual(1, attr.signals['Demo App']['files'])
+        self.assertNotIn('Demo Fragment', attr.signals)
+        self.assertEqual(before, self.cfg.projects_map.read_bytes())
+
+    def test_generic_names_and_short_aliases_from_home_are_not_signals(self):
+        home = self.root / 'synthetic-home'
+        home.mkdir()
+        (home / '.git').write_text('gitdir: nonexistent', encoding='utf-8')
+        self.data['projects'] += [{'name': 'Notes', 'roots': [str(home / 'notes')]},
+                                  {'name': 'App', 'roots': [str(home / 'app')]}]
+        self.data['projects'][1]['aliases'] += ['ui', 'src']
+        self.save_map()
+        with patch.object(projects, 'HOME', home):
+            for text in ('notes', 'app', 'ui', 'src', 'notes app ui src'):
+                attr = projects.attribute(str(home), self.cfg.projects_map, text=text, create=False)
+                self.assertEqual((projects.ENVIRONMENT, 'cwd-fallback'), (attr.project, attr.method))
+                self.assertTrue(all(v['names'] == 0 for v in attr.signals.values()))
+
+    def test_unmapped_project_is_generated_from_concrete_edited_paths(self):
+        home = self.root / 'synthetic-home'
+        projects_root = home / 'Documents/Projects'
+        fresh = projects_root / 'new-engine'
+        (fresh / '.git').mkdir(parents=True)
+        scratch = home / 'Documents/Codex/task'
+        scratch.mkdir(parents=True)
+        with patch.object(projects, 'HOME', home), patch.object(projects, 'PROJECTS_ROOT', projects_root), \
+                patch.object(projects, 'CODEX_SCRATCH', home / 'Documents/Codex'):
+            attr = projects.attribute(str(scratch), self.cfg.projects_map,
+                        files=[str(fresh / 'one.py'), str(fresh / 'two.py')])
+        self.assertEqual(('New Engine', 'content'), (attr.project, attr.method))
+        self.assertEqual(2, attr.signals['New Engine']['files'])
+        self.assertTrue(any(p['name'] == 'New Engine' for p in projects.load_map(self.cfg.projects_map)['projects']))
+
+    def test_empty_or_missing_cwd_never_reads_worker_head(self):
+        with patch.object(projects.subprocess, 'run') as run:
+            for cwd in ('', None, str(self.root / 'missing-directory')):
+                self.assertIsNone(projects.repo_head(cwd))
+        run.assert_not_called()
 
     def test_capture_records_related_link_and_attribution_counts(self):
         sid, path = self.source()

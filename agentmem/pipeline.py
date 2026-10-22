@@ -152,19 +152,24 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                     if prefix.prefix_sha != previous["prefix_sha"]:
                         raise ValueError("source_change: earlier OpenCode messages mutated")
             t = adapters.read(agent, sid, source, start=row["captured_until"])
+            source_error = _source_error(t.warnings)
+            for warning in t.warnings:
+                log(cfg, "capture-source-warning", agent=agent, session=sid, **warning)
             if t.session_id != sid:
                 raise ValueError("capture_identity_conflict: transcript session differs")
             cwd = t.cwd or row["cwd"] or ""
             done_status = "captured" if row["parts"] else "skipped"
             if t.end <= row["captured_until"] or not t.events:
-                man.mark(agent, sid, status=done_status, end_seen=0, skip_reason=row["skip_reason"] or "no new content")
+                man.mark(agent, sid, status=done_status, end_seen=0, skip_reason=row["skip_reason"] or "no new content",
+                         last_error=source_error)
                 return "no-new-content"
             if _excluded(cfg, cwd):
                 man.mark(agent, sid, status="skipped", end_seen=0, skip_reason="excluded directory")
                 return "excluded"
             d = extract.build(t, cfg.min_user_prompts, cfg.min_assistant_chars, cfg.digest_char_cap)
             if not d.substantial:
-                man.mark(agent, sid, status=done_status, end_seen=0, skip_reason=d.gate_reason, cwd=cwd)
+                man.mark(agent, sid, status=done_status, end_seen=0, skip_reason=d.gate_reason, cwd=cwd,
+                         last_error=source_error)
                 return "trivial"
             edited = [p for ev in t.events if ev.kind == "edit" for p in ev.paths]
             attribution = projects.attribute(cwd, cfg.projects_map, files=edited, text="\n".join(d.prompts))
@@ -195,7 +200,8 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
             receipt = dict(version=1, agent=agent, session_id=sid, part=part, start=t.start, end=t.end,
                            project=project, summary=summary, digest_sha=d.sha, note_path=path.relative_to(cfg.vault).as_posix(),
                            text=text, content_sha=_hash(text), when=when.isoformat(), summarizer=kind, cost=cost,
-                           prefix_sha=t.prefix_sha, evidence="transcript", related_projects=attribution.related_projects)
+                           prefix_sha=t.prefix_sha, evidence="transcript", related_projects=attribution.related_projects,
+                           source_warnings=t.warnings)
         receipt["receipt_sha"] = _receipt_hash(receipt)
         create_once(_receipt_path(cfg, agent, sid, part), json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
         receipt = _load_receipt(cfg, agent, sid, part, row["captured_until"])
@@ -220,10 +226,15 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
     man.record_capture(agent=agent, session_id=sid, part=part, note_path=receipt["note_path"], project=project,
                        title=summary.get("title", ""), date=f"{when:%Y-%m-%d}", start=receipt["start"], end=receipt["end"],
                        summarizer=kind, cost=cost, sha=receipt["digest_sha"], consolidated=consolidated,
-                       summary_json=json.dumps(summary, ensure_ascii=False))
+                       summary_json=json.dumps(summary, ensure_ascii=False),
+                       error=_source_error(receipt.get("source_warnings", [])))
     log(cfg, "captured", agent=agent, session=sid, part=part, project=project, note=link, summarizer=kind,
         consolidated=consolidated, cost_usd=round(cost, 5))
     return "captured"
+
+
+def _source_error(warnings):
+    return json.dumps({"source_warnings": warnings}, separators=(",", ":")) if warnings else None
 
 
 def _redact_values(value):
@@ -272,6 +283,27 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         return 0.0, False
 
 
+def _validate_pending_identity(cfg, man, row, text, summary):
+    memory = row["summarizer"] == "remember"
+    fields = notes.session_metadata(text, note_type="memory" if memory else "session")
+    part = fields.get("part", "1" if memory else None)
+    if (fields.get("agent"), part, fields.get("project")) != (row["agent"], str(row["part"]), row["project"]):
+        raise ValueError("capture_identity_conflict: pending note identity or project differs")
+    sid = fields.get("session_id")
+    if sid == row["session_id"]:
+        return
+    if sid != "[REDACTED]":
+        raise ValueError("capture_identity_conflict: pending session differs")
+    path = _validated_path(cfg, row["note_path"])
+    matches = sum(_validated_path(cfg, r[0]) == path for r in man.db.execute("SELECT note_path FROM captures"))
+    statement = summary.get("summary", "")
+    body = text.split("\n---\n", 1)[1]
+    if matches != 1 or not isinstance(statement, str) or not statement.strip() or " ".join(statement.split()) not in " ".join(body.split()):
+        raise ValueError("capture_identity_conflict: masked pending identity lacks unique supported manifest")
+    if not memory and notes.source_range(text) != (row["start_offset"], row["end_offset"]):
+        raise ValueError("capture_identity_conflict: masked pending source range differs")
+
+
 def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidator=None, limit: int = 20) -> dict:
     """Retry reconciliation for captures that fell back (LLM down, or deterministic summary)."""
     summarizer = summarizer or llm.summarize
@@ -282,8 +314,7 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
         try:
             path = _validated_path(cfg, row["note_path"])
             persisted = path.read_bytes()
-            if kind != "remember":
-                _validate_note(persisted.decode("utf-8"), row["agent"], row["session_id"], row["part"])
+            _validate_pending_identity(cfg, man, row, persisted.decode("utf-8"), summary)
             receipt = _load_receipt(cfg, row["agent"], row["session_id"], row["part"], row["start_offset"] or 0)
             if receipt and (hashlib.sha256(persisted).hexdigest() != receipt["content_sha"] or summary != receipt["summary"]):
                 raise ValueError("capture_identity_conflict: pending evidence mismatch")

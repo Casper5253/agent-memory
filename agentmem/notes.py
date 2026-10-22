@@ -34,7 +34,7 @@ def project_link(project: str) -> str:
     return f"[[1-Projects/{project}/{project}|{project}]]"
 
 
-def session_metadata(text):
+def session_metadata(text, note_type="session"):
     if not text.startswith("---\n") or "\n---\n" not in text[4:]:
         raise ValueError("capture_identity_conflict: malformed session frontmatter")
     header = text[4:].split("\n---\n", 1)[0]
@@ -49,7 +49,7 @@ def session_metadata(text):
             fields[key] = str(json.loads(value)) if value.startswith('"') else value
         except ValueError as error:
             raise ValueError("capture_identity_conflict: invalid frontmatter string") from error
-    if fields.get("type") != "session" or fields.get("immutable") != "true":
+    if fields.get("type") != note_type or fields.get("immutable") != "true":
         raise ValueError("capture_identity_conflict: not an immutable session note")
     return fields
 
