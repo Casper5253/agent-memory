@@ -1,8 +1,8 @@
-"""Map a working directory to a project, deterministically. Never derived from prompt text.
+"""Attribute each capture part using deterministic content signals and user-authored pins.
 
 _meta/projects.json: {"projects": [{"name": "...", "roots": ["C:\\..."], "status": "active|archived"}]}
-Longest matching root wins. Unknown directories under ~/Documents/Projects get a project named after the
-nearest git root (or first folder level); anything else is "Unsorted" (captured, never consolidated).
+Mapped roots define candidates. The cwd resolver remains the fallback and SessionStart source.
+Linked worktrees share their parent repository's project.
 """
 import json
 import logging

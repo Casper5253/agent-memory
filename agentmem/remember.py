@@ -20,7 +20,7 @@ from .config import Config
 from .fsutil import atomic_write, create_once, file_lock
 from .logutil import log
 from .manifest import Manifest
-from .redact import redact
+from .redact import redact, redact_session_note
 
 KINDS = ("fact", "decision", "preference", "next")
 REMEMBERED = ("3-Resources", "Remembered.md")
@@ -39,18 +39,22 @@ def _summary(text: str, kind: str, rationale: str) -> dict:
     return s
 
 
-def _evidence_note(cfg: Config, *, when, agent, project, kind, text, rationale, item_id, plink) -> Path:
+def _evidence_note(cfg: Config, *, when, agent, project, kind, text, rationale, item_id, plink, attribution) -> Path:
     path = cfg.sessions_dir / f"{when:%Y}" / f"{when:%m}" / f"{when:%Y-%m-%d-%H%M}-{agent}-remember-{notes.slug(text, 6)}-{item_id}.md"
     body = "\n".join([
         "---", "type: memory", f"agent: {agent}", f'session_id: "remember-{item_id}"', f'project: "{project}"',
-        f"date: {when:%Y-%m-%d}", f"kind: {kind}", "immutable: true", "tags:", "  - memory", f"  - agent/{agent}",
+        f"date: {when:%Y-%m-%d}", f"kind: {kind}", "immutable: true",
+        f"attribution_method: {attribution.method}",
+        "attribution_signals: " + json.dumps(attribution.signals, ensure_ascii=False, sort_keys=True),
+        "related_projects: " + json.dumps(attribution.related_projects, ensure_ascii=False),
+        "tags:", "  - memory", f"  - agent/{agent}",
         f"  - project/{notes.slug(project, 8)}", "---", "",
         f"# Remembered ({kind}): {text[:80]}", "",
         f"> Explicitly remembered on {when:%Y-%m-%d %H:%M} via `/remember`. Current state lives in {plink}.", "",
         "## Statement", "", text, "",
         *(["## Rationale", "", rationale, ""] if rationale else []),
     ])
-    create_once(path, redact(body))
+    create_once(path, redact_session_note(body))
     return path
 
 
@@ -74,13 +78,18 @@ def remember_item(cfg: Config, text: str, *, kind: str = "fact", project: str = 
         raise ValueError("nothing to remember")
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}")
-    project = project or projects.resolve_session(cwd or os.getcwd(), cfg.projects_map, text=text)
+    attribution = projects.attribute(cwd or os.getcwd(), cfg.projects_map, text=text)
+    if project:
+        attribution.project, attribution.method = project, "pinned"
+        attribution.related_projects = sorted(name for name, signal in attribution.signals.items()
+                                              if name != project and signal["score"] >= 3)
+    project = attribution.project
     when = datetime.now().astimezone()
     item_id = uuid.uuid4().hex[:8]
     plink = (f"[[{projects.note_path(cfg.vault, project).relative_to(cfg.vault).with_suffix('').as_posix()}|{project}]]"
              if project != projects.UNSORTED else f"[[{'/'.join(REMEMBERED)[:-3]}|Remembered]]")
     note = _evidence_note(cfg, when=when, agent=agent, project=project, kind=kind, text=text, rationale=rationale,
-                          item_id=item_id, plink=plink)
+                          item_id=item_id, plink=plink, attribution=attribution)
     link = note.relative_to(cfg.vault).with_suffix("").as_posix()
     summary = _summary(text, kind, rationale)
     consolidated, cost, target = False, 0.0, None

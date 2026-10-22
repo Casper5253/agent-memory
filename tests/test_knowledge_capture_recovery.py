@@ -259,6 +259,11 @@ class DirectionATests(CaptureBase):
         result = remember_item(self.cfg, 'orbital uses port 8443 in ' + str(self.other / 'config.py'),
                                cwd=self.cwd, consolidator=fake_consolidate)
         self.assertEqual('Other Tool', result['project'])
+        text = Path(result['evidence']).read_text(encoding='utf-8')
+        self.assertIn('attribution_method: content', text)
+        self.assertIn('attribution_signals:', text)
+        self.assertIn('related_projects:', text)
+        self.assertRegex(text, r'session_id: "remember-[0-9a-f]+"')
 
     def test_parent_repo_routes_worktree_without_creating_project(self):
         import subprocess
