@@ -14,7 +14,7 @@ from agentmem.redact import redact
 from fixtures import make_vault, claude_lines, opencode_export, SUBSTANTIAL, SWITCH, write_jsonl, fake_summarize, fake_consolidate
 
 
-class RecoveryTests(unittest.TestCase):
+class CaptureBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / '.audit')
         self.addCleanup(self.tmp.cleanup)
@@ -23,6 +23,7 @@ class RecoveryTests(unittest.TestCase):
         self.man = Manifest(self.cfg.manifest_path)
         self.addCleanup(self.man.close)
         self.cwd = str(self.root / 'work' / 'demo-app')
+        (self.root / 'work' / '.git').write_text('gitdir: nonexistent', encoding='utf-8')
 
     def source(self, sid='synthetic-a-12345678', agent='claude', turns=SUBSTANTIAL):
         path = self.root / (sid + '.jsonl')
@@ -38,6 +39,9 @@ class RecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'crash after note'):
                 self.finish(sid)
 
+
+
+class RecoveryTests(CaptureBase):
     def test_identity_survives_but_transcript_cookies_are_masked(self):
         sid, _ = self.source()
         self.finish(sid)
@@ -66,6 +70,8 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(before, {p: p.read_bytes() for p in self.cfg.sessions_dir.rglob('*.md')})
         row = self.man.capture('claude', sid, 1)
         self.assertEqual('Fake summary of the session.', json.loads(row['summary_json'])['summary'])
+
+
         receipts = list((self.cfg.meta / 'capture-receipts').glob('*.json'))
         self.assertEqual(1, len(receipts))
         self.assertEqual(sid, json.loads(receipts[0].read_text(encoding='utf-8'))['session_id'])
@@ -180,6 +186,130 @@ class RecoveryTests(unittest.TestCase):
         row = self.man.capture('claude', sid, 1)
         self.assertEqual(before, (self.cfg.vault / row['note_path']).read_bytes())
         self.assertEqual('Fake summary of the session.', json.loads(row['summary_json'])['summary'])
+
+
+class DirectionATests(CaptureBase):
+    def setUp(self):
+        super().setUp()
+        self.other = self.root / 'work' / 'other-tool'
+        self.other.mkdir()
+        self.data = projects.load_map(self.cfg.projects_map)
+        self.data['projects'].append({'name': 'Other Tool', 'aliases': ['orbital'], 'roots': [str(self.other)]})
+        self.save_map()
+
+    def save_map(self):
+        self.cfg.projects_map.write_text(json.dumps(self.data), encoding='utf-8')
+
+    def test_content_routing_deduplicates_files_and_records_related(self):
+        attribution = projects.attribute(self.cwd, self.cfg.projects_map,
+                  files=[str(self.other / 'one.py')] * 30 + [str(self.other / 'two.py'), self.cwd + '/x.py'],
+                  text='Work in ' + str(self.other / 'one.py'))
+        self.assertEqual('Other Tool', attribution.project)
+        self.assertEqual('content', attribution.method)
+        self.assertEqual(2, attribution.signals['Other Tool']['files'])
+        self.assertEqual(9, attribution.signals['Other Tool']['score'])
+        self.assertEqual(['Demo App'], attribution.related_projects)
+
+    def test_near_tie_and_no_content_keep_cwd(self):
+        for files in ([], [self.cwd + '/a.py', str(self.other / 'b.py')]):
+            attribution = projects.attribute(self.cwd, self.cfg.projects_map, files=files)
+            self.assertEqual(('Demo App', 'cwd-fallback'), (attribution.project, attribution.method))
+
+    def test_explicit_pin_wins(self):
+        self.data['pins'] = [{'root': self.cwd, 'project': 'Demo App'}]
+        self.save_map()
+        attribution = projects.attribute(self.cwd, self.cfg.projects_map,
+                  files=[str(self.other / 'one.py')], text='orbital ' + str(self.other / 'two.py'))
+        self.assertEqual(('Demo App', 'pinned'), (attribution.project, attribution.method))
+
+    def test_unknown_pin_warns_and_does_not_change_the_map(self):
+        self.data['pins'] = [{'root': self.cwd, 'project': 'Missing Synthetic Project'}]
+        self.save_map()
+        before = self.cfg.projects_map.read_bytes()
+        with self.assertLogs('agentmem.projects', level='WARNING') as logs:
+            attribution = projects.attribute(self.cwd, self.cfg.projects_map, create=False)
+        self.assertEqual(('Demo App', 'cwd-fallback'), (attribution.project, attribution.method))
+        self.assertIn('unknown project', logs.output[0])
+        self.assertEqual(before, self.cfg.projects_map.read_bytes())
+
+    def test_capture_records_related_link_and_attribution_counts(self):
+        sid, path = self.source()
+        records = claude_lines(sid, self.cwd, SUBSTANTIAL)
+        records[0]['message']['content'] += ' Review Other Tool.'
+        for record in records:
+            blocks = (record.get('message') or {}).get('content')
+            for block in blocks if isinstance(blocks, list) else []:
+                if block.get('name') == 'Edit':
+                    block['input']['file_path'] = str(self.other / Path(block['input']['file_path']).name)
+        write_jsonl(path, records)
+        # One edit in the cwd project makes it a related project, while the other wins.
+        records[-2]['message']['content'].append({'type': 'tool_use', 'name': 'Edit', 'input': {'file_path': self.cwd + '/one.py'}})
+        write_jsonl(path, records)
+        self.finish(sid)
+        row = self.man.capture('claude', sid, 1)
+        self.assertEqual('Other Tool', row['project'])
+        text = (self.cfg.vault / row['note_path']).read_text(encoding='utf-8')
+        self.assertIn('attribution_method: content', text)
+        self.assertIn('related_projects: ["Demo App"]', text)
+        related = projects.note_path(self.cfg.vault, 'Demo App').read_text(encoding='utf-8')
+        self.assertIn('(related)', notes.get_block(related, notes.SESS_BEGIN, notes.SESS_END))
+
+    def test_remembered_text_uses_same_content_rule(self):
+        from agentmem.remember import remember_item
+        result = remember_item(self.cfg, 'orbital uses port 8443 in ' + str(self.other / 'config.py'),
+                               cwd=self.cwd, consolidator=fake_consolidate)
+        self.assertEqual('Other Tool', result['project'])
+
+    def test_parent_repo_routes_worktree_without_creating_project(self):
+        import subprocess
+        subprocess.run(['git', 'init', '-q', self.cwd], check=True, capture_output=True)
+        gitdir = Path(self.cwd) / '.git' / 'worktrees' / 'synthetic'
+        gitdir.mkdir(parents=True)
+        (gitdir / 'commondir').write_text('../..', encoding='utf-8')
+        tree = self.root / 'work' / 'synthetic-tree'
+        tree.mkdir()
+        (tree / '.git').write_text('gitdir: ' + str(gitdir), encoding='utf-8')
+        before = self.cfg.projects_map.read_bytes()
+        self.assertEqual('Demo App', projects.resolve_session(str(tree), self.cfg.projects_map))
+        self.assertEqual(before, self.cfg.projects_map.read_bytes())
+
+    def test_head_stamped_and_null_outside_repository(self):
+        import subprocess
+        sid, _ = self.source()
+        self.finish(sid)
+        text = (self.cfg.vault / self.man.capture('claude', sid, 1)['note_path']).read_text(encoding='utf-8')
+        self.assertIn('repo_head: null', text)
+        subprocess.run(['git', 'init', '-q', self.cwd], check=True, capture_output=True)
+        subprocess.run(['git', '-C', self.cwd, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid',
+                        'commit', '--allow-empty', '-q', '-m', 'synthetic'], check=True, capture_output=True)
+        head = subprocess.run(['git', '-C', self.cwd, 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True).stdout.strip()
+        sid, _ = self.source('synthetic-head')
+        self.finish(sid)
+        text = (self.cfg.vault / self.man.capture('claude', sid, 1)['note_path']).read_text(encoding='utf-8')
+        self.assertIn('repo_head: "' + head + '"', text)
+        self.assertIn('attribution_method:', text)
+
+    def test_consolidation_prompt_requires_recorded_commit(self):
+        self.assertIn('repo_head', llm.CONSOLIDATE_SYSTEM)
+        self.assertIn('repository-state', llm.CONSOLIDATE_SYSTEM)
+
+    def test_search_labels_located_pending_state_and_sessions(self):
+        path = self.cfg.vault / '1-Projects/Demo App/Demo App.md'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = notes.new_project_note('Demo App', '2026-10-01')
+        text = notes.set_block(text, notes.STATE_BEGIN, notes.STATE_END, 'state-only marker')
+        text = notes.set_block(text, notes.PENDING_BEGIN, notes.PENDING_END, 'unreconciledneedle marker')
+        text = notes.set_block(text, notes.SESS_BEGIN, notes.SESS_END, 'recent-only marker')
+        path.write_text(text, encoding='utf-8')
+        hits = [{'file': str(path), 'snippet': snippet} for snippet in
+                ['state-only marker', 'unreconciledneedle marker', 'recent-only marker', 'unlocatable excerpt']]
+        import subprocess
+        with patch.object(search, '_qmd', return_value=subprocess.CompletedProcess([], 0, json.dumps(hits).encode(), b'')):
+            got = search.search(self.cfg, 'marker')
+        self.assertEqual(['CURRENT', 'PENDING', 'RECENT_SESSION', 'CURRENT'], [h['label'] for h in got])
+        self.assertEqual({'label', 'path', 'title', 'score', 'line', 'docid', 'snippet'}, set(got[0]))
+        fallback = search.fallback_search(self.cfg, 'unreconciledneedle', 8)
+        self.assertEqual('PENDING', fallback[0]['label'])
 
 
 if __name__ == '__main__':

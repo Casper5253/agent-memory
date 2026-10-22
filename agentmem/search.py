@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from .config import Config
+from . import notes
 
 COLLECTIONS = {
     "vault-projects": ("1-Projects", "CURRENT", "Current, reconciled state of active projects. Authoritative for 'what is true now'."),
@@ -83,6 +84,36 @@ def _to_disk(cfg: Config, file_field: str) -> str:
     return file_field
 
 
+def _located_label(path, label, snippet, line=None):
+    if label != "CURRENT":
+        return label
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+        normalized = " ".join(text.split())
+        excerpt = " ".join(snippet.split())
+        span_length = 0
+        if isinstance(line, int) and line > 0:
+            lines = text.splitlines()
+            if line <= len(lines) and lines[line - 1].strip() and " ".join(lines[line - 1].split()) in excerpt:
+                position = len(" ".join("\n".join(lines[:line - 1]).split())) + 1
+            else:
+                position = -1
+        else:
+            position = normalized.find(excerpt) if excerpt and normalized.count(excerpt) == 1 else -1
+            span_length = len(excerpt)
+        if position < 0:
+            return label
+        for begin, end, located in ((notes.STATE_BEGIN, notes.STATE_END, "CURRENT"),
+                                   (notes.PENDING_BEGIN, notes.PENDING_END, "PENDING"),
+                                   (notes.SESS_BEGIN, notes.SESS_END, "RECENT_SESSION")):
+            start, stop = normalized.find(begin), normalized.find(end)
+            if 0 <= start < position < stop and position + span_length <= stop:
+                return located
+        return "PROJECT"
+    except (OSError, ValueError):
+        return label
+
+
 def search(cfg: Config, terms: str, n: int = 8, layers=None, semantic: bool = False) -> list:
     collections = [c for c, (_, label, _) in COLLECTIONS.items() if not layers or label in layers]
     args = ["vsearch" if semantic else "search", terms, "--format", "json", "-n", str(n)]
@@ -99,11 +130,13 @@ def search(cfg: Config, terms: str, n: int = 8, layers=None, semantic: bool = Fa
     hits = []
     for it in items:
         path = _to_disk(cfg, it.get("file") or it.get("path") or "")
+        snippet = re.sub(r"^@@[^@]*@@\s*(\([^)]*\))?\s*", "", " ".join(str(it.get("snippet") or "").split()))[:400]
+        label = _label(os.path.relpath(path, cfg.vault) if os.path.isabs(path) else path)
         hits.append({
-            "label": _label(os.path.relpath(path, cfg.vault) if os.path.isabs(path) else path),
+            "label": _located_label(path, label, snippet, it.get("line")),
             "path": path, "title": it.get("title", ""), "score": it.get("score"),
             "line": it.get("line"), "docid": it.get("docid", ""),
-            "snippet": re.sub(r"^@@[^@]*@@\s*(\([^)]*\))?\s*", "", " ".join(str(it.get("snippet") or "").split()))[:400],
+            "snippet": snippet,
         })
     return hits
 
@@ -123,7 +156,9 @@ def fallback_search(cfg: Config, terms: str, n: int, layers=None, reason: str = 
             score = sum(low.count(w) for w in words)
             if score and all(w in low for w in words[:3]):
                 i = min((low.find(w) for w in words if w in low), default=0)
-                scored.append({"label": label, "path": str(p), "title": p.stem, "score": score, "line": low[:i].count("\n") + 1,
+                located_line = low[:i].count("\n") + 1
+                snippet = " ".join(text[max(0, i - 120): i + 280].split())
+                scored.append({"label": _located_label(p, label, snippet, located_line), "path": str(p), "title": p.stem, "score": score, "line": located_line,
                                "docid": "", "snippet": " ".join(text[max(0, i - 120): i + 280].split())})
     scored.sort(key=lambda h: -h["score"])
     for h in scored:

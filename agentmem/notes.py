@@ -82,13 +82,19 @@ def summary_from_session(text):
 
 
 def render_session(*, agent, session_id, project, part, when, started, ended, source, start, end, summarizer,
-                   summary, files, commands, gate_reason, prev_link=None, project_note=None) -> str:
+                   summary, files, commands, gate_reason, prev_link=None, project_note=None,
+                   repo_head=None, attribution=None) -> str:
     tags = ["session", f"agent/{agent}", f"project/{slug(project, 8)}"]
     fm = [
         "---", "type: session", f"agent: {agent}", f"session_id: {_yaml_str(session_id)}",
         f"project: {_yaml_str(project)}", f"date: {when:%Y-%m-%d}", f"started: {_yaml_str(started)}",
         f"ended: {_yaml_str(ended)}", f"part: {part}", f"summarizer: {summarizer}",
-        f"files_modified: {len(files)}", "immutable: true", "tags:", *[f"  - {t}" for t in tags], "---", "",
+        f"files_modified: {len(files)}", "immutable: true",
+        "repo_head: " + (_yaml_str(repo_head) if repo_head else "null"),
+        *([f"attribution_method: {attribution.method}",
+           "attribution_signals: " + json.dumps(attribution.signals, ensure_ascii=False, sort_keys=True),
+           "related_projects: " + json.dumps(attribution.related_projects, ensure_ascii=False)] if attribution else []),
+        "tags:", *[f"  - {t}" for t in tags], "---", "",
     ]
 
     def bullets(items, empty="- none recorded"):

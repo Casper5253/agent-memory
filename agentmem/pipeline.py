@@ -101,6 +101,8 @@ def _legacy_evidence(cfg, agent, sid, part):
     for path in cfg.sessions_dir.glob(f"*/*/*-{suffix}{tail}.md"):
         text = path.read_text(encoding="utf-8")
         fields = notes.session_metadata(text)
+        if (fields.get("agent"), fields.get("part"), fields.get("session_id")) == (agent, str(part), "[REDACTED]"):
+            raise ValueError("capture_identity_conflict: legacy session identity is masked")
         if (fields.get("agent"), fields.get("session_id"), fields.get("part")) == (agent, sid, str(part)):
             matches.append((path, text, fields))
     if len(matches) > 1:
@@ -165,7 +167,9 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                 man.mark(agent, sid, status=done_status, end_seen=0, skip_reason=d.gate_reason, cwd=cwd)
                 return "trivial"
             edited = [p for ev in t.events if ev.kind == "edit" for p in ev.paths]
-            project = projects.resolve_session(cwd, cfg.projects_map, files=edited, text="\n".join(d.prompts))
+            attribution = projects.attribute(cwd, cfg.projects_map, files=edited, text="\n".join(d.prompts))
+            project = attribution.project
+            repo_head = projects.repo_head(cwd)
             when = _parse_time(t.started)
             cost, kind, summary = 0.0, "deterministic", None
             if cfg.summarizer == "claude-haiku":
@@ -178,18 +182,20 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
             if summary is None:
                 summary = extract.fallback_summary(t, d)
             summary = _redact_values(summary)
+            summary["repo_head"] = repo_head
             previous = man.capture(agent, sid, part - 1) if part > 1 else None
             path = notes.session_note_path(cfg.sessions_dir, when, agent, summary.get("title") or t.title or "session", sid, part)
             text = notes.render_session(agent=agent, session_id=sid, project=project, part=part, when=when,
                         started=t.started, ended=t.ended, source=t.source, start=t.start, end=t.end, summarizer=kind,
                         summary=summary, files=d.files, commands=d.commands, gate_reason=d.gate_reason,
                         prev_link=Path(previous["note_path"]).with_suffix("").as_posix() if previous else None,
-                        project_note=_link(cfg, projects.note_path(cfg.vault, project)))
+                        project_note=_link(cfg, projects.note_path(cfg.vault, project)), repo_head=repo_head,
+                        attribution=attribution)
             text = redact_session_note(text)
             receipt = dict(version=1, agent=agent, session_id=sid, part=part, start=t.start, end=t.end,
                            project=project, summary=summary, digest_sha=d.sha, note_path=path.relative_to(cfg.vault).as_posix(),
                            text=text, content_sha=_hash(text), when=when.isoformat(), summarizer=kind, cost=cost,
-                           prefix_sha=t.prefix_sha, evidence="transcript", related_projects=[])
+                           prefix_sha=t.prefix_sha, evidence="transcript", related_projects=attribution.related_projects)
         receipt["receipt_sha"] = _receipt_hash(receipt)
         create_once(_receipt_path(cfg, agent, sid, part), json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
         receipt = _load_receipt(cfg, agent, sid, part, row["captured_until"])
@@ -206,6 +212,11 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
     if project != projects.UNSORTED:
         extra_cost, consolidated = consolidate_into_project(cfg, project, summary, link, when, kind, consolidator)
         cost += extra_cost
+    for related in receipt["related_projects"]:
+        note_path = projects.note_path(cfg.vault, related)
+        with file_lock(cfg.locks_dir / f"project-{notes.slug(related, 12)}.lock", timeout=cfg.lock_timeout_s):
+            notes.update_project_note(note_path, related, f"{when:%Y-%m-%d}", session_link=link,
+                     session_line=f"- {when:%Y-%m-%d} [[{link}|{summary.get('title') or 'session'}]] (related)")
     man.record_capture(agent=agent, session_id=sid, part=part, note_path=receipt["note_path"], project=project,
                        title=summary.get("title", ""), date=f"{when:%Y-%m-%d}", start=receipt["start"], end=receipt["end"],
                        summarizer=kind, cost=cost, sha=receipt["digest_sha"], consolidated=consolidated,
@@ -243,6 +254,10 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         if not note_path.exists():
             notes.update_project_note(note_path, project, date)
         text = notes.ensure_blocks(note_path.read_text(encoding="utf-8"))
+        session_marker = f"[[{link}|"
+        if (session_marker in notes.get_block(text, notes.SESS_BEGIN, notes.SESS_END)
+                and f"[[{link}]]" not in notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)):
+            return 0.0, True
         if summary_kind != "deterministic" and cfg.summarizer != "none":
             try:
                 state, cost = consolidator(notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END), summary,
@@ -264,6 +279,18 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
     for row in man.unconsolidated()[:limit]:
         summary = json.loads(row["summary_json"] or "{}")
         kind = row["summarizer"]
+        try:
+            path = _validated_path(cfg, row["note_path"])
+            persisted = path.read_bytes()
+            if kind != "remember":
+                _validate_note(persisted.decode("utf-8"), row["agent"], row["session_id"], row["part"])
+            receipt = _load_receipt(cfg, row["agent"], row["session_id"], row["part"], row["start_offset"] or 0)
+            if receipt and (hashlib.sha256(persisted).hexdigest() != receipt["content_sha"] or summary != receipt["summary"]):
+                raise ValueError("capture_identity_conflict: pending evidence mismatch")
+        except (OSError, ValueError) as error:
+            log(cfg, "pending-retry-failed", session=row["session_id"], error=str(error))
+            failed += 1
+            continue
         # Reconciliation uses the summary that produced the immutable note.
         if kind == "deterministic" and cfg.summarizer != "none":
             kind = "persisted"

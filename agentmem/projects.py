@@ -5,8 +5,11 @@ Longest matching root wins. Unknown directories under ~/Documents/Projects get a
 nearest git root (or first folder level); anything else is "Unsorted" (captured, never consolidated).
 """
 import json
+import logging
 import os
 import re
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from .fsutil import atomic_write, file_lock
@@ -20,6 +23,56 @@ UNSORTED = "Unsorted"
 def _norm(p: str) -> str:
     p = os.path.normpath(os.path.expanduser(str(p)))
     return p.lower() if os.name == "nt" else p
+
+
+def repository_root(cwd):
+    """Resolve linked worktrees through Git's commondir, without changing their map."""
+    if not cwd:
+        return ""
+    for cur in (Path(cwd), *Path(cwd).parents):
+        marker = cur / ".git"
+        if marker.is_dir():
+            return str(cur)
+        if marker.is_file():
+            try:
+                value = marker.read_text(encoding="utf-8").strip()
+                if not value.startswith("gitdir: "):
+                    return ""
+                gitdir = (cur / value[8:]).resolve()
+                common = gitdir / "commondir"
+                if common.is_file():
+                    shared = (gitdir / common.read_text(encoding="utf-8").strip()).resolve()
+                    return str(shared.parent) if shared.name == ".git" else ""
+                return str(cur) if gitdir.is_dir() else ""
+            except (OSError, ValueError):
+                return ""
+    return ""
+
+
+def repo_head(cwd):
+    try:
+        result = subprocess.run(["git", "-C", str(cwd), "rev-parse", "HEAD"], capture_output=True, timeout=0.5)
+        head = result.stdout.decode("ascii").strip()
+        return head if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", head) else None
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return None
+
+
+def _routing_cwd(cwd, data):
+    if cwd:
+        for cur in (Path(cwd), *Path(cwd).parents):
+            marker = cur / ".git"
+            if marker.is_dir():
+                break
+            if marker.is_file():
+                # A deliberately mapped nested project owns its root even when the
+                # containing directory happens to be a linked worktree.
+                if any(_is_under(_norm(cwd), _norm(root)) and _norm(root) != _norm(cur)
+                       and _is_under(_norm(root), _norm(cur))
+                       for proj in data["projects"] for root in proj.get("roots", [])):
+                    return cwd
+                return repository_root(cwd) or cwd
+    return cwd
 
 
 def _is_under(child: str, root: str) -> bool:
@@ -129,26 +182,67 @@ def infer_from_text(text: str, data: dict) -> "str | None":
     return ranked[0][0] if len(ranked) == 1 or ranked[0][1] > ranked[1][1] else None
 
 
-def resolve_session(cwd: str, map_path: Path, files=(), text: str = "", create: bool = True) -> str:
-    """Project for a session or a remembered item: cwd, then file locations, then first-prompt content."""
+@dataclass
+class Attribution:
+    project: str
+    method: str
+    signals: dict
+    related_projects: list
+
+
+def _paths_in_text(text):
+    windows = _ABS_PATH.findall(text or "")
+    posix = re.findall(r"(?<![\w:/])/(?:[^\s\"'<>|*?`]+)", text or "")
+    return {_norm(p.strip().rstrip(".,;:)")) for p in windows + posix}
+
+
+def attribute(cwd, map_path, files=(), text="", create=True):
     data = load_map(map_path)
-    if cwd:
-        explicit = _explicit(cwd, data)
-        if explicit:
-            return explicit
-        if not is_generic(cwd):
-            return resolve(cwd, map_path, create=create)
-    guess = infer_from_paths(files, data) or infer_from_text(text, data)
-    if guess:
-        if create and not any(p["name"] == guess for p in data["projects"]):
-            for f in list(files) + _ABS_PATH.findall(text or ""):
-                if os.path.isabs(os.path.expanduser(f)) and not is_generic(f):
-                    resolve(os.path.dirname(os.path.expanduser(f)), map_path, create=True)
-                    break
-        return guess
-    if cwd and _norm(cwd) == _norm(HOME):
-        return ENVIRONMENT
-    return UNSORTED
+    canonical = _routing_cwd(cwd, data)
+    cwd_project = resolve(canonical, map_path, create=create) if canonical else UNSORTED
+    # Refresh candidates after the fallback root was registered.
+    data = load_map(map_path)
+    known = {p["name"] for p in data["projects"]}
+    pins = []
+    for pin in data.get("pins", []):
+        if pin.get("project") not in known:
+            logging.getLogger(__name__).warning("Ignoring project pin with unknown project %r", pin.get("project"))
+            continue
+        if pin.get("root") and cwd and _is_under(_norm(cwd), _norm(pin["root"])):
+            pins.append(pin)
+    pinned = max(pins, key=lambda p: len(_norm(p["root"])))['project'] if pins else None
+    edited = set()
+    for path in files:
+        path = os.path.expanduser(str(path))
+        path = path if os.path.isabs(path) else os.path.join(cwd, path)
+        edited.add(_norm(path))
+    mentioned = _paths_in_text(text)
+    signals = {}
+    for proj in data["projects"]:
+        name = proj["name"]
+        roots = [_norm(r) for r in proj.get("roots", [])]
+        count_files = min(10, sum(any(_is_under(p, r) for r in roots) for p in edited))
+        count_paths = sum(any(_is_under(p, r) for r in roots) for p in mentioned)
+        names = {name, *proj.get("aliases", []), *(Path(r).name for r in proj.get("roots", []))}
+        count_names = int(any(n and re.search(r"(?<![\w-])" + re.escape(n).replace(r"\ ", r"[\s_-]+").replace(r"\-", r"[\s_-]+") + r"(?![\w-])", text, re.I) for n in names))
+        cwd_signal = int(name == cwd_project)
+        signals[name] = dict(files=count_files, paths=count_paths, names=count_names, cwd=cwd_signal,
+                             score=3 * count_files + 2 * count_paths + count_names + cwd_signal)
+    ranked = sorted(signals, key=lambda name: (-signals[name]["score"], name))
+    winner = ranked[0] if ranked else cwd_project
+    first = signals[winner]["score"] if ranked else 0
+    second = signals[ranked[1]]["score"] if len(ranked) > 1 else 0
+    content = any(v["files"] or v["paths"] or v["names"] for v in signals.values())
+    method = "content" if content and first > 0 and first >= 2 * second else "cwd-fallback"
+    project = winner if method == "content" else cwd_project
+    if pinned:
+        project, method = pinned, "pinned"
+    related = sorted(name for name, signal in signals.items() if name != project and signal["score"] >= 3)
+    return Attribution(project, method, signals, related)
+
+
+def resolve_session(cwd: str, map_path: Path, files=(), text: str = "", create: bool = True) -> str:
+    return attribute(cwd, map_path, files, text, create).project
 
 
 def note_path(vault: Path, project: str) -> Path:
@@ -161,8 +255,9 @@ def note_path(vault: Path, project: str) -> Path:
 def resolve(cwd: str, map_path: Path, create: bool = True) -> str:
     if not cwd:
         return UNSORTED
-    target = _norm(cwd)
     data = load_map(map_path)
+    cwd = _routing_cwd(cwd, data)
+    target = _norm(cwd)
     best, best_len = None, -1
     for proj in data["projects"]:
         for root in proj.get("roots", []):

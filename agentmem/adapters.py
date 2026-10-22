@@ -86,7 +86,9 @@ def _read_lines(path: Path, start: int, end=None):
             try:
                 yield json.loads(raw), pos
             except json.JSONDecodeError:
-                raise ValueError("source contains malformed JSON record") from None
+                if end is not None or pos - len(raw) == start:
+                    raise ValueError("source contains malformed JSON record") from None
+                break  # Capture the complete valid prefix, leaving the corrupt record unconsumed.
         if end is not None and pos != end:
             raise ValueError("source truncated before recorded end")
 
