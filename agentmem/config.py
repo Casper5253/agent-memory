@@ -24,6 +24,39 @@ class Config:
     auto_index: bool = True                # refresh QMD after a capture
     qmd_index: str = ""                    # named QMD index ("" = default, shared with the qmd skill/MCP)
     excluded_roots: list = field(default_factory=list)
+    knowledge_mode: str = "off"
+    knowledge_db: str = "_meta/knowledge.sqlite"
+    knowledge_project_ids: dict = field(default_factory=dict)
+    project_privacy: dict = field(default_factory=dict)
+    knowledge_input_units: int = 12000
+    knowledge_output_tokens: int = 2000
+    knowledge_run_captures: int = 10
+    knowledge_run_calls: int = 2
+    knowledge_run_seconds: int = 300
+    knowledge_qmd_timeout_ms: int = 1500
+    knowledge_backup_dir: str = "_meta/knowledge-backups"
+
+    def __post_init__(self):
+        from .knowledge.policy import enum, integer, uuid_id
+        enum(self.knowledge_mode, ("off", "shadow", "active"))
+        for name in ("knowledge_input_units", "knowledge_output_tokens", "knowledge_run_captures",
+                     "knowledge_run_calls", "knowledge_run_seconds", "knowledge_qmd_timeout_ms"):
+            integer(getattr(self, name), 1)
+        for name in ("knowledge_db", "knowledge_backup_dir"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value or "\\" in value or ":" in value or "\x00" in value:
+                raise ValueError("invalid_knowledge_path")
+            path = Path(value)
+            if path.is_absolute() or ".." in path.parts or path.parts[0] != "_meta":
+                raise ValueError("invalid_knowledge_path")
+            if not (self.vault / path).resolve().is_relative_to(self.vault.resolve()):
+                raise ValueError("invalid_knowledge_path")
+        if not isinstance(self.knowledge_project_ids, dict) or not isinstance(self.project_privacy, dict):
+            raise ValueError("invalid_knowledge_mapping")
+        for project_id in self.knowledge_project_ids.values():
+            uuid_id(project_id)
+        for privacy in self.project_privacy.values():
+            enum(privacy, ("excluded", "local_only", "model_allowed"))
 
     @property
     def meta(self) -> Path:
