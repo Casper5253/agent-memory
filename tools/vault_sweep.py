@@ -170,7 +170,7 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
                 name_frags[name] = cand
                 break
 
-    all_frags = {n: (p, None) for n, p in name_frags.items()}
+    all_frags = {n: (proj_folders[n], None) for n in name_frags}
     all_frags.update({n: (p, gd) for n, (p, gd) in worktree_frags.items()})
     confirmed_non_frag = {n: p for n, p in remaining.items() if n not in name_frags}
 
@@ -182,26 +182,25 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
             if url:
                 confirmed_origins.setdefault(url, []).append(n)
 
+    root_to_name = {_resolved(p): n for n, p in proj_folders.items()}
     items = []
     for name in sorted(all_frags):
         path, parent_gd = all_frags[name]
         evidence, parent = None, None
 
         if parent_gd:
-            evidence = "worktree"
-            parent_url = _read_origin(parent_gd)
-            if parent_url and parent_url in confirmed_origins:
-                candidates = confirmed_origins[parent_url]
-                parent = candidates[0] if len(candidates) == 1 else next(
-                    (c for c in candidates if _name_core(c) < _words(name)), candidates[0]
-                )
-            if not parent:
-                parent = _find_parent(name, parent_gd, confirmed_non_frag)
-                if parent:
-                    evidence = "shared_remote"
+            parent = root_to_name.get(_resolved(parent_gd.parent))
+            if parent and parent != name:
+                evidence = "worktree"
+            else:
+                parent = None
 
         if not parent and name in name_frags:
-            evidence, parent = "guess", name_frags[name]
+            cand = name_frags[name]
+            own_url = _read_origin(path / ".git") if (path / ".git").is_dir() else None
+            cand_url = _read_origin(proj_folders[cand] / ".git") if (proj_folders[cand] / ".git").is_dir() else None
+            evidence = "shared_remote" if own_url and own_url == cand_url else "guess"
+            parent = cand
 
         if not parent and not parent_gd:
             parent = _find_parent(name, None, confirmed_non_frag)
@@ -212,6 +211,10 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
             auto = evidence in ("worktree", "shared_remote")
             items.append({"folder": name, "proposed_parent": parent, "evidence": evidence, "auto_apply": auto})
     return items
+
+
+def _resolved(p: Path) -> str:
+    return os.path.normcase(str(p.resolve()))
 
 
 def _find_parent(frag_name: str, parent_git_dir: Path | None, candidates: dict[str, Path]) -> str | None:
@@ -421,6 +424,20 @@ def _scan_re_attribution(vault: Path) -> dict:
     }
 
 
+def _repo_root(vault: Path, project: str) -> Path | None:
+    """The project's first existing repository root from projects.json; repos live outside the vault."""
+    try:
+        mapping = json.loads((vault / "_meta" / "projects.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for entry in mapping.get("projects", []):
+        if entry.get("name") == project:
+            for root in entry.get("roots", []):
+                if (Path(root) / ".git").exists():
+                    return Path(root)
+    return None
+
+
 def build_plan(vault: Path) -> dict:
     proj_dir = vault / "1-Projects"
     proj_folders = {}
@@ -428,10 +445,11 @@ def build_plan(vault: Path) -> dict:
         for d in sorted(proj_dir.iterdir()):
             if d.is_dir() and not d.name.startswith("."):
                 proj_folders[d.name] = d
+    repo_dirs = {name: _repo_root(vault, name) or path for name, path in proj_folders.items()}
     return {
-        "fragments": _scan_fragments(vault, proj_folders),
+        "fragments": _scan_fragments(vault, repo_dirs),
         "leftover_folders": _scan_leftovers(vault),
-        "stale_state_lines": _scan_stale(vault, proj_folders),
+        "stale_state_lines": _scan_stale(vault, repo_dirs),
         "broken_links": _scan_broken(vault),
         "unsorted_sessions": _scan_unsorted(vault),
         "re_attribution": _scan_re_attribution(vault),

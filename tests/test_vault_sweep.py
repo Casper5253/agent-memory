@@ -212,6 +212,31 @@ class SweepTests(unittest.TestCase):
         snap_after = _snapshot(self.vault)
         self.assertEqual(self._snap_before, snap_after)
 
+    def test_worktree_detected_through_projects_json_roots(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault, work = tmp.path / "vault", tmp.path / "work"
+            for d in ("_meta", "1-Projects/Tool", "1-Projects/Tool Wp9"):
+                (vault / d).mkdir(parents=True)
+            repo = work / "tool"
+            repo.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=repo)
+            _git("config", "user.email", "test@test", cwd=repo)
+            _git("config", "user.name", "Test", cwd=repo)
+            (repo / "f.txt").write_text("t", encoding="utf-8")
+            _git("add", ".", cwd=repo)
+            _git("commit", "-q", "-m", "init", cwd=repo)
+            _git("worktree", "add", "-q", str(work / "tool-wp9"), "HEAD", cwd=repo)
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "Tool", "roots": [str(repo)], "status": "active"},
+                {"name": "Tool Wp9", "roots": [str(work / "tool-wp9")], "status": "active"}]}), encoding="utf-8")
+            frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
+            self.assertEqual(frags["Tool Wp9"]["evidence"], "worktree")
+            self.assertEqual(frags["Tool Wp9"]["proposed_parent"], "Tool")
+            self.assertTrue(frags["Tool Wp9"]["auto_apply"])
+        finally:
+            tmp.cleanup()
+
     def test_plan_refuses_out_inside_vault(self):
         vs = _load_sweep()
         old_argv = sys.argv
