@@ -470,7 +470,7 @@ def build_scenario(corpus, case, number):
         gold["expected_labels"] = ["user_stated", "reported"]
         scenario["checks"].update(first_claim=claim, automatic_acceptances=0, assistant_alternative=alternative)
     elif case == "T26":
-        paste_kind = ("fenced", "quoted", "long_unmarked")[(number - 1) % 3]
+        paste_kind = ("fenced", "quoted", "long_unmarked")[((number - 1) // 3) % 3]
         excerpt = f"We decided to use Redis for {entity}."
         if paste_kind == "fenced":
             text = f"Review this pasted document.\n```text\n{excerpt}\n```"
@@ -491,13 +491,19 @@ def build_scenario(corpus, case, number):
     else:
         raise AssertionError(case)
 
-    wording = QUESTIONS[case][(number - 1) % 2].format(entity=entity)
+    wording = QUESTIONS[case][partition == "sealed"].format(entity=entity)
     if case == "T03" and mode == "history":
-        wording = QUESTIONS[case][1].format(entity=entity)
+        wording = ("Trace the persistence choices for {entity}, with their status and change reason." if partition == "dev"
+                   else "Reconstruct how {entity} storage choices evolved, including their authority and reasons.").format(entity=entity)
     elif case == "T03":
-        wording = QUESTIONS[case][0].format(entity=entity)
+        wording = (QUESTIONS[case][0] if partition == "dev"
+                   else "What persistence choice governs {entity} today, and what motivated the change?").format(entity=entity)
     if case == "T21":
-        wording = QUESTIONS[case][1 if mode == "history" else 0].format(entity=entity)
+        if partition == "dev":
+            wording = QUESTIONS[case][mode == "history"].format(entity=entity)
+        else:
+            wording = ("What archived evidence resolves the former identity of {entity}?" if mode == "history"
+                       else "Is current context available for the archived identity of {entity}?").format(entity=entity)
     if as_of:
         wording += " Requested instant: " + as_of + "."
     wording += [" Cite the recorded evidence.", " Include the source and its limits.", " Keep uncertainty explicit.",

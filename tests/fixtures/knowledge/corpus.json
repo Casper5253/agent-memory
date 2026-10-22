@@ -8611,7 +8611,7 @@
       "project_id": "bc9a2818-0cb5-5fb5-97fd-640c4a6473a8",
       "rationale": null,
       "source_ids": [
-        "975f06ee18368068575d5b3171b6a9a51dd4e85b4f1496d00dfaa038110bcd37"
+        "644f3cd1fccfd587a1af413cddb1ba070121f8f193165ad3fdad3338f678722c"
       ],
       "statement": "We decided to use Redis for lattice-26-02.",
       "status": "reported",
@@ -8624,7 +8624,7 @@
       "project_id": "c896fd59-78d6-527b-afeb-7f13812fbede",
       "rationale": null,
       "source_ids": [
-        "1b95612563cd85d78a6cfdbf17922949d57ef85cc10cf820ccdd3bea721ae12f"
+        "5d8938878a5efd05197aa8b898049c39693965af32e3bf74ecf38b81fffeaa57"
       ],
       "statement": "We decided to use Redis for lattice-26-03.",
       "status": "reported",
@@ -8637,7 +8637,7 @@
       "project_id": "12080d60-f260-534c-9ace-f69aa59865cb",
       "rationale": null,
       "source_ids": [
-        "027412c07cf5bc1da672fb4b8daf09865a88f6ea3f99d14cba60bd7b01799f46"
+        "a8ce29eda3b2b9c2e1d6f131c1584f925beae2415cda907b77f8782f8784c951"
       ],
       "statement": "We decided to use Redis for lattice-26-04.",
       "status": "reported",
@@ -8663,7 +8663,7 @@
       "project_id": "a9782392-10c3-5d00-94d4-b2baa9b2fae9",
       "rationale": null,
       "source_ids": [
-        "a7e8337b6cb83d5b3b546f03793301453c3867ed1fecf0ec4332cd2d6312249e"
+        "2704870b0f8e9af50967ca28c910658d376e355175134c05570c5f67d01b9634"
       ],
       "statement": "We decided to use Redis for quartz-26-06.",
       "status": "reported",
@@ -8676,7 +8676,7 @@
       "project_id": "95f460f0-aed6-59a2-a761-344bb0f4f10e",
       "rationale": null,
       "source_ids": [
-        "dcf5e71fbc9063bd1e56145135cc21ca19b5e7d0ac6ab3f9eca003bd634b9d96"
+        "b8b3df4cf98b8dde50f842cdfe101f9cdb2159c7385721fe086543d9e4fab826"
       ],
       "statement": "We decided to use Redis for quartz-26-07.",
       "status": "reported",
@@ -8689,7 +8689,7 @@
       "project_id": "82057bcd-f4a7-5b3f-ab36-8385e3bebbb1",
       "rationale": null,
       "source_ids": [
-        "2e037fecda38ac4a12008a7c7ff7befd299b8ad7c3e7becbcb20897bca556b81"
+        "4e6263619aff132ae5c0d5869a5c46fc74377674ee18c27194b71bc8955dbef5"
       ],
       "statement": "We decided to use Redis for quartz-26-08.",
       "status": "reported",
@@ -19686,7 +19686,7 @@
       "case": "T26",
       "checks": {
         "automatic_acceptances": 0,
-        "paste_heuristic": "quoted",
+        "paste_heuristic": "fenced",
         "user_stated": false
       },
       "entity": "lattice-26-02",
@@ -19701,7 +19701,7 @@
       "case": "T26",
       "checks": {
         "automatic_acceptances": 0,
-        "paste_heuristic": "long_unmarked",
+        "paste_heuristic": "fenced",
         "user_stated": false
       },
       "entity": "lattice-26-03",
@@ -19716,7 +19716,7 @@
       "case": "T26",
       "checks": {
         "automatic_acceptances": 0,
-        "paste_heuristic": "fenced",
+        "paste_heuristic": "quoted",
         "user_stated": false
       },
       "entity": "lattice-26-04",
@@ -19746,7 +19746,7 @@
       "case": "T26",
       "checks": {
         "automatic_acceptances": 0,
-        "paste_heuristic": "long_unmarked",
+        "paste_heuristic": "quoted",
         "user_stated": false
       },
       "entity": "quartz-26-06",
@@ -19761,7 +19761,7 @@
       "case": "T26",
       "checks": {
         "automatic_acceptances": 0,
-        "paste_heuristic": "fenced",
+        "paste_heuristic": "long_unmarked",
         "user_stated": false
       },
       "entity": "quartz-26-07",
@@ -19776,7 +19776,7 @@
       "case": "T26",
       "checks": {
         "automatic_acceptances": 0,
-        "paste_heuristic": "quoted",
+        "paste_heuristic": "long_unmarked",
         "user_stated": false
       },
       "entity": "quartz-26-08",
@@ -30837,7 +30837,7 @@
       "repo_head": "fd3106e66b370ec1db8c10fecccb1aec7f34b59e",
       "session_id": "7953ae71-f967-5214-ac4e-eeb4d160df3e",
       "started": "2026-10-01T09:00:00Z",
-      "summary_response": "{\"decisions\":[],\"facts\":[\"Pasted meeting minutes follow.\\n> We decided to use Redis for lattice-26-02.\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Pasted meeting minutes follow.\\n> We decided to use Redis for lattice-26-02.\",\"title\":\"Evidence for lattice-26-02\",\"what_happened\":[\"Pasted meeting minutes follow.\\n> We decided to use Redis for lattice-26-02.\"]}",
+      "summary_response": "{\"decisions\":[],\"facts\":[\"Review this pasted document.\\n```text\\nWe decided to use Redis for lattice-26-02.\\n```\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Review this pasted document.\\n```text\\nWe decided to use Redis for lattice-26-02.\\n```\",\"title\":\"Evidence for lattice-26-02\",\"what_happened\":[\"Review this pasted document.\\n```text\\nWe decided to use Redis for lattice-26-02.\\n```\"]}",
       "transcript": "transcripts/codex/t26-dev-02-paste.jsonl"
     },
     {
@@ -30852,7 +30852,7 @@
       "repo_head": "fd3106e66b370ec1db8c10fecccb1aec7f34b59e",
       "session_id": "7dd3de94-cc4f-56d3-870b-307b1ecb7e3c",
       "started": "2026-10-01T09:00:00Z",
-      "summary_response": "{\"decisions\":[],\"facts\":[\"Pasted archival document. We decided to use Redis for lattice-26-03.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Pasted archival document. We decided to use Redis for lattice-26-03.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\",\"title\":\"Evidence for lattice-26-03\",\"what_happened\":[\"Pasted archival document. We decided to use Redis for lattice-26-03.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\"]}",
+      "summary_response": "{\"decisions\":[],\"facts\":[\"Review this pasted document.\\n```text\\nWe decided to use Redis for lattice-26-03.\\n```\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Review this pasted document.\\n```text\\nWe decided to use Redis for lattice-26-03.\\n```\",\"title\":\"Evidence for lattice-26-03\",\"what_happened\":[\"Review this pasted document.\\n```text\\nWe decided to use Redis for lattice-26-03.\\n```\"]}",
       "transcript": "transcripts/opencode/t26-dev-03-paste.json"
     },
     {
@@ -30867,7 +30867,7 @@
       "repo_head": "fd3106e66b370ec1db8c10fecccb1aec7f34b59e",
       "session_id": "6487f5b1-5044-5801-b8ea-a825bf55999a",
       "started": "2026-10-01T09:00:00Z",
-      "summary_response": "{\"decisions\":[],\"facts\":[\"Review this pasted document.\\n```text\\nWe decided to use Redis for lattice-26-04.\\n```\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Review this pasted document.\\n```text\\nWe decided to use Redis for lattice-26-04.\\n```\",\"title\":\"Evidence for lattice-26-04\",\"what_happened\":[\"Review this pasted document.\\n```text\\nWe decided to use Redis for lattice-26-04.\\n```\"]}",
+      "summary_response": "{\"decisions\":[],\"facts\":[\"Pasted meeting minutes follow.\\n> We decided to use Redis for lattice-26-04.\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Pasted meeting minutes follow.\\n> We decided to use Redis for lattice-26-04.\",\"title\":\"Evidence for lattice-26-04\",\"what_happened\":[\"Pasted meeting minutes follow.\\n> We decided to use Redis for lattice-26-04.\"]}",
       "transcript": "transcripts/claude/t26-dev-04-paste.jsonl"
     },
     {
@@ -30897,7 +30897,7 @@
       "repo_head": "fd3106e66b370ec1db8c10fecccb1aec7f34b59e",
       "session_id": "f661039f-7d9b-5109-81bc-322b27ce69c7",
       "started": "2026-10-01T09:00:00Z",
-      "summary_response": "{\"decisions\":[],\"facts\":[\"Pasted archival document. We decided to use Redis for quartz-26-06.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Pasted archival document. We decided to use Redis for quartz-26-06.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\",\"title\":\"Evidence for quartz-26-06\",\"what_happened\":[\"Pasted archival document. We decided to use Redis for quartz-26-06.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\"]}",
+      "summary_response": "{\"decisions\":[],\"facts\":[\"Pasted meeting minutes follow.\\n> We decided to use Redis for quartz-26-06.\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Pasted meeting minutes follow.\\n> We decided to use Redis for quartz-26-06.\",\"title\":\"Evidence for quartz-26-06\",\"what_happened\":[\"Pasted meeting minutes follow.\\n> We decided to use Redis for quartz-26-06.\"]}",
       "transcript": "transcripts/opencode/t26-sealed-06-paste.json"
     },
     {
@@ -30912,7 +30912,7 @@
       "repo_head": "fd3106e66b370ec1db8c10fecccb1aec7f34b59e",
       "session_id": "d3173645-1d67-52c3-bbfd-14173135873e",
       "started": "2026-10-01T09:00:00Z",
-      "summary_response": "{\"decisions\":[],\"facts\":[\"Review this pasted document.\\n```text\\nWe decided to use Redis for quartz-26-07.\\n```\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Review this pasted document.\\n```text\\nWe decided to use Redis for quartz-26-07.\\n```\",\"title\":\"Evidence for quartz-26-07\",\"what_happened\":[\"Review this pasted document.\\n```text\\nWe decided to use Redis for quartz-26-07.\\n```\"]}",
+      "summary_response": "{\"decisions\":[],\"facts\":[\"Pasted archival document. We decided to use Redis for quartz-26-07.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Pasted archival document. We decided to use Redis for quartz-26-07.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\",\"title\":\"Evidence for quartz-26-07\",\"what_happened\":[\"Pasted archival document. We decided to use Redis for quartz-26-07.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\"]}",
       "transcript": "transcripts/claude/t26-sealed-07-paste.jsonl"
     },
     {
@@ -30927,7 +30927,7 @@
       "repo_head": "fd3106e66b370ec1db8c10fecccb1aec7f34b59e",
       "session_id": "183175c8-b466-5367-af20-31c5f2115fc8",
       "started": "2026-10-01T09:00:00Z",
-      "summary_response": "{\"decisions\":[],\"facts\":[\"Pasted meeting minutes follow.\\n> We decided to use Redis for quartz-26-08.\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Pasted meeting minutes follow.\\n> We decided to use Redis for quartz-26-08.\",\"title\":\"Evidence for quartz-26-08\",\"what_happened\":[\"Pasted meeting minutes follow.\\n> We decided to use Redis for quartz-26-08.\"]}",
+      "summary_response": "{\"decisions\":[],\"facts\":[\"Pasted archival document. We decided to use Redis for quartz-26-08.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\"],\"next_steps\":[],\"open_questions\":[],\"summary\":\"The source says: Pasted archival document. We decided to use Redis for quartz-26-08.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\",\"title\":\"Evidence for quartz-26-08\",\"what_happened\":[\"Pasted archival document. We decided to use Redis for quartz-26-08.\\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.\"]}",
       "transcript": "transcripts/codex/t26-sealed-08-paste.jsonl"
     },
     {
@@ -48835,15 +48835,15 @@
     },
     {
       "agent": "codex",
-      "content_sha": "49b3c4ed4ba154a9b6df71e64e2eb46ae263d9780d6b84ad5715ac3ecd9a7f72",
+      "content_sha": "6c72697af410163e80d808a804d9317e861bc7981f5e294c674e594682d8717a",
       "cursor_kind": "bytes",
-      "end": 936,
-      "id": "975f06ee18368068575d5b3171b6a9a51dd4e85b4f1496d00dfaa038110bcd37",
+      "end": 956,
+      "id": "644f3cd1fccfd587a1af413cddb1ba070121f8f193165ad3fdad3338f678722c",
       "kind": "transcript_span",
       "occurred_at": "2026-10-01T09:00:00Z",
       "occurred_precision": "instant",
       "origin_group": "7953ae71-f967-5214-ac4e-eeb4d160df3e",
-      "original_range_sha": "1ae6d36a33a6a5a543a247cc770424e24be170a85fb8da47751f226096010b69",
+      "original_range_sha": "7fee2278c717817ce117712530420b794a493222e31ffb6ea8067cd5baa34d24",
       "part": 1,
       "project_id": "bc9a2818-0cb5-5fb5-97fd-640c4a6473a8",
       "recorded_at": "2026-10-01T09:00:00Z",
@@ -48852,19 +48852,19 @@
       "span_ordinal": 0,
       "speaker": "pasted",
       "start": 0,
-      "text": "Pasted meeting minutes follow.\n> We decided to use Redis for lattice-26-02."
+      "text": "Review this pasted document.\n```text\nWe decided to use Redis for lattice-26-02.\n```"
     },
     {
       "agent": "opencode",
-      "content_sha": "b08acad7990473355dc5ae47347fb506512316548e085c359d6d6c50feca274f",
+      "content_sha": "e6f594fb98742da439787bc27d5394eaba3985566ac2e585a4ae3b73e75c2992",
       "cursor_kind": "messages",
       "end": 2,
-      "id": "1b95612563cd85d78a6cfdbf17922949d57ef85cc10cf820ccdd3bea721ae12f",
+      "id": "5d8938878a5efd05197aa8b898049c39693965af32e3bf74ecf38b81fffeaa57",
       "kind": "transcript_span",
       "occurred_at": "2026-10-01T09:00:00Z",
       "occurred_precision": "instant",
       "origin_group": "7dd3de94-cc4f-56d3-870b-307b1ecb7e3c",
-      "original_range_sha": "e24e685ea53e03d3ebf9e3c3ab0b8e7983db4d5e774b75e0b13f5357cd708917",
+      "original_range_sha": "4253570f96081b2cb090e9f23b35a3e4e9110b9fdfaaa0dfee738fe26d917c1f",
       "part": 1,
       "project_id": "c896fd59-78d6-527b-afeb-7f13812fbede",
       "recorded_at": "2026-10-01T09:00:00Z",
@@ -48873,19 +48873,19 @@
       "span_ordinal": 0,
       "speaker": "pasted",
       "start": 0,
-      "text": "Pasted archival document. We decided to use Redis for lattice-26-03.\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision."
+      "text": "Review this pasted document.\n```text\nWe decided to use Redis for lattice-26-03.\n```"
     },
     {
       "agent": "claude",
-      "content_sha": "db7aeb4e52e6d78dc46107ac7002aeeeb19b1594b848182c7654e5be7ff1ee4e",
+      "content_sha": "b1bd2e0851e7495699e05ebce0c527a42ade1acd04e22892c31253f1079bbf6f",
       "cursor_kind": "bytes",
-      "end": 1029,
-      "id": "027412c07cf5bc1da672fb4b8daf09865a88f6ea3f99d14cba60bd7b01799f46",
+      "end": 1009,
+      "id": "a8ce29eda3b2b9c2e1d6f131c1584f925beae2415cda907b77f8782f8784c951",
       "kind": "transcript_span",
       "occurred_at": "2026-10-01T09:00:00Z",
       "occurred_precision": "instant",
       "origin_group": "6487f5b1-5044-5801-b8ea-a825bf55999a",
-      "original_range_sha": "853298960dc298126abd3c18ca03ec47bdf51277762d54b28b5e6ee9159ec043",
+      "original_range_sha": "a77379e49f46e9e5af7da4a41925a39c9258573e052cf0201b3eed3b19ee42b9",
       "part": 1,
       "project_id": "12080d60-f260-534c-9ace-f69aa59865cb",
       "recorded_at": "2026-10-01T09:00:00Z",
@@ -48894,7 +48894,7 @@
       "span_ordinal": 0,
       "speaker": "pasted",
       "start": 0,
-      "text": "Review this pasted document.\n```text\nWe decided to use Redis for lattice-26-04.\n```"
+      "text": "Pasted meeting minutes follow.\n> We decided to use Redis for lattice-26-04."
     },
     {
       "agent": "codex",
@@ -48919,15 +48919,15 @@
     },
     {
       "agent": "opencode",
-      "content_sha": "c63ade116b9183f3f3b9bc250e6edca76460b44145c3a97a4e85f6110909034d",
+      "content_sha": "feb9a69f7c61f9c23a35ecb67d39f6b1d7bb71b653d484690ad8ab2bb2983df2",
       "cursor_kind": "messages",
       "end": 2,
-      "id": "a7e8337b6cb83d5b3b546f03793301453c3867ed1fecf0ec4332cd2d6312249e",
+      "id": "2704870b0f8e9af50967ca28c910658d376e355175134c05570c5f67d01b9634",
       "kind": "transcript_span",
       "occurred_at": "2026-10-01T09:00:00Z",
       "occurred_precision": "instant",
       "origin_group": "f661039f-7d9b-5109-81bc-322b27ce69c7",
-      "original_range_sha": "e9d73364049e6cadf2d39861c39dcaa22484a8778e76a5b292c69f4993a2aac3",
+      "original_range_sha": "77b1a541fa8fa9acc296f2cbc728bb6b986a813749c36c96a61b426d2225bd92",
       "part": 1,
       "project_id": "a9782392-10c3-5d00-94d4-b2baa9b2fae9",
       "recorded_at": "2026-10-01T09:00:00Z",
@@ -48936,19 +48936,19 @@
       "span_ordinal": 0,
       "speaker": "pasted",
       "start": 0,
-      "text": "Pasted archival document. We decided to use Redis for quartz-26-06.\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision."
+      "text": "Pasted meeting minutes follow.\n> We decided to use Redis for quartz-26-06."
     },
     {
       "agent": "claude",
-      "content_sha": "25dbe56cf05737b52b41fad9ecd598653059a5fc54bea9126ff4d42bcb88b470",
+      "content_sha": "3fb8515db115a324625cc8605301b86e78261c2fd4f71f91621a077490d88c4e",
       "cursor_kind": "bytes",
-      "end": 1042,
-      "id": "dcf5e71fbc9063bd1e56145135cc21ca19b5e7d0ac6ab3f9eca003bd634b9d96",
+      "end": 4708,
+      "id": "b8b3df4cf98b8dde50f842cdfe101f9cdb2159c7385721fe086543d9e4fab826",
       "kind": "transcript_span",
       "occurred_at": "2026-10-01T09:00:00Z",
       "occurred_precision": "instant",
       "origin_group": "d3173645-1d67-52c3-bbfd-14173135873e",
-      "original_range_sha": "f7ddcfa5eb630c4a25757c1b646cb20f3f99ae7051dcb49ffc9befd437c75e89",
+      "original_range_sha": "899102edf50f43a93ee793c6f98862bf73c4a79094eb1ea023e8f638effc2fcf",
       "part": 1,
       "project_id": "95f460f0-aed6-59a2-a761-344bb0f4f10e",
       "recorded_at": "2026-10-01T09:00:00Z",
@@ -48957,19 +48957,19 @@
       "span_ordinal": 0,
       "speaker": "pasted",
       "start": 0,
-      "text": "Review this pasted document.\n```text\nWe decided to use Redis for quartz-26-07.\n```"
+      "text": "Pasted archival document. We decided to use Redis for quartz-26-07.\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision."
     },
     {
       "agent": "codex",
-      "content_sha": "85536c433d0f0597e5bdd74f51c097fe69520ea0c3b7a18f129510371c6cc947",
+      "content_sha": "52ad2da5ed1833ece5f04eee3b36fd08dbde1302bb052dd11cf508e7cf23acbf",
       "cursor_kind": "bytes",
-      "end": 946,
-      "id": "2e037fecda38ac4a12008a7c7ff7befd299b8ad7c3e7becbcb20897bca556b81",
+      "end": 4632,
+      "id": "4e6263619aff132ae5c0d5869a5c46fc74377674ee18c27194b71bc8955dbef5",
       "kind": "transcript_span",
       "occurred_at": "2026-10-01T09:00:00Z",
       "occurred_precision": "instant",
       "origin_group": "183175c8-b466-5367-af20-31c5f2115fc8",
-      "original_range_sha": "1f31fd248107261e33fba401cfcfaf769bbb05930a8587d8e41e288057f79e7b",
+      "original_range_sha": "4e8b05dab1fe096eaf8ed4550bd511a8ebf3d720f1015f2f967eea7d6b73d242",
       "part": 1,
       "project_id": "82057bcd-f4a7-5b3f-ab36-8385e3bebbb1",
       "recorded_at": "2026-10-01T09:00:00Z",
@@ -48978,7 +48978,7 @@
       "span_ordinal": 0,
       "speaker": "pasted",
       "start": 0,
-      "text": "Pasted meeting minutes follow.\n> We decided to use Redis for quartz-26-08."
+      "text": "Pasted archival document. We decided to use Redis for quartz-26-08.\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision."
     },
     {
       "agent": "opencode",

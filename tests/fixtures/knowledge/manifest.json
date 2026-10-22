@@ -12,9 +12,9 @@
     "transcripts": 930
   },
   "files": {
-    "corpus.json": "2b3e8bc155d04d4e8989c9a3a35fc59bb1b29e26d9b3218da6df8a0b70cd6f9a",
-    "expected.jsonl": "8ffc363bb3ccb67b33ddef5dfb1578d0a4e1443090e9e54e46e6dc8104c87165",
-    "queries.jsonl": "894025b770c5d7dd7d07b39eebea59d22ac7bacc58c908368ddd4e9d2be2df40",
+    "corpus.json": "a3d1e9bb8f6d13ad0fcd0fa4a07685c42c6b26f2be90a53c40e482077b9ea97f",
+    "expected.jsonl": "effe923e563284a0a782008b73ad980205bf35c6cb4baa6698acb6eba049dfbd",
+    "queries.jsonl": "73b7364ca86d823101507234adf84f1d64d62a8e757d429cd39e6070d8b00780",
     "transcripts/claude/filler-000.jsonl": "c07aec959d29d6af26c2814b70b3f5e9f2b6f91965da953b815497a46c8396b2",
     "transcripts/claude/filler-003.jsonl": "3d67fa130c428a96041a84c3501822b60f235b0487c1500eb9595097af25f451",
     "transcripts/claude/filler-006.jsonl": "e8bf2e94eaaa715d65876c83c1c7b50583dc42d845a9e905434716035b02aab6",
@@ -315,8 +315,8 @@
     "transcripts/claude/t25-sealed-08-suggestion.jsonl": "1916ea286ed81a523c5428b75f92bcfaf39b43d371b364b77b48f9c46bf558e4",
     "transcripts/claude/t25-sealed-08-user.jsonl": "2bcab2bbabe9a008cc12834465f8a72729723e185b2f307e20095ef14fe3d3c6",
     "transcripts/claude/t26-dev-01-paste.jsonl": "86b793c68559a48f54fe62663858d99f8550bba246b010a7d63cfa00cc8bfc71",
-    "transcripts/claude/t26-dev-04-paste.jsonl": "853298960dc298126abd3c18ca03ec47bdf51277762d54b28b5e6ee9159ec043",
-    "transcripts/claude/t26-sealed-07-paste.jsonl": "f7ddcfa5eb630c4a25757c1b646cb20f3f99ae7051dcb49ffc9befd437c75e89",
+    "transcripts/claude/t26-dev-04-paste.jsonl": "a77379e49f46e9e5af7da4a41925a39c9258573e052cf0201b3eed3b19ee42b9",
+    "transcripts/claude/t26-sealed-07-paste.jsonl": "899102edf50f43a93ee793c6f98862bf73c4a79094eb1ea023e8f638effc2fcf",
     "transcripts/claude/t26-sealed-10-paste.jsonl": "3a6a8016067e57acb49825db4dba1f8718030c5cec0ed1236dcff3312c4fdd77",
     "transcripts/claude/t27-dev-03-old-head.jsonl": "ac884106297ddf481c44064b41b43e6bb9953511251b6ed7f157e73c5c995736",
     "transcripts/claude/t27-sealed-06-old-head.jsonl": "425500ddb03520bc0ebd60a0f1ddf3ea2a1a2cf928dfd46ae18a8a06ab78e895",
@@ -639,9 +639,9 @@
     "transcripts/codex/t25-sealed-06-user.jsonl": "d74043734238b408358b8ef598e4f6fdfbb9efac339287a3c2852af75a9be397",
     "transcripts/codex/t25-sealed-09-suggestion.jsonl": "6bfb0e04a6b7a84d3b6d65446fe53e0c240279d05cd87623fb24d8f0fe250fb1",
     "transcripts/codex/t25-sealed-09-user.jsonl": "85471495b1dc53c77508b26dcb0f94c0ac0cdac7fbb7bbd64a15b5acae82af7d",
-    "transcripts/codex/t26-dev-02-paste.jsonl": "1ae6d36a33a6a5a543a247cc770424e24be170a85fb8da47751f226096010b69",
+    "transcripts/codex/t26-dev-02-paste.jsonl": "7fee2278c717817ce117712530420b794a493222e31ffb6ea8067cd5baa34d24",
     "transcripts/codex/t26-dev-05-paste.jsonl": "5e155247c2cabbc39404aaf15761325c096c1a7cb64fd558037d18b4c5701907",
-    "transcripts/codex/t26-sealed-08-paste.jsonl": "1f31fd248107261e33fba401cfcfaf769bbb05930a8587d8e41e288057f79e7b",
+    "transcripts/codex/t26-sealed-08-paste.jsonl": "4e8b05dab1fe096eaf8ed4550bd511a8ebf3d720f1015f2f967eea7d6b73d242",
     "transcripts/codex/t27-dev-01-old-head.jsonl": "17baefa2d8d80e5a82c02c9b97e7972eeb35d7cb4ce3514a626ec53befbc3975",
     "transcripts/codex/t27-dev-04-old-head.jsonl": "b03670c4b35d4014415346b630929687dd93f3646348f13c2c74564e83e6f2b8",
     "transcripts/codex/t27-sealed-07-old-head.jsonl": "29c47f9d826f7a750acb35c0c0ec109db6514ccc084aa4bbf9c3cd4367cb450f",
@@ -939,8 +939,8 @@
     "transcripts/opencode/t25-sealed-07-user.json": "bc4e6f7c367ed52afc13c543845f1865a052d3e7f791620d98b4c1daf04090aa",
     "transcripts/opencode/t25-sealed-10-suggestion.json": "4fc2c5eb0d1df40be1579b48a565b1eda18b76d53a42cb3e62a6ab4880705a67",
     "transcripts/opencode/t25-sealed-10-user.json": "f28ca3e024d8e26bbde6e9a756cf8368624934f7bd47cfba81137112c8ee3072",
-    "transcripts/opencode/t26-dev-03-paste.json": "e24e685ea53e03d3ebf9e3c3ab0b8e7983db4d5e774b75e0b13f5357cd708917",
-    "transcripts/opencode/t26-sealed-06-paste.json": "e9d73364049e6cadf2d39861c39dcaa22484a8778e76a5b292c69f4993a2aac3",
+    "transcripts/opencode/t26-dev-03-paste.json": "4253570f96081b2cb090e9f23b35a3e4e9110b9fdfaaa0dfee738fe26d917c1f",
+    "transcripts/opencode/t26-sealed-06-paste.json": "77b1a541fa8fa9acc296f2cbc728bb6b986a813749c36c96a61b426d2225bd92",
     "transcripts/opencode/t26-sealed-09-paste.json": "53957caa534d213bb9d2ae0abdf17028a791ea8a540ada4d54e92bcde2999e24",
     "transcripts/opencode/t27-dev-02-old-head.json": "a4831ef211927550805c93f0f35806393a257d6ee03116e8361690251791212e",
     "transcripts/opencode/t27-dev-05-old-head.json": "37c9e9e04842981f713cb7eb07d8d87ce39d39178eaa1d19e7b2b92c6e95d126",
@@ -965,8 +965,8 @@
   },
   "partition_hash_format": "sha256(UTF8(canonical_json(sorted expected rows by query_id)))",
   "partitions": {
-    "dev": "a523fc95a97b2feb88cd2c8ff02223cbc02ed9d000e3e3fa409778f4c0779b97",
-    "sealed": "7e5149943c6f4e98e47f384479a13148b5d9c03faf121e6a1b5410d290574663"
+    "dev": "fc91efcf82c76b4bad4d06562b075b4bf00f099e6c58ae706dabea458a35c2fa",
+    "sealed": "9b3826128e6da28332245efc040defb3fd1abb8cac437ac1c4f5de76aafa8055"
   },
   "provider_paste_marking": {
     "claude": {
