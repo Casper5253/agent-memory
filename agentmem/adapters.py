@@ -4,6 +4,7 @@ Each adapter reads only the range after `start` (byte offset for JSONL transcrip
 OpenCode) and returns the new end position, so a resumed session is never re-captured.
 Tool *outputs* are never kept: they are where secrets and bulk data live, and the digest doesn't need them.
 """
+import hashlib
 import json
 import os
 import re
@@ -46,6 +47,7 @@ class Transcript:
     start: int = 0
     end: int = 0
     events: list = field(default_factory=list)
+    prefix_sha: str = ""
 
 
 def _iso(value) -> str:
@@ -61,26 +63,39 @@ def _clean_prompt(text: str) -> str:
     return "" if not text or _INJECTED.match(text) else text
 
 
-def _read_lines(path: Path, start: int):
+def _read_lines(path: Path, start: int, end=None):
     """Yield (record, end_offset) for complete newline-terminated JSON lines after `start`."""
     with open(path, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        if start < 0 or start > size or (end is not None and (end < start or end > size)):
+            raise ValueError("source truncated or invalid range")
+        if start:
+            fh.seek(start - 1)
+            if fh.read(1) != b"\n":
+                raise ValueError("source range is not a record boundary")
         fh.seek(start)
         pos = start
         for raw in fh:
+            if end is not None and pos == end:
+                break
+            if end is not None and pos + len(raw) > end:
+                raise ValueError("source range is not a complete record")
             if not raw.endswith(b"\n"):
                 break  # partial line still being written: stop, it will be read next time
             pos += len(raw)
             try:
                 yield json.loads(raw), pos
             except json.JSONDecodeError:
-                yield None, pos
+                raise ValueError("source contains malformed JSON record") from None
+        if end is not None and pos != end:
+            raise ValueError("source truncated before recorded end")
 
 
 # --------------------------------------------------------------------------- Claude Code
-def read_claude(path: str, start: int = 0) -> Transcript:
+def read_claude(path: str, start: int = 0, end=None) -> Transcript:
     p = Path(path)
     t = Transcript(agent="claude", session_id=p.stem, source=str(p), start=start, end=start)
-    for rec, pos in _read_lines(p, start):
+    for rec, pos in _read_lines(p, start, end):
         t.end = pos
         if not rec or rec.get("isSidechain"):
             continue
@@ -134,7 +149,7 @@ def _codex_text(content) -> str:
     return "\n".join(c.get("text", "") for c in content or [] if isinstance(c, dict)).strip()
 
 
-def read_codex(path: str, start: int = 0) -> Transcript:
+def read_codex(path: str, start: int = 0, end=None) -> Transcript:
     p = Path(path)
     sid = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", p.name)
     t = Transcript(agent="codex", session_id=sid.group(1) if sid else p.stem, source=str(p), start=start, end=start)
@@ -145,7 +160,7 @@ def read_codex(path: str, start: int = 0) -> Transcript:
                 t.session_id = meta.get("id") or meta.get("session_id") or t.session_id
                 t.cwd = meta.get("cwd", "")
             break
-    for rec, pos in _read_lines(p, start):
+    for rec, pos in _read_lines(p, start, end):
         t.end = pos
         if not rec:
             continue
@@ -207,13 +222,18 @@ def export_opencode(session_id: str, timeout: int = 120) -> dict:
     return json.loads(text[text.index("{"):])
 
 
-def read_opencode(session_id: str, start: int = 0, data: "dict | None" = None) -> Transcript:
+def read_opencode(session_id: str, start: int = 0, data: "dict | None" = None, end=None) -> Transcript:
     data = data if data is not None else export_opencode(session_id)
     info = data.get("info") or {}
     msgs = data.get("messages") or []
+    stop = len(msgs) if end is None else end
+    if start < 0 or stop < start or stop > len(msgs):
+        raise ValueError("source truncated or invalid message range")
     t = Transcript(agent="opencode", session_id=info.get("id", session_id), source=f"opencode:{session_id}",
-                   cwd=info.get("directory", ""), title=info.get("title", ""), start=start, end=len(msgs))
-    for m in msgs[start:]:
+                   cwd=info.get("directory", ""), title=info.get("title", ""), start=start, end=stop,
+                   prefix_sha=hashlib.sha256(json.dumps(msgs[:stop], sort_keys=True, ensure_ascii=False,
+                                                       separators=(",", ":")).encode("utf-8")).hexdigest())
+    for m in msgs[start:stop]:
         mi = m.get("info") or {}
         role = mi.get("role")
         ts = _iso((mi.get("time") or {}).get("created"))
@@ -257,13 +277,13 @@ def _mark_finals(t: Transcript) -> None:
         last.final = True
 
 
-def read(agent: str, session_id: str, source: str, start: int = 0) -> Transcript:
+def read(agent: str, session_id: str, source: str, start: int = 0, end=None) -> Transcript:
     if agent == "claude":
-        return read_claude(source, start)
+        return read_claude(source, start, end)
     if agent == "codex":
-        return read_codex(source, start)
+        return read_codex(source, start, end)
     if agent == "opencode":
-        return read_opencode(session_id, start)
+        return read_opencode(session_id, start, end=end)
     raise ValueError(f"unknown agent {agent!r}")
 
 

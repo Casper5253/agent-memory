@@ -105,7 +105,15 @@ class Manifest:
                        cost, sha, consolidated, summary_json):
         now = time.time()
         with self.tx() as db:
-            db.execute("INSERT OR REPLACE INTO captures VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            existing = db.execute("SELECT * FROM captures WHERE agent=? AND session_id=? AND part=?",
+                                  (agent, session_id, part)).fetchone()
+            if existing:
+                evidence = ("note_path", "project", "title", "date", "start_offset", "end_offset", "summarizer", "digest_sha", "summary_json")
+                expected = (note_path, project, title, date, start, end, summarizer, sha, summary_json)
+                if tuple(existing[k] for k in evidence) != expected:
+                    raise ValueError("capture_identity_conflict: manifest evidence differs")
+                return
+            db.execute("INSERT INTO captures VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (agent, session_id, part, note_path, project, title, date, start, end, summarizer,
                         int(consolidated), cost, sha, now, summary_json))
             db.execute("UPDATE sessions SET status='captured', captured_until=?, parts=?, project=?, attempts=0, skip_reason=NULL,"

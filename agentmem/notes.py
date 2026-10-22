@@ -1,4 +1,6 @@
 """Session notes (immutable) and project notes (managed regions only)."""
+import hashlib
+import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +24,7 @@ def _yaml_str(v: str) -> str:
 
 
 def session_note_path(sessions_dir: Path, when: datetime, agent: str, title: str, session_id: str, part: int) -> Path:
-    id8 = re.sub(r"[^A-Za-z0-9]", "", session_id)[-8:]
+    id8 = hashlib.sha256(json.dumps([agent, session_id, part], separators=(",", ":")).encode("utf-8")).hexdigest()
     suffix = f"-p{part}" if part > 1 else ""
     name = f"{when:%Y-%m-%d-%H%M}-{agent}-{slug(title)}-{id8}{suffix}.md"
     return sessions_dir / f"{when:%Y}" / f"{when:%m}" / name
@@ -30,6 +32,53 @@ def session_note_path(sessions_dir: Path, when: datetime, agent: str, title: str
 
 def project_link(project: str) -> str:
     return f"[[1-Projects/{project}/{project}|{project}]]"
+
+
+def session_metadata(text):
+    if not text.startswith("---\n") or "\n---\n" not in text[4:]:
+        raise ValueError("capture_identity_conflict: malformed session frontmatter")
+    header = text[4:].split("\n---\n", 1)[0]
+    fields = {}
+    for line in header.splitlines():
+        if not line or line[0].isspace() or ": " not in line:
+            continue
+        key, value = line.split(": ", 1)
+        if key in fields:
+            raise ValueError("capture_identity_conflict: duplicate frontmatter field")
+        try:
+            fields[key] = str(json.loads(value)) if value.startswith('"') else value
+        except ValueError as error:
+            raise ValueError("capture_identity_conflict: invalid frontmatter string") from error
+    if fields.get("type") != "session" or fields.get("immutable") != "true":
+        raise ValueError("capture_identity_conflict: not an immutable session note")
+    return fields
+
+
+def source_range(text):
+    match = re.search(r"(?m)^- Transcript: `[^\n]*` \(range (\d+)[–-](\d+)\)$", text)
+    if not match or int(match[2]) < int(match[1]):
+        raise ValueError("capture_identity_conflict: missing legacy source range")
+    return int(match[1]), int(match[2])
+
+
+def summary_from_session(text):
+    def section(title):
+        match = re.search(r"(?ms)^## " + re.escape(title) + r"\n\n(.*?)(?=\n## |\Z)", text)
+        if not match:
+            raise ValueError("capture_identity_conflict: missing legacy summary section")
+        return match[1].strip()
+    def bullets(title):
+        return [line[2:] for line in section(title).splitlines() if line.startswith("- ") and line != "- none recorded"]
+    title = re.search(r"(?m)^# (.+)$", text)
+    decisions = []
+    for line in bullets("Decisions and rationale"):
+        match = re.fullmatch(r"\*\*(.*?)\*\*(?: — (.*))?", line)
+        if not match:
+            raise ValueError("capture_identity_conflict: invalid legacy decision")
+        decisions.append({"decision": match[1], "rationale": match[2] or ""})
+    return dict(title=title[1] if title else "Session", summary=section("Executive summary"),
+                what_happened=bullets("What happened"), decisions=decisions, facts=bullets("Confirmed facts"),
+                open_questions=bullets("Open questions and next steps"), next_steps=[])
 
 
 def render_session(*, agent, session_id, project, part, when, started, ended, source, start, end, summarizer,
