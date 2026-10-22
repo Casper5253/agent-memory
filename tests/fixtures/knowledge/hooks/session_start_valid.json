@@ -1,0 +1,12 @@
+{
+  "description": "SessionStart with valid payload returns context JSON",
+  "input": {
+    "hook_event_name": "SessionStart",
+    "session_id": "ses-hook-001",
+    "transcript_path": "transcript.jsonl",
+    "cwd": "{WORK}/alpha"
+  },
+  "env": {},
+  "expected_stdout_contains": "hookSpecificOutput",
+  "expected_enqueue": null
+}

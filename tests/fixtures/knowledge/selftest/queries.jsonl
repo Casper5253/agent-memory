@@ -1,0 +1,2 @@
+{"query_id": "selftest-T01-fact", "case": "T01", "variant": "reviewed", "partition": "dev", "project": "alpha", "query": "What storage backend was decided for Alpha?", "mode": "current", "as_of": null, "budget": 2400}
+{"query_id": "selftest-T02-rationale", "case": "T02", "variant": "reviewed", "partition": "dev", "project": "alpha", "query": "Why was SQLite chosen?", "mode": "current", "as_of": null, "budget": 2400}

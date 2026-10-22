@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "clock": "2026-10-01T00:00:00Z",
+  "projects": [
+    {
+      "id": "alpha",
+      "name": "Alpha",
+      "roots": ["{WORK}/alpha"],
+      "status": "active",
+      "policy": "model_allowed",
+      "repo": {"head": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0", "tags": {"v2": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"}}
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "ses-selftest-001",
+      "agent": "claude",
+      "cwd": "{WORK}/alpha",
+      "part": 1,
+      "started": "2026-10-01T10:00:00Z",
+      "ended": "2026-10-01T11:00:00Z",
+      "repo_head": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "transcript": "transcripts/claude/ses-selftest-001.jsonl",
+      "summary_response": "{\"title\": \"SQLite decision\", \"summary\": \"Decided to use SQLite for local storage because it supports atomic cursor updates.\", \"what_happened\": [\"evaluated backends\", \"chose SQLite\"], \"decisions\": [{\"decision\": \"Use SQLite for storage\", \"rationale\": \"atomic cursor updates\"}], \"facts\": [\"Python 3.11\"], \"open_questions\": [], \"next_steps\": []}",
+      "case_ids": ["T01", "T02"]
+    }
+  ],
+  "filler": {"generator": "deterministic", "seed": 1701, "count": 0}
+}

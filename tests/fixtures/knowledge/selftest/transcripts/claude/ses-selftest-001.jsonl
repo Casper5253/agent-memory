@@ -1,0 +1,4 @@
+{"type": "user", "sessionId": "ses-selftest-001", "cwd": "{WORK}/alpha", "timestamp": "2026-10-01T10:00:00Z", "message": {"role": "user", "content": "Set up storage for the Alpha project. Use SQLite for storage because it supports atomic cursor updates."}}
+{"type": "assistant", "sessionId": "ses-selftest-001", "cwd": "{WORK}/alpha", "timestamp": "2026-10-01T10:05:00Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Done. We decided to use SQLite for storage because it supports atomic cursor updates. Created storage.py and verified it works. Python 3.11 is available."}]}}
+{"type": "user", "sessionId": "ses-selftest-001", "cwd": "{WORK}/alpha", "timestamp": "2026-10-01T10:10:00Z", "message": {"role": "user", "content": "Run the tests."}}
+{"type": "assistant", "sessionId": "ses-selftest-001", "cwd": "{WORK}/alpha", "timestamp": "2026-10-01T10:15:00Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "All tests pass."}]}}

@@ -1,0 +1,13 @@
+{
+  "description": "Pause active: returns empty JSON and enqueues nothing",
+  "input": {
+    "hook_event_name": "SessionEnd",
+    "session_id": "ses-hook-008",
+    "transcript_path": "transcript.jsonl",
+    "cwd": "{WORK}/alpha"
+  },
+  "env": {},
+  "pause": true,
+  "expected_stdout_exact": "{}",
+  "expected_enqueue": null
+}

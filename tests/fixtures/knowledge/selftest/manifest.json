@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "seed": 1701,
+  "generation_command": "python -I tools/evaluate_knowledge.py --arm baseline --fixtures tests/fixtures/knowledge/selftest --output .audit/selftest",
+  "files": {
+    "corpus.json": "55e6ce74bfdbe16af047d3eb2f4a66afda919c91ed63d91b724b9edec7328297",
+    "queries.jsonl": "cbbc4ebc33d52e92b1161669bc1262fa52a8e2d0835e1499f60c6db8cf1bb38e",
+    "expected.jsonl": "c3d80bbe35e3e5722d7c9957d4f3e94cc3102b6264e9b4ef15c24de32df2d097"
+  },
+  "counts": {
+    "projects": 1,
+    "sessions": 1,
+    "queries_dev": 2,
+    "queries_sealed": 0
+  },
+  "partitions": {
+    "dev": "a4faf535d6bd3d58c35b8087ff12b78a373bb1e6b7e5f7fbbb08a025b94d0719",
+    "sealed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "gold_author": "dev-opencode"
+}

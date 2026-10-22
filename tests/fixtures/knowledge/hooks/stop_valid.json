@@ -1,0 +1,12 @@
+{
+  "description": "Stop event enqueues turn",
+  "input": {
+    "hook_event_name": "Stop",
+    "session_id": "ses-hook-003",
+    "transcript_path": "transcript.jsonl",
+    "cwd": "{WORK}/alpha"
+  },
+  "env": {},
+  "expected_stdout_exact": "{}",
+  "expected_enqueue": {"event": "turn", "session_id": "ses-hook-003", "agent": "claude"}
+}

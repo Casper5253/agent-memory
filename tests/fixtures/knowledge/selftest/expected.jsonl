@@ -1,0 +1,2 @@
+{"query_id": "selftest-T01-fact", "gold": {"required_claims": [], "required_sources": [], "forbidden_current_claims": [], "required_rationale": null, "expected_uncertainty": false, "expected_labels": [], "forbidden_strings": [], "relevance": {}}}
+{"query_id": "selftest-T02-rationale", "gold": {"required_claims": [], "required_sources": [], "forbidden_current_claims": [], "required_rationale": "atomic cursor updates", "expected_uncertainty": false, "expected_labels": [], "forbidden_strings": [], "relevance": {}}}

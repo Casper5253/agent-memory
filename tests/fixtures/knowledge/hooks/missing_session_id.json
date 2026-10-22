@@ -1,0 +1,11 @@
+{
+  "description": "Missing session_id returns empty JSON and enqueues nothing",
+  "input": {
+    "hook_event_name": "SessionEnd",
+    "transcript_path": "transcript.jsonl",
+    "cwd": "{WORK}/alpha"
+  },
+  "env": {},
+  "expected_stdout_exact": "{}",
+  "expected_enqueue": null
+}
