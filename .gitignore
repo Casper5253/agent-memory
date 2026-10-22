@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 tools/migrate_vault.py
 .audit/
+.hx/
+.artifacts/
