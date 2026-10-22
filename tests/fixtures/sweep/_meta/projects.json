@@ -1,0 +1,6 @@
+{
+  "projects": [
+    {"name": "Demo App", "roots": ["REPLACE_WORK/demo-app"], "status": "active"},
+    {"name": "My Lib", "roots": ["REPLACE_WORK/my-lib"], "status": "active"}
+  ]
+}
