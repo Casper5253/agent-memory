@@ -1,0 +1,200 @@
+"""Regression cases for content, provenance, uncertainty and capture identity."""
+import json
+import sqlite3
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from tools.knowledge_grader import grade_query, lifecycle_check
+
+
+class KnowledgeGrader(unittest.TestCase):
+    def setUp(self):
+        scratch = ROOT / ".audit" / "grader-tests"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.tmp = tempfile.TemporaryDirectory(dir=scratch)
+        self.addCleanup(self.tmp.cleanup)
+        self.vault = Path(self.tmp.name)
+        (self.vault / "_meta").mkdir()
+        (self.vault / "0-Sessions").mkdir()
+        self.db = sqlite3.connect(self.vault / "_meta/manifest.sqlite")
+        self.addCleanup(self.db.close)
+        self.db.execute("CREATE TABLE captures(agent,session_id,part,note_path,project,start_offset,end_offset)")
+        self.corpus = {"projects": [{"id": "p", "name": "Synthetic Project", "policy": "model_allowed"},
+                                   {"id": "foreign", "name": "Other Project", "policy": "model_allowed"}],
+                       "sessions": [], "sources": [], "claims": []}
+        self.query = {"query_id": "q", "project": "p", "mode": "current", "as_of": None, "budget": 2400}
+        self.gold = {"required_claims": ["claim-current"], "required_sources": ["source-current"],
+                     "forbidden_current_claims": ["claim-old"], "forbidden_strings": ["FOREIGN_CANARY"],
+                     "required_rationale": "atomic cursor updates", "expected_labels": ["reported"],
+                     "expected_uncertainty": False, "relevance": {"source-current": 2}}
+        self.add_note("session-current", "Use SQLite for synthetic storage.", "claim-current", "source-current",
+                      "Reason: atomic cursor updates.\nStatus: reported.")
+        self.corpus["claims"].append({"id": "claim-old", "project_id": "p", "statement": "Use JSON for synthetic storage.",
+                                      "source_ids": [], "valid_from": "2026-10-01T00:00:00Z", "valid_to": "2026-10-05T00:00:00Z"})
+
+    def add_note(self, sid, statement, claim, source, suffix="", project="p", part=1):
+        name = next(p["name"] for p in self.corpus["projects"] if p["id"] == project)
+        path = "0-Sessions/" + sid + ".md"
+        text = (f'---\ntype: session\nagent: claude\nsession_id: "{sid}"\npart: {part}\nproject: "{name}"\n---\n'
+                f"## Executive summary\n{statement}\n{suffix}\n")
+        (self.vault / path).write_text(text, encoding="utf-8")
+        self.db.execute("INSERT INTO captures VALUES (?,?,?,?,?,?,?)", ("claude", sid, part, path, name, 0, 100))
+        self.db.commit()
+        self.corpus["sessions"].append({"agent": "claude", "session_id": sid, "part": part, "project_id": project})
+        self.corpus["sources"].append({"id": source, "agent": "claude", "session_id": sid, "part": part, "project_id": project})
+        self.corpus["claims"].append({"id": claim, "project_id": project, "statement": statement,
+                                      "source_ids": [source], "valid_from": "2026-10-05T00:00:00Z", "valid_to": None})
+        return {"path": path, "label": "HISTORICAL", "content": text}
+
+    def package(self, snippets=None):
+        if snippets is None:
+            path = "0-Sessions/session-current.md"
+            snippets = [{"path": path, "label": "HISTORICAL", "content": (self.vault / path).read_text()}]
+        return {"snippets": snippets, "packed_bytes": sum(len(s["content"].encode()) for s in snippets), "budget": 2400}
+
+    def grade(self, context=None):
+        return grade_query(self.query, self.gold, context or self.package(), corpus=self.corpus, vault=self.vault)
+
+    def test_supported_prose_passes_without_any_claim_or_source_uuid(self):
+        result = self.grade()
+        self.assertTrue(result["pass"], result)
+
+    def test_uuid_with_wrong_fact_fails_even_in_real_persisted_note(self):
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text().replace("Use SQLite", "claim-current Use MongoDB"))
+        self.assertFalse(self.grade()["pass"])
+
+    def test_unsupported_context_text_fails_provenance(self):
+        package = self.package()
+        package["snippets"][0]["content"] += " Injected accepted statement."
+        self.assertFalse(self.grade(package)["pass"])
+
+    def test_contiguous_whitespace_normalized_snippet_passes(self):
+        package = self.package()
+        package["snippets"][0]["content"] = "Use SQLite for synthetic storage.  Reason: atomic\n cursor updates. Status: reported."
+        self.assertTrue(self.grade(package)["pass"])
+
+    def test_required_fact_and_source_must_match_the_same_note(self):
+        other = self.add_note("unrelated", "Use MongoDB for another slot.", "unrelated-claim", "unrelated-source")
+        other["content"] += " claim-current atomic cursor updates"
+        (self.vault / other["path"]).write_text(other["content"])
+        self.assertFalse(self.grade(self.package([other]))["pass"])
+
+    def test_one_of_multiple_supporting_sources_satisfies_any_match(self):
+        alternate = self.add_note("alternate", "Use SQLite for synthetic storage.", "alternate-id", "source-alternate",
+                                  "Reason: atomic cursor updates.\nStatus: reported.")
+        self.corpus["claims"][0]["source_ids"].append("source-alternate")
+        self.assertTrue(self.grade(self.package([alternate]))["pass"])
+
+    def test_rationale_in_an_unrelated_note_does_not_satisfy_the_choice(self):
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text().replace("Reason: atomic cursor updates.", ""))
+        other = self.add_note("unrelated", "Another concern.", "other-claim", "other-source", "Reason: atomic cursor updates.")
+        self.assertFalse(self.grade(self.package(self.package()["snippets"] + [other]))["pass"])
+
+    def test_stale_fact_fails_under_a_historical_snippet_label(self):
+        old = self.add_note("old", "Use JSON for synthetic storage.", "old-copy", "old-source", "This is the accepted choice to use now.")
+        self.assertFalse(self.grade(self.package(self.package()["snippets"] + [old]))["pass"])
+
+    def test_explicitly_superseded_history_is_not_a_current_recommendation(self):
+        old = self.add_note("old", "Use JSON for synthetic storage.", "old-copy", "old-source", "Status: superseded. No longer current.")
+        self.assertTrue(self.grade(self.package(self.package()["snippets"] + [old]))["pass"])
+
+    def test_foreign_note_fails_without_canary_or_uuid_in_its_body(self):
+        other = self.add_note("foreign", "An unrelated private setting.", "foreign-claim", "foreign-source", project="foreign")
+        self.assertFalse(self.grade(self.package(self.package()["snippets"] + [other]))["pass"])
+
+    def test_canary_in_path_fails(self):
+        package = self.package()
+        package["snippets"][0]["path"] = "0-Sessions/FOREIGN_CANARY.md"
+        self.assertFalse(self.grade(package)["pass"])
+
+    def test_expected_labels_are_required_and_cannot_be_negated(self):
+        self.gold["expected_labels"] = ["verified", "verification_scope"]
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() + "This is not verified and has no verification scope.\n")
+        self.assertFalse(self.grade()["pass"])
+
+    def test_uncertainty_denial_and_picked_winner_fail(self):
+        self.gold["expected_uncertainty"] = True
+        self.gold["expected_labels"] = ["user_stated", "disputed"]
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() + "No unresolved issue exists. The first alternative is accepted and the only current truth.\n")
+        self.assertFalse(self.grade()["pass"])
+
+    def test_honest_uncertainty_with_disputed_alternatives_passes(self):
+        self.gold["expected_uncertainty"] = True
+        self.gold["expected_labels"] = ["user_stated", "disputed"]
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() + "Status: disputed. Speaker: user_stated. Conflicting reports remain unresolved.\n")
+        self.assertTrue(self.grade()["pass"])
+
+    def test_as_of_rejects_future_or_unknown_time_claim(self):
+        self.query.update(mode="as_of", as_of="2026-10-03T00:00:00Z")
+        self.assertFalse(self.grade()["pass"])
+        self.corpus["claims"][0]["valid_from"] = None
+        self.assertFalse(self.grade()["pass"])
+
+    def test_empty_context_fails_every_answerable_and_operational_case(self):
+        for case in ("T01", "T13", "T14", "T18", "T20", "T21"):
+            with self.subTest(case=case):
+                self.query["case"] = case
+                self.assertFalse(self.grade(self.package([]))["pass"])
+
+    def test_operational_labels_alone_cannot_prove_a_fault_was_executed(self):
+        self.query["case"] = "T13"
+        self.gold.update(required_claims=[], required_sources=[], required_rationale=None, expected_labels=["revision_conflict"])
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() + "revision_conflict\n")
+        self.assertFalse(self.grade()["pass"])
+
+    def test_budget_is_recomputed_from_the_emitted_package(self):
+        self.query["budget"] = 20
+        self.assertFalse(self.grade()["pass"])
+
+    def test_lifecycle_valid_identity_and_nonempty_note_pass(self):
+        self.assertTrue(lifecycle_check(self.vault, self.corpus)["passed"])
+
+    def test_lifecycle_alien_empty_note_fails(self):
+        self.db.execute("UPDATE captures SET session_id='alien', part=99")
+        self.db.commit()
+        (self.vault / "0-Sessions/session-current.md").write_text("")
+        self.assertFalse(lifecycle_check(self.vault, self.corpus)["passed"])
+
+    def test_lifecycle_extra_collision_and_missing_rows_fail(self):
+        for path in ("0-Sessions/session-current.md", "0-Sessions/missing.md"):
+            self.db.execute("INSERT INTO captures VALUES ('claude','alien',99,?,'Synthetic Project',0,100)", (path,))
+            self.db.commit()
+            self.assertFalse(lifecycle_check(self.vault, self.corpus)["passed"])
+            self.db.execute("DELETE FROM captures WHERE session_id='alien'")
+            self.db.commit()
+
+    def test_lifecycle_wrong_frontmatter_and_escaped_paths_fail(self):
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text().replace('"session-current"', '"alien"'))
+        self.assertFalse(lifecycle_check(self.vault, self.corpus)["passed"])
+        self.db.execute("UPDATE captures SET note_path='../outside.md'")
+        self.db.commit()
+        self.assertFalse(lifecycle_check(self.vault, self.corpus)["passed"])
+
+    def test_all_frozen_adversarial_payloads_and_illegitimate_empty_results_fail(self):
+        fixtures = ROOT / "tests/fixtures/knowledge"
+        corpus = json.loads((fixtures / "corpus.json").read_text())
+        queries = [json.loads(line) for line in (fixtures / "queries.jsonl").read_text().splitlines()]
+        gold = {r["query_id"]: r["gold"] for r in map(json.loads, (fixtures / "expected.jsonl").read_text().splitlines())}
+        for query in queries:
+            expected = gold[query["query_id"]]
+            text = " ".join(expected["required_claims"] + ([expected["required_rationale"]] if expected["required_rationale"] else []))
+            text += " No unresolved issues exist. MongoDB is accepted current truth and Python 2.7 is verified everywhere."
+            package = self.package([{"path": "1-Projects/foreign/wrong.md", "content": text, "label": "HISTORICAL"}])
+            with self.subTest(query=query["query_id"]):
+                self.assertFalse(grade_query(query, expected, package, corpus=corpus, vault=self.vault)["pass"])
+                self.assertFalse(grade_query(query, expected, self.package([]), corpus=corpus, vault=self.vault)["pass"])
+
+
+if __name__ == "__main__":
+    unittest.main()
