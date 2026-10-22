@@ -60,6 +60,11 @@ def _build_vault(base: Path) -> Path:
               "0-Sessions/2026/01", "Projects-Old"):
         (vault / d).mkdir(parents=True, exist_ok=True)
     shutil.copy2(FIXTURES / "_meta" / "projects.json", vault / "_meta" / "projects.json")
+    proj_text = (vault / "_meta" / "projects.json").read_text(encoding="utf-8")
+    work_json = str(work).replace("\\", "/")
+    (vault / "_meta" / "projects.json").write_text(
+        proj_text.replace("REPLACE_WORK", work_json), encoding="utf-8",
+    )
     shutil.copy2(
         FIXTURES / "1-Projects" / "demo-app" / "demo-app.md",
         vault / "1-Projects" / "demo-app" / "demo-app.md",
@@ -149,6 +154,11 @@ def _build_vault(base: Path) -> Path:
         FIXTURES / "0-Sessions" / "2026" / "01" / "session-unsorted.md",
         vault / "0-Sessions" / "2026" / "01" / "session-unsorted.md",
     )
+    for name in ("session-reattr-misfiled.md", "session-reattr-nosignal.md"):
+        content = (FIXTURES / "0-Sessions" / "2026" / "01" / name).read_text(encoding="utf-8")
+        (vault / "0-Sessions" / "2026" / "01" / name).write_text(
+            content.replace("REPLACE_WORK", work_json), encoding="utf-8",
+        )
 
     (vault / "1-Projects" / "demo-app" / "broken.md").write_text(
         "# broken\nSee [[1-Projects/Nope/Nope]] and [[1-Projects/demo-app/demo-app]].\n",
@@ -245,12 +255,50 @@ class SweepTests(unittest.TestCase):
         sessions = [s["session"] for s in plan["unsorted_sessions"]]
         self.assertTrue(any("session-unsorted" in s for s in sessions))
 
-    def test_f_re_attribution_empty_with_todo(self):
+    def test_f_misfiled_session_proposed_for_correct_project(self):
         plan = self._plan()
         ra = plan["re_attribution"]
-        self.assertEqual(ra["items"], [])
-        self.assertIn("TODO", ra["note"])
-        self.assertIn("A-5", ra["note"])
+        misfiled = [i for i in ra["items"] if "reattr-misfiled" in i["note"]]
+        self.assertEqual(len(misfiled), 1)
+        item = misfiled[0]
+        self.assertEqual(item["filed_project"], "Demo App")
+        self.assertEqual(item["proposed_project"], "My Lib")
+        self.assertEqual(item["method"], "content")
+        self.assertFalse(item["auto_apply"])
+        self.assertIn("My Lib", item["signals"])
+        self.assertGreater(item["signals"]["My Lib"]["score"], 0)
+
+    def test_f_no_signal_session_not_proposed(self):
+        plan = self._plan()
+        ra = plan["re_attribution"]
+        nosignal = [i for i in ra["items"] if "reattr-nosignal" in i["note"]]
+        self.assertEqual(nosignal, [])
+
+    def test_f_auto_apply_false_on_every_item(self):
+        plan = self._plan()
+        for item in plan["re_attribution"]["items"]:
+            self.assertFalse(item["auto_apply"])
+
+    def test_f_calibration_sample_deterministic(self):
+        plan1 = self._plan()
+        plan2 = self._plan()
+        s1 = [i["note"] for i in plan1["re_attribution"]["calibration_sample"]]
+        s2 = [i["note"] for i in plan2["re_attribution"]["calibration_sample"]]
+        self.assertEqual(s1, s2)
+        self.assertLessEqual(len(plan1["re_attribution"]["calibration_sample"]), 30)
+
+    def test_f_re_attribution_item_schema(self):
+        plan = self._plan()
+        for item in plan["re_attribution"]["items"]:
+            self.assertEqual(
+                set(item.keys()),
+                {"note", "filed_project", "proposed_project", "method", "signals", "auto_apply"},
+            )
+
+    def test_f_vault_unchanged_after_plan(self):
+        self._plan()
+        snap_after = _snapshot(self.vault)
+        self.assertEqual(self._snap_before, snap_after)
 
     def test_all_sections_present(self):
         plan = self._plan()
