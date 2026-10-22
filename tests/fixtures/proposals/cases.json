@@ -1,0 +1,140 @@
+[
+  {
+    "error_code": null,
+    "expect": "valid",
+    "file": "valid_minimal.json",
+    "reason": "minimal reported decision"
+  },
+  {
+    "error_code": null,
+    "expect": "valid",
+    "file": "valid_reused_entity.json",
+    "reason": "two claims share one entity ref"
+  },
+  {
+    "error_code": null,
+    "expect": "valid",
+    "file": "valid_existing_claim_relation.json",
+    "reason": "existing claim relation carries expected_revision"
+  },
+  {
+    "error_code": null,
+    "expect": "valid",
+    "file": "valid_truncated_source.json",
+    "reason": "source excerpt is truncated; evidence offsets address the excerpt"
+  },
+  {
+    "error_code": null,
+    "expect": "valid",
+    "file": "valid_authority_injection.json",
+    "reason": "authority stays reported"
+  },
+  {
+    "error_code": "unknown_key",
+    "expect": "error",
+    "file": "error_unknown_top_level_key.json",
+    "reason": "unknown top-level key"
+  },
+  {
+    "error_code": "unknown_key",
+    "expect": "error",
+    "file": "error_claim_status.json",
+    "reason": "claim attempts to set status"
+  },
+  {
+    "error_code": "unknown_key",
+    "expect": "error",
+    "file": "error_claim_evidence_level.json",
+    "reason": "claim attempts to set evidence_level"
+  },
+  {
+    "error_code": "unknown_key",
+    "expect": "error",
+    "file": "error_claim_speaker.json",
+    "reason": "claim attempts to set speaker"
+  },
+  {
+    "error_code": "unknown_key",
+    "expect": "error",
+    "file": "error_claim_user_stated.json",
+    "reason": "claim attempts to set user_stated"
+  },
+  {
+    "error_code": "unknown_key",
+    "expect": "error",
+    "file": "error_claim_quote_sha.json",
+    "reason": "claim attempts to set quote_sha"
+  },
+  {
+    "error_code": "source_not_in_input",
+    "expect": "error",
+    "file": "error_fabricated_source.json",
+    "reason": "source_id is outside the input group"
+  },
+  {
+    "error_code": "evidence_out_of_range",
+    "expect": "error",
+    "file": "error_evidence_out_of_range.json",
+    "reason": "evidence end exceeds excerpt code-point length"
+  },
+  {
+    "error_code": "invalid_offsets",
+    "expect": "error",
+    "file": "error_end_before_start.json",
+    "reason": "evidence end precedes start"
+  },
+  {
+    "error_code": "missing_supports",
+    "expect": "error",
+    "file": "error_no_supports_span.json",
+    "reason": "claim has no supports evidence span"
+  },
+  {
+    "error_code": "forbidden_relation",
+    "expect": "error",
+    "file": "error_supersedes_relation.json",
+    "reason": "supersedes is review-only"
+  },
+  {
+    "error_code": "invalid_ref",
+    "expect": "error",
+    "file": "error_bad_ref_pattern.json",
+    "reason": "ref contains uppercase character"
+  },
+  {
+    "error_code": "unknown_subject",
+    "expect": "error",
+    "file": "error_subject_without_entity.json",
+    "reason": "subject_ref does not name an entity"
+  },
+  {
+    "error_code": "invalid_temporal",
+    "expect": "error",
+    "file": "error_valid_from_unknown_precision.json",
+    "reason": "valid_from is non-null with unknown precision"
+  },
+  {
+    "error_code": "closed_interval_missing_end",
+    "expect": "error",
+    "file": "error_closed_end_without_valid_to.json",
+    "reason": "closed end state requires valid_to"
+  },
+  {
+    "error_code": "float_value",
+    "expect": "error",
+    "file": "error_floating_point_value.json",
+    "reason": "version 1 factual values cannot be floating point"
+  },
+  {
+    "error_code": "payload_too_large",
+    "expect": "error",
+    "file": "error_oversized_payload.json",
+    "reason": "valid JSON exceeds 64 KiB by whitespace only"
+  },
+  {
+    "error_code": "invalid_json",
+    "expect": "error",
+    "file": "error_non_json_text.json",
+    "reason": "response is not JSON text"
+  }
+]

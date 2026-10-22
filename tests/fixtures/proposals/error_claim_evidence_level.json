@@ -1,0 +1,37 @@
+{
+  "claims": [
+    {
+      "evidence": [
+        {
+          "end": 34,
+          "role": "supports",
+          "source_id": "12345678-1234-5678-1234-567812345678",
+          "start": 0
+        }
+      ],
+      "evidence_level": "verified",
+      "kind": "decision",
+      "predicate": "storage_backend",
+      "rationale": "Synthetic transactional cursor updates.",
+      "ref": "c1",
+      "statement": "The synthetic project uses SQLite.",
+      "subject_ref": "e1",
+      "valid_end_state": "unknown",
+      "valid_from": null,
+      "valid_precision": "unknown",
+      "valid_to": null,
+      "value": "sqlite"
+    }
+  ],
+  "entities": [
+    {
+      "aliases": [],
+      "canonical_key": "storage",
+      "display_name": "Storage",
+      "kind": "component",
+      "ref": "e1"
+    }
+  ],
+  "relations": [],
+  "schema_version": 1
+}
