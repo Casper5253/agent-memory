@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t04-dev-01",
+    "id": "4e3f008e-1c12-5f27-95be-e2a3a726b6a9",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "4e3f008e-1c12-5f27-95be-e2a3a726b6a9-0-user",
+        "role": "user",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "Use SQLite for lattice-04-01 storage. Reason: atomic cursor updates for lattice-04-01.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "4e3f008e-1c12-5f27-95be-e2a3a726b6a9-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "The source says: Use SQLite for lattice-04-01 storage. Reason: atomic cursor updates for lattice-04-01.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t04-dev-01/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t04-dev-01/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t04-dev-01/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

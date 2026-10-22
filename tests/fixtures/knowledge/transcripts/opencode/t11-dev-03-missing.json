@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t11-dev-03",
+    "id": "90d9c52f-2b23-5b26-8872-75672ccd0f3e",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "90d9c52f-2b23-5b26-8872-75672ccd0f3e-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record the evidence for lattice-11-03 without adding facts.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "90d9c52f-2b23-5b26-8872-75672ccd0f3e-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "lattice-11-03 release is 17.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t11-dev-03/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t11-dev-03/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t11-dev-03/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t16-dev-01",
+    "id": "5b111830-0e9f-5335-adc3-488210f9b1fd",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "5b111830-0e9f-5335-adc3-488210f9b1fd-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record milestone 1 for lattice-16-01.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "5b111830-0e9f-5335-adc3-488210f9b1fd-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "lattice-16-01 opencode evidence part 1 records milestone 1.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-01/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-01/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-01/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

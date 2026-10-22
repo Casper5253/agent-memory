@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t10-sealed-07",
+    "id": "3de7267d-856f-5c08-986a-3c4b0aa535ff",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "3de7267d-856f-5c08-986a-3c4b0aa535ff-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Use YAML for quartz-10-07 storage. Reason: simple single-writer bootstrap.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "3de7267d-856f-5c08-986a-3c4b0aa535ff-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "The source says: Use YAML for quartz-10-07 storage. Reason: simple single-writer bootstrap.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t10-sealed-07/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t10-sealed-07/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t10-sealed-07/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

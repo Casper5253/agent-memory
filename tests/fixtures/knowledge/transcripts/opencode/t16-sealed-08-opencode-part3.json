@@ -1,0 +1,180 @@
+{
+  "info": {
+    "directory": "{WORK}/t16-sealed-08",
+    "id": "1fc6b70d-f338-581f-9d57-488086b5bdc0",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "1fc6b70d-f338-581f-9d57-488086b5bdc0-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record milestone 1 for quartz-16-08.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "1fc6b70d-f338-581f-9d57-488086b5bdc0-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "quartz-16-08 opencode evidence part 1 records milestone 1.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-08/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-08/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-08/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "1fc6b70d-f338-581f-9d57-488086b5bdc0-1-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record milestone 2 for quartz-16-08.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "1fc6b70d-f338-581f-9d57-488086b5bdc0-1-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "quartz-16-08 opencode evidence part 2 records milestone 2.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-08/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-08/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-08/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "1fc6b70d-f338-581f-9d57-488086b5bdc0-2-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record milestone 3 for quartz-16-08.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "1fc6b70d-f338-581f-9d57-488086b5bdc0-2-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "quartz-16-08 opencode evidence part 3 records milestone 3.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-08/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-08/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-08/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

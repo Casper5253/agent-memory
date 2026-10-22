@@ -1,0 +1,4 @@
+{"payload":{"cwd":"{WORK}/t17-dev-02","id":"43c58360-035c-5cb8-8d7f-eb84456a63c5"},"timestamp":"2026-10-01T09:00:00Z","type":"session_meta"}
+{"payload":{"item":{"content":[{"text":"Record the evidence for lattice-17-02 without adding facts.","type":"text"}],"type":"UserMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"changes":{"{WORK}/t17-dev-02/evidence.md":{"type":"update"},"{WORK}/t17-dev-02/questions.md":{"type":"update"},"{WORK}/t17-dev-02/record.md":{"type":"update"}},"type":"FileChange"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"content":[{"text":"lattice-17-02 local policy note stays on this device.","type":"text"}],"phase":"final_answer","type":"AgentMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}

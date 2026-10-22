@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/unrelated-library",
+    "id": "eaa6a77d-bc15-5797-ae9e-bb24d06d809d",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "eaa6a77d-bc15-5797-ae9e-bb24d06d809d-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Catalogue the neutral library note.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "eaa6a77d-bc15-5797-ae9e-bb24d06d809d-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Library note 008 mentions SQLite as a label in an unrelated pottery catalogue; shelf marker 1709.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/unrelated-library/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/unrelated-library/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/unrelated-library/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

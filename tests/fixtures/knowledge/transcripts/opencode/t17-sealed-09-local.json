@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t17-sealed-09",
+    "id": "1740f21c-2b38-5abc-a442-5d98629a5d7e",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "1740f21c-2b38-5abc-a442-5d98629a5d7e-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record the evidence for quartz-17-09 without adding facts.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "1740f21c-2b38-5abc-a442-5d98629a5d7e-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "quartz-17-09 local policy note stays on this device.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t17-sealed-09/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t17-sealed-09/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t17-sealed-09/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t22-dev-01",
+    "id": "b88328a2-addf-5721-94c0-02a6d55c5061",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "b88328a2-addf-5721-94c0-02a6d55c5061-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record the evidence for lattice-22-01 without adding facts.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "b88328a2-addf-5721-94c0-02a6d55c5061-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "lattice-22-01 documents a storage prototype only; no deployment location was recorded.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t22-dev-01/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t22-dev-01/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t22-dev-01/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

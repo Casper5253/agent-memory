@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t15-dev-02",
+    "id": "8b2e7110-ef1d-5edc-a0b4-3a414a98f92c",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "8b2e7110-ef1d-5edc-a0b4-3a414a98f92c-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record the evidence for lattice-15-02 without adding facts.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "8b2e7110-ef1d-5edc-a0b4-3a414a98f92c-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "lattice-15-02 related constraint 14 preserves ordering.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t15-dev-02/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t15-dev-02/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t15-dev-02/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

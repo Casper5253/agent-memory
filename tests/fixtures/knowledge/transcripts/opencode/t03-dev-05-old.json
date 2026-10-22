@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t03-dev-05",
+    "id": "983fb04b-508d-5c98-9738-2bf05bba2e38",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "983fb04b-508d-5c98-9738-2bf05bba2e38-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Use JSON for lattice-03-05 storage. Reason: simple single-writer bootstrap.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "983fb04b-508d-5c98-9738-2bf05bba2e38-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "The source says: Use JSON for lattice-03-05 storage. Reason: simple single-writer bootstrap.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t03-dev-05/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t03-dev-05/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t03-dev-05/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

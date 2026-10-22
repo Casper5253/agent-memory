@@ -1,0 +1,76 @@
+{
+  "info": {
+    "directory": "{WORK}/t23-dev-03",
+    "id": "f413a4e3-6e90-5f7f-874d-4402330e8f1a",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "f413a4e3-6e90-5f7f-874d-4402330e8f1a-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record the evidence for lattice-23-03 without adding facts.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "f413a4e3-6e90-5f7f-874d-4402330e8f1a-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "A test command was attempted for lattice-23-03; no success output was captured.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t23-dev-03/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t23-dev-03/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t23-dev-03/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "command": "python -m unittest synthetic_lattice_23_03"
+            },
+            "status": "running"
+          },
+          "tool": "bash",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

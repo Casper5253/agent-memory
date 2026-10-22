@@ -58,6 +58,8 @@ There are 27 cases with 10 variants each: five `dev` and five `sealed`. Each cas
 
 Claim and source IDs are fixture-local stable strings. For baseline prose, the grader maps a source ID to a session note by `session_id` and part (any-match mapping, 06 Metrics). `forbidden_strings` holds isolation canaries and injected text that must never appear in a context package.
 
+Unreviewed same-slot cases grade honest uncertainty with disputed alternatives, not a picked winner; as-of queries include only temporally eligible alternatives.
+
 ## Evaluator output
 
 `--output DIR` receives `result.json`, `per_query.csv` and `report.md`. `result.json` holds the commit, Python and SQLite versions, QMD status (`unavailable`, `empty`, or `ok` with version), tokenizer ID or `byte-fallback`, fixture hashes, counters per metric, costs (`null` when unknown, never `0`), per-query outcomes, and the verdict. Correctness pass and adoption pass are separate fields. The exit codes are 0 for pass, 1 for a failed adoption gate, 2 for invalid setup and 3 for inconclusive (06).

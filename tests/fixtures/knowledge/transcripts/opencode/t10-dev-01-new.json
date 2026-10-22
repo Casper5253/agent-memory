@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t10-dev-01",
+    "id": "d8cabab6-fd48-518a-b232-19669cf5a62d",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "d8cabab6-fd48-518a-b232-19669cf5a62d-0-user",
+        "role": "user",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "Use SQLite for lattice-10-01 storage. Reason: atomic cursor updates for lattice-10-01.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "d8cabab6-fd48-518a-b232-19669cf5a62d-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "The source says: Use SQLite for lattice-10-01 storage. Reason: atomic cursor updates for lattice-10-01.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t10-dev-01/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t10-dev-01/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t10-dev-01/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

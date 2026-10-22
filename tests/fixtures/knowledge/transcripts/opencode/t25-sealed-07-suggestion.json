@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t25-sealed-07",
+    "id": "190039ac-368b-5e51-8735-edbbc6072731",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "190039ac-368b-5e51-8735-edbbc6072731-0-user",
+        "role": "user",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record the evidence for quartz-25-07 without adding facts.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "190039ac-368b-5e51-8735-edbbc6072731-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "I suggest Redis instead for quartz-25-07 storage.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t25-sealed-07/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t25-sealed-07/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t25-sealed-07/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

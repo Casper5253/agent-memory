@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t17-dev-03-excluded",
+    "id": "dbf6c462-1142-5cea-8052-2fb64a6a9806",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "dbf6c462-1142-5cea-8052-2fb64a6a9806-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Keep excluded material out of capture.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "dbf6c462-1142-5cea-8052-2fb64a6a9806-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "CANARY_EXCLUDED_T17_DEV_03",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t17-dev-03-excluded/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t17-dev-03-excluded/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t17-dev-03-excluded/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

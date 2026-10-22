@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t04-sealed-07",
+    "id": "0649a142-88ff-5461-8f8b-8ef1f37c01b3",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "0649a142-88ff-5461-8f8b-8ef1f37c01b3-0-user",
+        "role": "user",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "Use Postgres for quartz-04-07 storage. Reason: concurrent writer isolation for quartz-04-07.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "0649a142-88ff-5461-8f8b-8ef1f37c01b3-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "The source says: Use Postgres for quartz-04-07 storage. Reason: concurrent writer isolation for quartz-04-07.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t04-sealed-07/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t04-sealed-07/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t04-sealed-07/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

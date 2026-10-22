@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t16-sealed-09",
+    "id": "fc5c738c-cd2b-5f0f-9174-46abcefd9f58",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "fc5c738c-cd2b-5f0f-9174-46abcefd9f58-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record milestone 1 for quartz-16-09.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "fc5c738c-cd2b-5f0f-9174-46abcefd9f58-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "quartz-16-09 opencode evidence part 1 records milestone 1.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-09/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-09/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-09/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

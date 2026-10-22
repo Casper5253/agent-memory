@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t07-dev-04",
+    "id": "0e74ab40-7dc9-5c51-a1bd-80e61b086394",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "0e74ab40-7dc9-5c51-a1bd-80e61b086394-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "cache.py uses SQLite for lattice-07-04. Reason: atomic cursor updates for lattice-07-04.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "0e74ab40-7dc9-5c51-a1bd-80e61b086394-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "The source says: cache.py uses SQLite for lattice-07-04. Reason: atomic cursor updates for lattice-07-04.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t07-dev-04/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t07-dev-04/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t07-dev-04/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

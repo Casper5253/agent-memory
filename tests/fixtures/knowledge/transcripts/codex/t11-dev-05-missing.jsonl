@@ -1,0 +1,4 @@
+{"payload":{"cwd":"{WORK}/t11-dev-05","id":"9b6865dd-0380-56d4-b14e-64dec7fd9d00"},"timestamp":"2026-10-01T09:00:00Z","type":"session_meta"}
+{"payload":{"item":{"content":[{"text":"Record the evidence for lattice-11-05 without adding facts.","type":"text"}],"type":"UserMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"changes":{"{WORK}/t11-dev-05/evidence.md":{"type":"update"},"{WORK}/t11-dev-05/questions.md":{"type":"update"},"{WORK}/t11-dev-05/record.md":{"type":"update"}},"type":"FileChange"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"content":[{"text":"lattice-11-05 release is 17.","type":"text"}],"phase":"final_answer","type":"AgentMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}

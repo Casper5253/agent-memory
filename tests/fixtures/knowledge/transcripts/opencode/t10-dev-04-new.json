@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t10-dev-04",
+    "id": "92f77980-56b9-5c41-b4f5-0789c0c8acc3",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "92f77980-56b9-5c41-b4f5-0789c0c8acc3-0-user",
+        "role": "user",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "Use SQLite for lattice-10-04 storage. Reason: atomic cursor updates for lattice-10-04.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "92f77980-56b9-5c41-b4f5-0789c0c8acc3-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "The source says: Use SQLite for lattice-10-04 storage. Reason: atomic cursor updates for lattice-10-04.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t10-dev-04/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t10-dev-04/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t10-dev-04/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

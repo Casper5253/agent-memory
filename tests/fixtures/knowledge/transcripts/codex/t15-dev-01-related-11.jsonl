@@ -1,0 +1,4 @@
+{"payload":{"cwd":"{WORK}/t15-dev-01","id":"38b1da45-17bd-58a3-9cb2-68c27d9f6dcf"},"timestamp":"2026-10-01T09:00:00Z","type":"session_meta"}
+{"payload":{"item":{"content":[{"text":"Record the evidence for lattice-15-01 without adding facts.","type":"text"}],"type":"UserMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"changes":{"{WORK}/t15-dev-01/evidence.md":{"type":"update"},"{WORK}/t15-dev-01/questions.md":{"type":"update"},"{WORK}/t15-dev-01/record.md":{"type":"update"}},"type":"FileChange"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"content":[{"text":"lattice-15-01 related constraint 11 preserves ordering.","type":"text"}],"phase":"final_answer","type":"AgentMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}

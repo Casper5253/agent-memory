@@ -1,0 +1,76 @@
+{
+  "info": {
+    "directory": "{WORK}/t23-sealed-06",
+    "id": "f8b0c5f5-c553-55dd-8a1f-99e84ad892b4",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "f8b0c5f5-c553-55dd-8a1f-99e84ad892b4-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record the evidence for quartz-23-06 without adding facts.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "f8b0c5f5-c553-55dd-8a1f-99e84ad892b4-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "A test command was attempted for quartz-23-06; no success output was captured.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t23-sealed-06/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t23-sealed-06/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t23-sealed-06/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "command": "python -m unittest synthetic_quartz_23_06"
+            },
+            "status": "running"
+          },
+          "tool": "bash",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

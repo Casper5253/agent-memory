@@ -1,0 +1,180 @@
+{
+  "info": {
+    "directory": "{WORK}/t16-dev-05",
+    "id": "4c6abeb4-431c-5185-8ee7-9bd5975d1484",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "4c6abeb4-431c-5185-8ee7-9bd5975d1484-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record milestone 1 for lattice-16-05.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "4c6abeb4-431c-5185-8ee7-9bd5975d1484-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "lattice-16-05 opencode evidence part 1 records milestone 1.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-05/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-05/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-05/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "4c6abeb4-431c-5185-8ee7-9bd5975d1484-1-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record milestone 2 for lattice-16-05.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "4c6abeb4-431c-5185-8ee7-9bd5975d1484-1-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "lattice-16-05 opencode evidence part 2 records milestone 2.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-05/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-05/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-05/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "4c6abeb4-431c-5185-8ee7-9bd5975d1484-2-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record milestone 3 for lattice-16-05.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "4c6abeb4-431c-5185-8ee7-9bd5975d1484-2-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "lattice-16-05 opencode evidence part 3 records milestone 3.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-05/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-05/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-dev-05/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

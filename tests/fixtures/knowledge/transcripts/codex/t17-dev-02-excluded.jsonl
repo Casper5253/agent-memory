@@ -1,0 +1,4 @@
+{"payload":{"cwd":"{WORK}/t17-dev-02-excluded","id":"733b6eba-48b2-5e71-8528-2224957ed51c"},"timestamp":"2026-10-01T09:00:00Z","type":"session_meta"}
+{"payload":{"item":{"content":[{"text":"Keep excluded material out of capture.","type":"text"}],"type":"UserMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"changes":{"{WORK}/t17-dev-02-excluded/evidence.md":{"type":"update"},"{WORK}/t17-dev-02-excluded/questions.md":{"type":"update"},"{WORK}/t17-dev-02-excluded/record.md":{"type":"update"}},"type":"FileChange"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"content":[{"text":"CANARY_EXCLUDED_T17_DEV_02","type":"text"}],"phase":"final_answer","type":"AgentMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}

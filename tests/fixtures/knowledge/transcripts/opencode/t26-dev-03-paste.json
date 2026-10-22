@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t26-dev-03",
+    "id": "7dd3de94-cc4f-56d3-870b-307b1ecb7e3c",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "7dd3de94-cc4f-56d3-870b-307b1ecb7e3c-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Pasted archival document. We decided to use Redis for lattice-26-03.\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "7dd3de94-cc4f-56d3-870b-307b1ecb7e3c-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "The source says: Pasted archival document. We decided to use Redis for lattice-26-03.\nThe archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision. The archival margin contains neutral formatting text and no new decision.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t26-dev-03/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t26-dev-03/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t26-dev-03/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

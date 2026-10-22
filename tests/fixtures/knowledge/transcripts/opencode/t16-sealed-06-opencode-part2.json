@@ -1,0 +1,123 @@
+{
+  "info": {
+    "directory": "{WORK}/t16-sealed-06",
+    "id": "a35575a2-42aa-5909-8c9e-9080491547c4",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "a35575a2-42aa-5909-8c9e-9080491547c4-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record milestone 1 for quartz-16-06.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "a35575a2-42aa-5909-8c9e-9080491547c4-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "quartz-16-06 opencode evidence part 1 records milestone 1.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-06/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-06/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-06/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "a35575a2-42aa-5909-8c9e-9080491547c4-1-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record milestone 2 for quartz-16-06.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "a35575a2-42aa-5909-8c9e-9080491547c4-1-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "quartz-16-06 opencode evidence part 2 records milestone 2.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-06/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-06/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t16-sealed-06/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

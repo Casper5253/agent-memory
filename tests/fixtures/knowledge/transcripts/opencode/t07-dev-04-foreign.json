@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t07-dev-04-foreign",
+    "id": "b4547f47-212c-5c6a-8084-8b09d79a94f9",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "b4547f47-212c-5c6a-8084-8b09d79a94f9-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record the cache policy.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "b4547f47-212c-5c6a-8084-8b09d79a94f9-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "cache.py must avoid SQLite. CANARY_FOREIGN_T07_DEV_04",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t07-dev-04-foreign/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t07-dev-04-foreign/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t07-dev-04-foreign/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

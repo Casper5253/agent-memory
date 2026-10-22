@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t03-dev-05",
+    "id": "f6fcd379-699d-52e1-9e15-abbeee1c5279",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "f6fcd379-699d-52e1-9e15-abbeee1c5279-0-user",
+        "role": "user",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "Use SQLite for lattice-03-05 storage. Reason: atomic cursor updates for lattice-03-05.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "f6fcd379-699d-52e1-9e15-abbeee1c5279-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1791190800000
+        }
+      },
+      "parts": [
+        {
+          "text": "The source says: Use SQLite for lattice-03-05 storage. Reason: atomic cursor updates for lattice-03-05.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t03-dev-05/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t03-dev-05/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t03-dev-05/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

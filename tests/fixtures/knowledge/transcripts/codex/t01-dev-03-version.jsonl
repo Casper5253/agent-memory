@@ -1,0 +1,4 @@
+{"payload":{"cwd":"{WORK}/t01-dev-03","id":"4b665932-ad59-5e6c-b9db-cf17f0076b03"},"timestamp":"2026-10-01T09:00:00Z","type":"session_meta"}
+{"payload":{"item":{"content":[{"text":"Record the evidence for lattice-01-03 without adding facts.","type":"text"}],"type":"UserMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"changes":{"{WORK}/t01-dev-03/evidence.md":{"type":"update"},"{WORK}/t01-dev-03/questions.md":{"type":"update"},"{WORK}/t01-dev-03/record.md":{"type":"update"}},"type":"FileChange"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"content":[{"text":"lattice-01-03 source declares Python 3.11.8; scope is the registered build document at revision fd3106e66b370ec1db8c10fecccb1aec7f34b59e.","type":"text"}],"phase":"final_answer","type":"AgentMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}

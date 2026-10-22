@@ -1,0 +1,5 @@
+{"payload":{"cwd":"{WORK}/t23-dev-02","id":"18e6a66d-a9ef-5d97-99c2-cf3781e295f9"},"timestamp":"2026-10-01T09:00:00Z","type":"session_meta"}
+{"payload":{"item":{"content":[{"text":"Record the evidence for lattice-23-02 without adding facts.","type":"text"}],"type":"UserMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"changes":{"{WORK}/t23-dev-02/evidence.md":{"type":"update"},"{WORK}/t23-dev-02/questions.md":{"type":"update"},"{WORK}/t23-dev-02/record.md":{"type":"update"}},"type":"FileChange"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"command":"python -m unittest synthetic_lattice_23_02","type":"CommandExecution"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"content":[{"text":"A test command was attempted for lattice-23-02; no success output was captured.","type":"text"}],"phase":"final_answer","type":"AgentMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}

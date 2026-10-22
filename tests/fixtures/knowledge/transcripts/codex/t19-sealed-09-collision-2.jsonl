@@ -1,0 +1,4 @@
+{"payload":{"cwd":"{WORK}/t19-sealed-09","id":"00000002-0000-4000-8000-0000f4104c22"},"timestamp":"2026-10-01T09:00:00Z","type":"session_meta"}
+{"payload":{"item":{"content":[{"text":"Record the evidence for quartz-19-09 without adding facts.","type":"text"}],"type":"UserMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"changes":{"{WORK}/t19-sealed-09/evidence.md":{"type":"update"},"{WORK}/t19-sealed-09/questions.md":{"type":"update"},"{WORK}/t19-sealed-09/record.md":{"type":"update"}},"type":"FileChange"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"content":[{"text":"quartz-19-09 collision record 2 has unique payload 202.","type":"text"}],"phase":"final_answer","type":"AgentMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}

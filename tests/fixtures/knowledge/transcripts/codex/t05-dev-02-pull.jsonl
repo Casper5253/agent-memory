@@ -1,0 +1,4 @@
+{"payload":{"cwd":"{WORK}/t05-dev-02","id":"0dc0dfbe-e174-5ce1-8f38-8dfd5e9c0398"},"timestamp":"2026-10-01T09:00:00Z","type":"session_meta"}
+{"payload":{"item":{"content":[{"text":"Record the evidence for lattice-05-02 without adding facts.","type":"text"}],"type":"UserMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"changes":{"{WORK}/t05-dev-02/evidence.md":{"type":"update"},"{WORK}/t05-dev-02/questions.md":{"type":"update"},"{WORK}/t05-dev-02/record.md":{"type":"update"}},"type":"FileChange"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"content":[{"text":"lattice-05-02 api_mode is pull.","type":"text"}],"phase":"final_answer","type":"AgentMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}

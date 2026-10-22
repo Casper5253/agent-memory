@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t25-sealed-10",
+    "id": "81d34af1-2d83-5477-8306-3af27f4dbc79",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "81d34af1-2d83-5477-8306-3af27f4dbc79-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Use Postgres for quartz-25-10 storage. Reason: concurrent writer isolation for quartz-25-10.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "81d34af1-2d83-5477-8306-3af27f4dbc79-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "The source says: Use Postgres for quartz-25-10 storage. Reason: concurrent writer isolation for quartz-25-10.",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t25-sealed-10/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t25-sealed-10/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t25-sealed-10/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

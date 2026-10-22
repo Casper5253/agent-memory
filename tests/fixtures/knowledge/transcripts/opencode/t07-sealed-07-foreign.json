@@ -1,0 +1,66 @@
+{
+  "info": {
+    "directory": "{WORK}/t07-sealed-07-foreign",
+    "id": "e720ea79-eb1b-592c-a246-2a544c55ff77",
+    "title": "Synthetic evidence record"
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "e720ea79-eb1b-592c-a246-2a544c55ff77-0-user",
+        "role": "user",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "Record the cache policy.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "e720ea79-eb1b-592c-a246-2a544c55ff77-0-assistant",
+        "role": "assistant",
+        "time": {
+          "created": 1790845200000
+        }
+      },
+      "parts": [
+        {
+          "text": "cache.py must avoid Postgres. CANARY_FOREIGN_T07_SEALED_07",
+          "type": "text"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t07-sealed-07-foreign/evidence.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t07-sealed-07-foreign/record.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        },
+        {
+          "state": {
+            "input": {
+              "filePath": "{WORK}/t07-sealed-07-foreign/questions.md"
+            }
+          },
+          "tool": "edit",
+          "type": "tool"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+{"payload":{"cwd":"{WORK}/t07-sealed-09-foreign","id":"add8d3b3-409d-5026-88f0-23d40db88b80"},"timestamp":"2026-10-01T09:00:00Z","type":"session_meta"}
+{"payload":{"item":{"content":[{"text":"Record the cache policy.","type":"text"}],"type":"UserMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"changes":{"{WORK}/t07-sealed-09-foreign/evidence.md":{"type":"update"},"{WORK}/t07-sealed-09-foreign/questions.md":{"type":"update"},"{WORK}/t07-sealed-09-foreign/record.md":{"type":"update"}},"type":"FileChange"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"content":[{"text":"cache.py must avoid Postgres. CANARY_FOREIGN_T07_SEALED_09","type":"text"}],"phase":"final_answer","type":"AgentMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}

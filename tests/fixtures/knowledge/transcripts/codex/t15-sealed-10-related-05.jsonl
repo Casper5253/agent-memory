@@ -1,0 +1,4 @@
+{"payload":{"cwd":"{WORK}/t15-sealed-10","id":"30d0b31d-d71e-5cab-ae8d-ae6868fde6f5"},"timestamp":"2026-10-01T09:00:00Z","type":"session_meta"}
+{"payload":{"item":{"content":[{"text":"Record the evidence for quartz-15-10 without adding facts.","type":"text"}],"type":"UserMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"changes":{"{WORK}/t15-sealed-10/evidence.md":{"type":"update"},"{WORK}/t15-sealed-10/questions.md":{"type":"update"},"{WORK}/t15-sealed-10/record.md":{"type":"update"}},"type":"FileChange"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
+{"payload":{"item":{"content":[{"text":"quartz-15-10 related constraint 5 preserves ordering.","type":"text"}],"phase":"final_answer","type":"AgentMessage"},"type":"item_completed"},"timestamp":"2026-10-01T09:00:00Z","type":"event_msg"}
