@@ -12,6 +12,8 @@ The full suite passed 90 tests. The completed evaluator returned exit 1 with ver
 
 Observed versions were Python 3.11.9, SQLite 3.45.1 and qmd 2.8.3 (facd35e). QMD indexing returned `{"collections_added": ["vault-projects", "vault-sessions", "vault-areas", "vault-resources", "vault-archive"], "update": 0}` and its isolated SQLite database contained 1211 active documents before temporary-state cleanup.
 
+Hashes describe the measured working-tree bytes. Git may normalize text line endings without changing the measured Python source.
+
 ## Query formulation and baseline behavior
 
 Primary searches use the frozen version 1 rule in `tools/knowledge_grader.py`: lowercase, remove the fixed stopword set, and retain the first four remaining words. The same rule is specified for every comparison arm. It does not inspect gold, project metadata or fixture entity patterns. The exact terms and full stopword set are in `result.json`. Each query also receives one unchanged full-question search. Neither form retries or substitutes terms. See [the fixture interface](fixture-schema.md#query-formulation).
