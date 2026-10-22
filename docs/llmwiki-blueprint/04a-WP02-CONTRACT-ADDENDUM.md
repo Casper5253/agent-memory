@@ -10,12 +10,9 @@ All generated IDs are lowercase UUIDv5 strings in the namespace `NS = uuid5(NAME
 |---|---|
 | projects | caller-supplied stable ID (from `knowledge_project_ids`) |
 | imports | agent, session_id, part, capture_sha |
-| sources | project_id, agent, session_id, part, cursor_kind, start, end, span_ordinal, content_sha |
-| entities | project_id, kind, canonical_key |
 | claims | project_id, content_sha |
-| proposals | source_id, extractor_version, prompt_version, base_revision, input_sha |
 
-A claim ID is derived from its content identity, so an exact duplicate resolves to the existing claim and only attaches evidence (04 "exact duplicate").
+Source, entity and proposal identities follow the canonical arrays in 04, which take precedence. A claim ID is derived from its content identity, so an exact duplicate resolves to the existing claim and only attaches evidence (04 "exact duplicate").
 
 ## 1. Capture import
 
