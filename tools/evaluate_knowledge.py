@@ -1,4 +1,4 @@
-"""WP-00 knowledge evaluation harness. Baseline arm only.
+"""Frozen knowledge evaluation harness for baseline and reliability checkouts.
 
 Usage:
     python -I tools/evaluate_knowledge.py --arm baseline --fixtures tests/fixtures/knowledge --output .audit/b0
@@ -483,7 +483,7 @@ def get_commit():
         return "unknown"
 
 
-def run_baseline(fixtures_dir, output_dir):
+def run_baseline(fixtures_dir, output_dir, arm="baseline"):
     loaded = load_fixtures(fixtures_dir)
     if loaded[5] is not None:
         result = {"verdict": "setup_error", "errors": loaded[5], "correctness_pass": False, "adoption_pass": False}
@@ -549,7 +549,7 @@ def run_baseline(fixtures_dir, output_dir):
                           "raw": summarize([r["raw"] for r in outcomes if r["case"] == case])} for case in sorted({q["case"] for q in queries})}
         correctness = bool(outcomes) and all(row["pass"] for row in outcomes) and lifecycle["passed"]
         exit_code = EXIT_FAIL if counters["quality_failed"] or not lifecycle["passed"] else EXIT_INCONCLUSIVE
-        result = {"commit": get_commit(), "evaluator_sha256": sha256_file(Path(__file__)),
+        result = {"arm": arm, "commit": get_commit(), "evaluator_sha256": sha256_file(Path(__file__)),
                   "python_version": sys.version.split()[0], "sqlite_version": sqlite3.sqlite_version,
                   "temp_dir": str(tmp), "qmd_index_path": str(database), "qmd_config_dir": str(tmp / "config/qmd"),
                   "qmd_status": qmd_status, "qmd_version": qmd_version, "index": index_result,
@@ -560,7 +560,7 @@ def run_baseline(fixtures_dir, output_dir):
                   "lifecycle": lifecycle, "lifecycle_failure": not lifecycle["passed"], "per_query": outcomes,
                   "correctness_pass": correctness, "adoption_pass": False, "exit_code": exit_code,
                   "verdict": "fail" if exit_code == EXIT_FAIL else "inconclusive",
-                  "limitations": ["B0 only; no candidate comparison or adoption decision.",
+                  "limitations": ["Reliability replay of this checkout; no knowledge-arm adoption decision." if arm == "reliability" else "B0 only; no candidate comparison or adoption decision.",
                                   "Fault execution is unmeasured and excluded from quality counts.",
                                   "Frozen replay summaries and no-op consolidation do not establish model extraction or normal current-state quality.",
                                   "One correctness run; no latency, cost, semantic or exact-token performance claim.",
@@ -571,16 +571,12 @@ def run_baseline(fixtures_dir, output_dir):
 
 def main():
     p = argparse.ArgumentParser(description="WP-00 knowledge evaluation harness")
-    p.add_argument("--arm", choices=["baseline"], required=True)
+    p.add_argument("--arm", choices=["baseline", "reliability"], required=True)
     p.add_argument("--fixtures", required=True)
     p.add_argument("--output", required=True)
     args = p.parse_args()
 
-    if args.arm != "baseline":
-        print(f"arm {args.arm} not implemented", file=sys.stderr)
-        sys.exit(EXIT_SETUP)
-
-    sys.exit(run_baseline(args.fixtures, args.output))
+    sys.exit(run_baseline(args.fixtures, args.output, arm=args.arm))
 
 
 if __name__ == "__main__":
