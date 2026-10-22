@@ -202,6 +202,17 @@ class SweepTests(unittest.TestCase):
         snap_after = _snapshot(self.vault)
         self.assertEqual(self._snap_before, snap_after)
 
+    def test_plan_refuses_out_inside_vault(self):
+        vs = _load_sweep()
+        old_argv = sys.argv
+        try:
+            sys.argv = ["vault_sweep", "plan", "--vault", str(self.vault), "--out", str(self.vault / "plan.json")]
+            with self.assertRaises(SystemExit):
+                vs.main()
+        finally:
+            sys.argv = old_argv
+        self.assertEqual(self._snap_before, _snapshot(self.vault))
+
     def test_b_leftover_folder_detected(self):
         plan = self._plan()
         names = [item["folder"] for item in plan["leftover_folders"]]

@@ -358,8 +358,10 @@ def main():
         ap.print_help()
         return 1
     vault = Path(args.vault).resolve()
+    out = Path(args.out).resolve()
+    if out.is_relative_to(vault):
+        ap.error(f"--out must be outside the vault, got {out}")
     plan = build_plan(vault)
-    out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return 0
