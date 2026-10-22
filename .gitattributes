@@ -1,1 +1,3 @@
 tests/fixtures/knowledge/** -text
+tests/fixtures/proposals/** -text
+tests/fixtures/sweep/** -text
