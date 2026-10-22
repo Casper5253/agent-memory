@@ -1,5 +1,6 @@
-"""WP-00 knowledge contracts: fixture schema, hook golden matrix, grader anti-gaming."""
+"""WP-00 knowledge contracts: fixture schema, hook golden matrix, grader anti-gaming, evaluator isolation."""
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -15,12 +16,33 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from agentmem.config import Config
+from agentmem.hook import main as hook_main
 from agentmem.manifest import Manifest
 import fixtures as fx
 
 
 SELFTEST = ROOT / "tests" / "fixtures" / "knowledge" / "selftest"
 HOOKS = ROOT / "tests" / "fixtures" / "knowledge" / "hooks"
+
+
+def _replace_paths(obj, old, new):
+    if isinstance(obj, str):
+        return obj.replace(old, new)
+    if isinstance(obj, list):
+        return [_replace_paths(x, old, new) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _replace_paths(v, old, new) for k, v in obj.items()}
+    return obj
+
+
+def _normalize_separators(obj):
+    if isinstance(obj, str):
+        return obj.replace("\\", "/")
+    if isinstance(obj, list):
+        return [_normalize_separators(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _normalize_separators(v) for k, v in obj.items()}
+    return obj
 
 
 class FixtureSchema(unittest.TestCase):
@@ -128,21 +150,37 @@ class HookGoldenMatrix(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _run_hook(self, payload, agent="claude", env_extra=None, pause=False):
-        env = dict(os.environ,
-                   OBSIDIAN_VAULT_PATH=str(self.vault),
-                   AGENTMEM_HOME=str(self.home))
+    def _run_hook_in_process(self, spec):
+        env = dict(os.environ, OBSIDIAN_VAULT_PATH=str(self.vault), AGENTMEM_HOME=str(self.home))
         env.pop("AGENTMEM_CAPTURE", None)
-        if env_extra:
-            env.update(env_extra)
-        if pause:
+        env.update(spec.get("env", {}))
+        if spec.get("pause"):
             (self.vault / "_meta" / "PAUSE").write_text("paused", encoding="utf-8")
-        raw = json.dumps(payload) if isinstance(payload, dict) else payload
-        r = subprocess.run(
-            [sys.executable, "-I", str(ROOT / "run.py"), "hook", agent],
-            input=raw.encode("utf-8"), capture_output=True, timeout=30, env=env, cwd=str(ROOT)
-        )
-        return r
+
+        if "input_raw" in spec:
+            raw = spec["input_raw"]
+        else:
+            payload = dict(spec.get("input", {}))
+            if "cwd" in payload and isinstance(payload["cwd"], str):
+                payload["cwd"] = payload["cwd"].replace("{WORK}", self.work)
+            raw = json.dumps(payload)
+
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch("agentmem.worker.spawn_detached"):
+                with mock.patch("sys.stdin", io.StringIO(raw)):
+                    out = io.StringIO()
+                    with mock.patch("sys.stdout", out):
+                        rc = hook_main("claude")
+        self.assertEqual(rc, 0)
+        actual_stdout = json.loads(out.getvalue())
+        actual_stdout = _replace_paths(actual_stdout, str(self.vault), "{VAULT}")
+        actual_stdout = _replace_paths(actual_stdout, str(self.work_root), "{WORK}")
+        actual_stdout = _normalize_separators(actual_stdout)
+        jobs = []
+        for job in sorted((self.vault / "_meta" / "queue").glob("*.json")):
+            j = json.loads(job.read_text(encoding="utf-8"))
+            jobs.append({"event": j["event"], "session_id": j["session_id"], "agent": j["agent"]})
+        return actual_stdout, jobs
 
     def test_hook_fixtures_exist(self):
         fixtures = list(HOOKS.glob("*.json"))
@@ -150,80 +188,24 @@ class HookGoldenMatrix(unittest.TestCase):
         for fixture_file in fixtures:
             spec = json.loads(fixture_file.read_text(encoding="utf-8"))
             self.assertIn("description", spec)
-            if "input" in spec:
-                has_exact = "expected_stdout_exact" in spec
-                has_contains = "expected_stdout_contains" in spec
-                self.assertTrue(has_exact or has_contains, f"{fixture_file.name} must have expected_stdout_exact or expected_stdout_contains")
+            self.assertIn("golden", spec, f"{fixture_file.name} must have a golden output")
 
-    def test_session_start_returns_context(self):
-        payload = {"hook_event_name": "SessionStart", "session_id": "ses-x",
-                    "transcript_path": "t.jsonl", "cwd": self.work}
-        r = self._run_hook(payload)
-        self.assertEqual(r.returncode, 0)
-        out = json.loads(r.stdout.decode("utf-8", "replace"))
-        self.assertIn("hookSpecificOutput", out)
-
-    def test_session_end_enqueues(self):
-        payload = {"hook_event_name": "SessionEnd", "session_id": "ses-y",
-                    "transcript_path": "t.jsonl", "cwd": self.work}
-        r = self._run_hook(payload)
-        self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.decode().strip(), "{}")
-        jobs = list((self.vault / "_meta" / "queue").glob("*.json"))
-        self.assertEqual(len(jobs), 1)
-        job = json.loads(jobs[0].read_text(encoding="utf-8"))
-        self.assertEqual(job["event"], "end")
-        self.assertEqual(job["session_id"], "ses-y")
-
-    def test_alias_fields(self):
-        payload = {"hookEventName": "SessionEnd", "sessionId": "ses-alias",
-                    "transcript_path": "t.jsonl", "cwd": self.work}
-        r = self._run_hook(payload)
-        self.assertEqual(r.returncode, 0)
-        jobs = list((self.vault / "_meta" / "queue").glob("*.json"))
-        self.assertEqual(len(jobs), 1)
-        job = json.loads(jobs[0].read_text(encoding="utf-8"))
-        self.assertEqual(job["session_id"], "ses-alias")
-
-    def test_missing_session_id_no_enqueue(self):
-        payload = {"hook_event_name": "SessionEnd", "transcript_path": "t.jsonl", "cwd": self.work}
-        r = self._run_hook(payload)
-        self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.decode().strip(), "{}")
-        jobs = list((self.vault / "_meta" / "queue").glob("*.json"))
-        self.assertEqual(jobs, [])
-
-    def test_malformed_json_no_crash(self):
-        r = self._run_hook("{not valid json")
-        self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.decode().strip(), "{}")
-
-    def test_pause_suppresses_enqueue(self):
-        (self.vault / "_meta" / "PAUSE").write_text("paused", encoding="utf-8")
-        payload = {"hook_event_name": "SessionEnd", "session_id": "ses-p",
-                    "transcript_path": "t.jsonl", "cwd": self.work}
-        r = self._run_hook(payload)
-        self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.decode().strip(), "{}")
-        jobs = list((self.vault / "_meta" / "queue").glob("*.json"))
-        self.assertEqual(jobs, [])
-
-    def test_recursion_guard(self):
-        payload = {"hook_event_name": "SessionEnd", "session_id": "ses-r",
-                    "transcript_path": "t.jsonl", "cwd": self.work}
-        r = self._run_hook(payload, env_extra={"AGENTMEM_CAPTURE": "1"})
-        self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.decode().strip(), "{}")
-        jobs = list((self.vault / "_meta" / "queue").glob("*.json"))
-        self.assertEqual(jobs, [])
-
-    def test_child_session_suppression_with_detached_spawn_mocked(self):
-        payload = {"hook_event_name": "SessionEnd", "session_id": "ses-child",
-                    "transcript_path": "t.jsonl", "cwd": self.work}
-        with mock.patch("agentmem.worker.spawn_detached") as mock_spawn:
-            r = self._run_hook(payload)
-        self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.decode().strip(), "{}")
+    def test_hook_golden_matrix(self):
+        for fixture_file in sorted(HOOKS.glob("*.json")):
+            with self.subTest(fixture=fixture_file.name):
+                # Each fixture runs against a clean queue and pause switch.
+                for job in (self.vault / "_meta" / "queue").glob("*.json"):
+                    job.unlink()
+                pause_file = self.vault / "_meta" / "PAUSE"
+                if pause_file.exists():
+                    pause_file.unlink()
+                spec = json.loads(fixture_file.read_text(encoding="utf-8"))
+                golden = spec["golden"]
+                actual_stdout, jobs = self._run_hook_in_process(spec)
+                self.assertEqual(actual_stdout, golden["stdout"],
+                                 f"stdout mismatch for {fixture_file.name}")
+                self.assertEqual(jobs, golden["queue"],
+                                 f"queue mismatch for {fixture_file.name}")
 
 
 class GraderAntiGaming(unittest.TestCase):
@@ -278,6 +260,72 @@ class GraderAntiGaming(unittest.TestCase):
             lifecycle = ev.lifecycle_check(vault, corpus)
             self.assertFalse(lifecycle["passed"])
             self.assertEqual(lifecycle["notes_written"], 0)
+
+    def test_partial_note_count_fails_lifecycle(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        try:
+            import evaluate_knowledge as ev
+        finally:
+            sys.path.pop(0)
+        with tempfile.TemporaryDirectory(prefix="agentmem-lifecycle-") as tmp:
+            tmp = Path(tmp)
+            vault = tmp / "vault"
+            for d in ("_meta/queue", "_meta/locks", "_meta/logs", "0-Sessions", "1-Projects"):
+                (vault / d).mkdir(parents=True, exist_ok=True)
+            # Record one capture while the corpus expects two session parts.
+            man = Manifest(vault / "_meta" / "manifest.sqlite")
+            try:
+                man.db.execute("INSERT INTO captures(agent, session_id, part, note_path, project, title, date, summarizer, consolidated, captured_at) VALUES (?,?,1,'0-Sessions/fake.md','Alpha','fake','2026-10-01','none',1,?)", ("claude", "fake-sess", time.time()))
+            finally:
+                man.close()
+            corpus = {"sessions": [
+                {"session_id": "fake-sess", "agent": "claude"},
+                {"session_id": "fake-sess2", "agent": "claude"},
+            ]}
+            lifecycle = ev.lifecycle_check(vault, corpus)
+            self.assertFalse(lifecycle["passed"])
+            self.assertEqual(lifecycle["notes_written"], 1)
+            self.assertEqual(lifecycle["expected_sessions"], 2)
+
+
+class EvaluatorIsolation(unittest.TestCase):
+    def test_temp_qmd_index_and_subprocess_env(self):
+        from agentmem.config import Config as AgentMemConfig
+        sys.path.insert(0, str(ROOT / "tools"))
+        try:
+            import evaluate_knowledge as ev
+        finally:
+            sys.path.pop(0)
+        with tempfile.TemporaryDirectory(prefix="agentmem-eval-iso-") as tmp:
+            tmp = Path(tmp)
+            corpus = {"projects": [{"id": "alpha", "name": "Alpha", "roots": ["{WORK}/alpha"],
+                                    "status": "active", "policy": "model_allowed"}],
+                      "sessions": []}
+            qmd_index = tmp / "qmd_index"
+            vault, work, home, _ = ev.make_temp_vault(tmp, corpus, qmd_index=qmd_index)
+
+            # In-process Config must use the temp QMD index, not the shared default.
+            cfg = AgentMemConfig(vault=vault, summarizer="none", settle_minutes=0,
+                                 auto_index=False, embeddings=False, qmd_index=str(qmd_index))
+            self.assertTrue(Path(cfg.qmd_index).resolve().is_relative_to(tmp.resolve()))
+            self.assertNotEqual(cfg.qmd_index, "")
+
+            # Subprocess config.json must point at the temp index too.
+            config = json.loads((home / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(config.get("qmd_index"), str(qmd_index))
+
+            # run_mem_command must send only temp paths and drop the recursion guard.
+            captured = {}
+            def fake_run(cmd, **kwargs):
+                captured["env"] = kwargs.get("env", {})
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"[]", stderr=b"")
+
+            with mock.patch("subprocess.run", fake_run):
+                ev.run_mem_command(vault, home, ["search", "test", "--json", "-n", "8"])
+            env = captured["env"]
+            self.assertIn(str(tmp), env["OBSIDIAN_VAULT_PATH"])
+            self.assertIn(str(tmp), env["AGENTMEM_HOME"])
+            self.assertNotIn("AGENTMEM_CAPTURE", env)
 
 
 class EvaluatorExitCodes(unittest.TestCase):

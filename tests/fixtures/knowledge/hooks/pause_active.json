@@ -8,6 +8,8 @@
   },
   "env": {},
   "pause": true,
-  "expected_stdout_exact": "{}",
-  "expected_enqueue": null
+  "golden": {
+    "stdout": {},
+    "queue": []
+  }
 }

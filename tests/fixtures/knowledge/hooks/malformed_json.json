@@ -2,6 +2,8 @@
   "description": "Malformed JSON returns empty JSON and does not crash",
   "input_raw": "{not valid json",
   "env": {},
-  "expected_stdout_exact": "{}",
-  "expected_enqueue": null
+  "golden": {
+    "stdout": {},
+    "queue": []
+  }
 }

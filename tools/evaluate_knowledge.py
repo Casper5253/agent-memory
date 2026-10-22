@@ -25,6 +25,10 @@ ROOT = Path(__file__).resolve().parent.parent
 EXIT_PASS, EXIT_FAIL, EXIT_SETUP, EXIT_INCONCLUSIVE = 0, 1, 2, 3
 
 
+class SetupError(Exception):
+    """A fixture or runtime precondition is violated."""
+
+
 def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -73,7 +77,11 @@ def check_fixture_hashes(manifest, hashes):
     return mismatches
 
 
-def make_temp_vault(base_tmp, corpus):
+def _replace_placeholders(s, work, vault):
+    return s.replace("{WORK}", str(work)).replace("{VAULT}", str(vault))
+
+
+def make_temp_vault(base_tmp, corpus, qmd_index=""):
     vault = base_tmp / "vault"
     for d in ("_meta/queue", "_meta/locks", "_meta/logs", "0-Sessions", "1-Projects",
               "2-Areas", "3-Resources", "4-Archive"):
@@ -84,7 +92,7 @@ def make_temp_vault(base_tmp, corpus):
     for proj in corpus.get("projects", []):
         roots = []
         for r in proj.get("roots", []):
-            r = r.replace("{WORK}", str(work)).replace("{VAULT}", str(vault_path))
+            r = _replace_placeholders(r, work, vault_path)
             Path(r).mkdir(parents=True, exist_ok=True)
             roots.append(r)
         project_roots[proj["id"]] = {"name": proj["name"], "roots": roots, "status": proj.get("status", "active"),
@@ -95,70 +103,186 @@ def make_temp_vault(base_tmp, corpus):
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     home = base_tmp / "home"
     home.mkdir(parents=True, exist_ok=True)
-    (home / "config.json").write_text(json.dumps({
-        "summarizer": "none", "auto_index": False, "embeddings": False
-    }), encoding="utf-8")
+    config = {
+        "summarizer": "none",
+        "auto_index": False,
+        "embeddings": False,
+    }
+    if qmd_index:
+        config["qmd_index"] = str(qmd_index)
+    (home / "config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
     return vault, work, home, project_roots
 
 
-def _make_replay_summarizer(responses_by_session):
+def _replace_placeholders_in_json(obj, work, vault):
+    if isinstance(obj, str):
+        return obj.replace("{WORK}", str(work)).replace("{VAULT}", str(vault))
+    if isinstance(obj, list):
+        return [_replace_placeholders_in_json(x, work, vault) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _replace_placeholders_in_json(v, work, vault) for k, v in obj.items()}
+    return obj
+
+
+def _copy_transcript(src, dest, work, vault):
+    """Copy a transcript, substituting {WORK} and {VAULT} with temp paths."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    text = src.read_text(encoding="utf-8")
+    if src.suffix == ".jsonl":
+        out_lines = []
+        for line in text.splitlines(keepends=True):
+            stripped = line.strip()
+            if not stripped:
+                out_lines.append(line)
+                continue
+            try:
+                rec = json.loads(stripped)
+                rec = _replace_placeholders_in_json(rec, work, vault)
+                out_lines.append(json.dumps(rec, ensure_ascii=False) + "\n")
+            except json.JSONDecodeError:
+                out_lines.append(line)
+        dest.write_text("".join(out_lines), encoding="utf-8")
+    else:
+        try:
+            rec = json.loads(text)
+            rec = _replace_placeholders_in_json(rec, work, vault)
+            dest.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+        except json.JSONDecodeError:
+            dest.write_text(_replace_placeholders(text, work, vault), encoding="utf-8")
+
+
+def _make_replay_summarizer(responses_by_digest):
+    """Return a summarizer that returns the fixture response matching the digest text.
+
+    The mapping is keyed by SHA-256 of the exact digest the pipeline builds, so the
+    response is tied to the specific session and part being captured.
+    """
     def _summarize(digest_text, timeout=0):
-        for key, resp in responses_by_session.items():
-            if isinstance(resp, str):
-                try:
-                    data = json.loads(resp)
-                    data["_cost_usd"] = 0.0
-                    return data
-                except json.JSONDecodeError:
-                    pass
-        return {"title": "session", "summary": "replayed", "what_happened": [],
-                "decisions": [], "facts": [], "open_questions": [], "next_steps": [], "_cost_usd": 0.0}
+        key = sha256_bytes(digest_text.encode("utf-8"))
+        if key not in responses_by_digest:
+            raise SetupError(f"no fixture summary for digest {key[:16]}; "
+                             "replay model cannot match this session/part")
+        data = json.loads(responses_by_digest[key])
+        data["_cost_usd"] = 0.0
+        return data
     return _summarize
 
 
-def run_pipeline_for_corpus(vault, work, home, corpus, project_roots):
+def _noop_consolidator(state, summary, link, date, timeout=0):
+    """Avoid real model calls during project-note reconciliation."""
+    return state or "", 0.0
+
+
+def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index):
     sys.path.insert(0, str(ROOT))
+    from agentmem.adapters import read as adapter_read
     from agentmem.config import Config
+    from agentmem.extract import build as extract_build
+    from agentmem import llm
     from agentmem.manifest import Manifest
     from agentmem import worker
 
-    cfg = Config(vault=vault, summarizer="none", settle_minutes=0, auto_index=False, embeddings=False)
+    cfg = Config(
+        vault=vault,
+        summarizer="claude-haiku",
+        settle_minutes=0,
+        auto_index=False,
+        embeddings=False,
+        qmd_index=str(qmd_index) if qmd_index else "",
+    )
 
     transcripts_dir = Path(corpus.get("_transcripts_dir", ""))
-    responses = {}
-    for sess in corpus.get("sessions", []):
-        sid = sess["session_id"]
-        responses[sid] = sess.get("summary_response", "")
+    if not transcripts_dir.is_dir():
+        raise SetupError(f"transcripts directory not found: {transcripts_dir}")
 
-    replay = _make_replay_summarizer(responses)
-
+    # Copy every transcript into the temp vault and resolve source paths.
+    source_paths = {}
+    opencode_sources = {}
+    missing_response = []
     for sess in corpus.get("sessions", []):
         sid = sess["session_id"]
         agent = sess["agent"]
+        part = sess.get("part", 1)
+        if not sess.get("summary_response", "").strip():
+            missing_response.append((sid, part))
         transcript_rel = sess.get("transcript", "")
-        transcript_path = transcripts_dir / transcript_rel if transcripts_dir.is_dir() else None
+        src = transcripts_dir / transcript_rel
+        if not src.is_file():
+            raise SetupError(f"transcript not found: {src}")
+        dest = vault / "_meta" / "transcripts" / agent / Path(transcript_rel).name
+        _copy_transcript(src, dest, work, vault)
+        source_paths[(agent, sid, part)] = str(dest)
+        if agent == "opencode":
+            opencode_sources[sid] = str(dest)
 
-        if transcript_path and transcript_path.is_file():
-            dest = vault / "_meta" / "transcripts" / agent / transcript_path.name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(str(transcript_path), str(dest))
-            transcript_path = dest
+    if missing_response:
+        raise SetupError(f"missing summary_response for {len(missing_response)} session parts")
 
-        cwd = sess.get("cwd", "").replace("{WORK}", str(work)).replace("{VAULT}", str(vault))
+    # Replay opencode exports from the copied local JSON files instead of calling CLI.
+    original_export_opencode = None
+    if opencode_sources:
+        import agentmem.adapters as adapters_mod
+        original_export_opencode = adapters_mod.export_opencode
 
-        man = Manifest(cfg.manifest_path)
+        def _replay_export_opencode(session_id, timeout=120):
+            path = opencode_sources.get(session_id)
+            if not path or not Path(path).is_file():
+                raise FileNotFoundError(f"opencode export fixture missing for {session_id}")
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+
+        adapters_mod.export_opencode = _replay_export_opencode
+
+    try:
+        # Pre-compute digest -> summary_response so the replay summarizer can identify
+        # the exact session and part from the digest the pipeline will build.
+        responses_by_digest = {}
+        for sess in corpus.get("sessions", []):
+            sid = sess["session_id"]
+            agent = sess["agent"]
+            part = sess.get("part", 1)
+            source = source_paths[(agent, sid, part)]
+            if agent == "opencode":
+                t = adapter_read(agent, sid, sid, start=0)
+            else:
+                t = adapter_read(agent, sid, source, start=0)
+            d = extract_build(t, cfg.min_user_prompts, cfg.min_assistant_chars, cfg.digest_char_cap)
+            key = sha256_bytes(d.text.encode("utf-8"))
+            responses_by_digest[key] = sess["summary_response"]
+
+        original_summarize = llm.summarize
+        llm.summarize = _make_replay_summarizer(responses_by_digest)
         try:
-            man.touch(agent, sid, now=time.time() - 7200, source=str(transcript_path) if transcript_path else None,
-                      end=True, cwd=cwd)
+            sessions = corpus.get("sessions", [])
+            max_part = max((s.get("part", 1) for s in sessions), default=1)
+            for part in range(1, max_part + 1):
+                for sess in sessions:
+                    if sess.get("part", 1) != part:
+                        continue
+                    sid = sess["session_id"]
+                    agent = sess["agent"]
+                    source = source_paths[(agent, sid, part)]
+                    cwd = _replace_placeholders(sess.get("cwd", ""), work, vault)
+                    man = Manifest(cfg.manifest_path)
+                    try:
+                        man.touch(agent, sid, now=time.time() - 7200, source=source,
+                                  end=True, cwd=cwd)
+                        # Each fixture part ships in its own file; reset the cursor so the
+                        # adapter reads the whole file as one part.
+                        man.mark(agent, sid, captured_until=0)
+                    finally:
+                        man.close()
+                    worker.enqueue(cfg, agent, sid, event="end", source=source, cwd=cwd)
+                worker.run(cfg, budget_s=120, summarizer=llm.summarize,
+                           consolidator=_noop_consolidator, index=False)
         finally:
-            man.close()
+            llm.summarize = original_summarize
+    finally:
+        if original_export_opencode is not None:
+            import agentmem.adapters as adapters_mod
+            adapters_mod.export_opencode = original_export_opencode
 
-        if transcript_path and transcript_path.is_file():
-            worker.enqueue(cfg, agent, sid, event="end", source=str(transcript_path), cwd=cwd)
-
-    results = worker.run(cfg, budget_s=60, summarizer=replay, consolidator=None, index=False)
     sys.path.pop(0)
-    return cfg, results
+    return cfg
 
 
 def detect_qmd():
@@ -181,8 +305,7 @@ def detect_qmd():
 def run_mem_command(vault, home, args, timeout=30):
     env = dict(os.environ,
                OBSIDIAN_VAULT_PATH=str(vault),
-               AGENTMEM_HOME=str(home),
-               AGENTMEM_CAPTURE="0")
+               AGENTMEM_HOME=str(home))
     env.pop("AGENTMEM_CAPTURE", None)
     try:
         r = subprocess.run(
@@ -274,11 +397,16 @@ def grade_query(query, gold, context):
 
 
 def lifecycle_check(vault, corpus):
-    sessions_dir = vault / "0-Sessions"
-    notes_written = list(sessions_dir.rglob("*.md"))
+    """Count manifest captures, not files, so identity collisions (T19) are counted honestly."""
     expected_notes = len(corpus.get("sessions", []))
-    passed = len(notes_written) > 0
-    return {"passed": passed, "notes_written": len(notes_written),
+    from agentmem.manifest import Manifest
+    man = Manifest(vault / "_meta" / "manifest.sqlite")
+    try:
+        notes_written = man.db.execute("SELECT count(*) FROM captures").fetchone()[0]
+    finally:
+        man.close()
+    passed = notes_written == expected_notes
+    return {"passed": passed, "notes_written": notes_written,
             "expected_sessions": expected_notes}
 
 
@@ -351,11 +479,21 @@ def run_baseline(fixtures_dir, output_dir):
 
     with tempfile.TemporaryDirectory(prefix="agentmem-eval-") as tmp:
         tmp = Path(tmp)
-        transcripts_dir = Path(fixtures_dir) / "transcripts"
+        # The corpus transcript field already includes the leading "transcripts/" directory.
+        transcripts_dir = Path(fixtures_dir)
         corpus["_transcripts_dir"] = str(transcripts_dir) if transcripts_dir.is_dir() else ""
 
-        vault, work, home, project_roots = make_temp_vault(tmp, corpus)
-        cfg, pipeline_results = run_pipeline_for_corpus(vault, work, home, corpus, project_roots)
+        qmd_index = tmp / "qmd_index"
+        vault, work, home, project_roots = make_temp_vault(tmp, corpus, qmd_index=qmd_index)
+
+        try:
+            cfg = run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index=qmd_index)
+        except SetupError as e:
+            result = {"verdict": "setup_error", "exit_code": EXIT_SETUP,
+                      "errors": [str(e)], "correctness_pass": False, "adoption_pass": False,
+                      "limitations": []}
+            write_outputs(output_dir, result, [], corpus)
+            return EXIT_SETUP
 
         qmd_status, qmd_version = detect_qmd()
 

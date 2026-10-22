@@ -7,6 +7,14 @@
     "cwd": "{WORK}/alpha"
   },
   "env": {},
-  "expected_stdout_exact": "{}",
-  "expected_enqueue": {"event": "end", "session_id": "ses-hook-002", "agent": "claude"}
+  "golden": {
+    "stdout": {},
+    "queue": [
+      {
+        "event": "end",
+        "session_id": "ses-hook-002",
+        "agent": "claude"
+      }
+    ]
+  }
 }

@@ -6,7 +6,11 @@
     "transcript_path": "transcript.jsonl",
     "cwd": "{WORK}/alpha"
   },
-  "env": {"AGENTMEM_CAPTURE": "1"},
-  "expected_stdout_exact": "{}",
-  "expected_enqueue": null
+  "env": {
+    "AGENTMEM_CAPTURE": "1"
+  },
+  "golden": {
+    "stdout": {},
+    "queue": []
+  }
 }
