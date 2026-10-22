@@ -83,3 +83,15 @@ def is_sensitive_path(path: str) -> bool:
 def contains_secret(text: str) -> bool:
     """True if redact() would change anything: used by tests and as a last write-time assertion."""
     return redact(text) != text
+
+
+def redact_session_note(text: str) -> str:
+    """Keep only the renderer's own session identity assignment out of free-text filtering."""
+    if not text.startswith("---\n") or "\n---\n" not in text[4:]:
+        return redact(text)
+    header, body = text[4:].split("\n---\n", 1)
+    lines = header.splitlines()
+    identity = [line for line in lines if line.startswith("session_id: ")]
+    if len(identity) != 1:
+        raise ValueError("capture_identity_conflict: malformed session identity")
+    return "---\n" + "\n".join(line if line == identity[0] else redact(line) for line in lines) + "\n---\n" + redact(body)

@@ -42,6 +42,8 @@ Reconcile, do not append blindly:
   "- <old date> — <old decision> → superseded <new date>: <short reason> (<old link>)" and add the new one to "Active decisions".
 - Keep every still-valid decision with its original date and link. Never drop history silently.
 - "Open questions and next steps": drop items the session resolved, add new ones.
+- Attach the session summary's repo_head commit to every repository-state line you write.
+  If repo_head is null or missing, mark that line's repository commit unknown; never invent a commit.
 Return ONLY a JSON object: {"state_markdown": "<markdown>", "changed": true|false}
 state_markdown must contain exactly these four headings, in order, each followed by bullets (or "- none"):
 ### Current state

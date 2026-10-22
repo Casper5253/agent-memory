@@ -61,7 +61,7 @@ class Routing(Base):
         self.run_worker()
         self.assertEqual(self.man.get("claude", sid)["project"], "Demo App")
 
-    def test_resumed_part_keeps_first_project(self):
+    def test_resumed_part_follows_its_own_work(self):
         src = self.claude_session("s-keep", fx.SUBSTANTIAL, 120)
         self.end("claude", "s-keep", src)
         self.run_worker()
@@ -69,7 +69,7 @@ class Routing(Base):
         self.end("claude", "s-keep", src)
         self.run_worker()
         rows = self.man.db.execute("SELECT part, project FROM captures WHERE session_id='s-keep' ORDER BY part").fetchall()
-        self.assertEqual([tuple(r) for r in rows], [(1, "Demo App"), (2, "Demo App")])
+        self.assertEqual([tuple(r) for r in rows], [(1, "Demo App"), (2, "Other Tool")])
 
 
 class Remember(Base):

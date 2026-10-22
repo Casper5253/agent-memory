@@ -53,12 +53,12 @@ def create_once(path: Path, text: str) -> bool:
         except FileExistsError:
             return False
         except OSError:
-            # Filesystems without hard links: fall back to exclusive create + copy.
-            try:
-                with open(path, "x", encoding="utf-8", newline="\n") as out:
-                    out.write(text)
-            except FileExistsError:
-                return False
+            # Cooperating writers use the same destination lock. Replace publishes only
+            # a fully fsynced sibling; receipt/hash validation gates capture adoption.
+            with file_lock(path.with_name(path.name + ".create.lock")):
+                if path.exists():
+                    return False
+                os.replace(tmp, path)
         return True
     finally:
         Path(tmp).unlink(missing_ok=True)
