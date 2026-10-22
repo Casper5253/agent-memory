@@ -75,3 +75,13 @@ ReviewRequest(operation_id, project_id, action, claim_id, expected_project_revis
 `action` is one of `accept`, `supersede`, `retract`, `quarantine` or `restore`. `accept` and `supersede` require `actor_kind="operator"` and a non-empty `approval_ref`. Every action requires a non-empty `reason`. `supersede` uses the successor fields as 04 defines.
 
 Restore applies only to a `retracted` or `quarantined` claim. `evidence` supplies the fresh evidence as one or more spans `{source_id, start, end, role}`. The spans name existing sources in the same project whose stored `content_sha` still matches. At least one span has role `supports` and is not already attached to the claim. `target_status` is `reported` or `accepted`. `accepted` needs operator approval as above. If the claim still has an unresolved exact-slot competitor, the result is `disputed` whatever the target, and `conflict_ids` lists the competitors. Restore writes a new claim revision and never deletes an old one.
+
+## 4. Import scope and revision
+
+The signature is `import_capture(store, project_id, capture_identity, capture_fingerprint, sources) -> ImportResult`. The caller passes the project explicitly, as 04 requires of every mutation; it comes from WP-01 attribution or `knowledge_project_ids`. Every source row must carry that project.
+
+Import is exempt from caller-supplied revision compare-and-swap. An import only appends rows keyed by capture identity, never reads or changes existing claims, and is idempotent. The store reads the current project revision inside `BEGIN IMMEDIATE` and increments it once. Two concurrent imports of the same identity produce one import and one replay. A missing, archived or `excluded` project returns an error and writes nothing. `apply_proposal` and `review_claim` keep the strict expected-revision check, and a stale one writes zero rows.
+
+## 5. Gaps found during implementation
+
+For any further gap that does not add or change a stored column, enum value, status transition or authority rule, choose the reading most consistent with 04 and this addendum, list it under Assumptions in the report, and continue. Stop and report only for a gap that would change one of those.
