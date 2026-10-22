@@ -284,7 +284,33 @@ class GraderAntiGaming(unittest.TestCase):
             ]}
             lifecycle = ev.lifecycle_check(vault, corpus)
             self.assertFalse(lifecycle["passed"])
+            self.assertEqual(lifecycle["notes_written"], 0)
+            self.assertEqual(lifecycle["captures_recorded"], 1)
+            self.assertEqual(lifecycle["missing_note_files"], 1)
+
+    def test_colliding_note_paths_fail_lifecycle(self):
+        sys.path.insert(0, str(ROOT / "tools"))
+        try:
+            import evaluate_knowledge as ev
+        finally:
+            sys.path.pop(0)
+        with tempfile.TemporaryDirectory(prefix="agentmem-lifecycle-") as tmp:
+            vault = Path(tmp) / "vault"
+            (vault / "0-Sessions").mkdir(parents=True)
+            (vault / "_meta").mkdir()
+            (vault / "0-Sessions" / "shared.md").write_text("note", encoding="utf-8")
+            man = Manifest(vault / "_meta" / "manifest.sqlite")
+            try:
+                for sid in ("aaaa-1234abcd", "bbbb-1234abcd"):
+                    man.db.execute("INSERT INTO captures(agent, session_id, part, note_path, project, title, date, summarizer, consolidated, captured_at) VALUES (?,?,1,'0-Sessions/shared.md','Alpha','t','2026-10-01','none',1,?)", ("claude", sid, time.time()))
+            finally:
+                man.close()
+            corpus = {"sessions": [{"session_id": "aaaa-1234abcd", "agent": "claude"},
+                                   {"session_id": "bbbb-1234abcd", "agent": "claude"}]}
+            lifecycle = ev.lifecycle_check(vault, corpus)
+            self.assertFalse(lifecycle["passed"])
             self.assertEqual(lifecycle["notes_written"], 1)
+            self.assertEqual(lifecycle["colliding_captures"], 1)
             self.assertEqual(lifecycle["expected_sessions"], 2)
 
 

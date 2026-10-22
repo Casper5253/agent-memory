@@ -397,17 +397,20 @@ def grade_query(query, gold, context):
 
 
 def lifecycle_check(vault, corpus):
-    """Count manifest captures, not files, so identity collisions (T19) are counted honestly."""
+    """A capture counts only when its own note file exists; captures sharing a note path (T19) collide."""
     expected_notes = len(corpus.get("sessions", []))
     from agentmem.manifest import Manifest
     man = Manifest(vault / "_meta" / "manifest.sqlite")
     try:
-        notes_written = man.db.execute("SELECT count(*) FROM captures").fetchone()[0]
+        paths = [r[0] for r in man.db.execute("SELECT note_path FROM captures")]
     finally:
         man.close()
-    passed = notes_written == expected_notes
-    return {"passed": passed, "notes_written": notes_written,
-            "expected_sessions": expected_notes}
+    distinct = set(paths)
+    existing = {p for p in distinct if (vault / p).is_file()}
+    notes_written = len(existing)
+    return {"passed": notes_written == expected_notes, "notes_written": notes_written,
+            "captures_recorded": len(paths), "missing_note_files": len(distinct - existing),
+            "colliding_captures": len(paths) - len(distinct), "expected_sessions": expected_notes}
 
 
 def write_outputs(output_dir, result, per_query_outcomes, corpus):
