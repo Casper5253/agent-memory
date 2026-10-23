@@ -340,6 +340,207 @@ class SweepTests(unittest.TestCase):
             )
             self.assertIn(frag["evidence"], ("worktree", "shared_remote", "guess"))
 
+    def test_fake_worktree_not_auto_applied(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault, work = tmp.path / "vault", tmp.path / "work"
+            for d in ("_meta", "1-Projects"):
+                (vault / d).mkdir(parents=True)
+            repo = work / "real-repo"
+            repo.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=repo)
+            _git("config", "user.email", "test@test", cwd=repo)
+            _git("config", "user.name", "Test", cwd=repo)
+            (repo / "f.txt").write_text("r", encoding="utf-8")
+            _git("add", ".", cwd=repo)
+            _git("commit", "-q", "-m", "init", cwd=repo)
+            _git("worktree", "add", "-q", str(work / "real-wt"), "HEAD", cwd=repo)
+            real_proj = vault / "1-Projects" / "Real"
+            shutil.copytree(repo, real_proj)
+            fake = vault / "1-Projects" / "Real-copy"
+            shutil.copytree(work / "real-wt", fake)
+            fake_git = fake / ".git"
+            fake_git.unlink()
+            admin_dir = repo / ".git" / "worktrees" / "fake-id"
+            admin_dir.mkdir(parents=True)
+            (admin_dir / "gitdir").write_text("wrong-path", encoding="utf-8")
+            fake_git.write_text(f"gitdir: {admin_dir}".replace("\\", "/"), encoding="utf-8")
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "Real", "roots": [str(repo)], "status": "active"},
+                {"name": "Real-copy", "roots": [str(fake)], "status": "active"}]}), encoding="utf-8")
+            frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
+            self.assertIn("Real-copy", frags)
+            frag = frags["Real-copy"]
+            self.assertNotEqual(frag["evidence"], "worktree")
+            self.assertFalse(frag["auto_apply"])
+        finally:
+            tmp.cleanup()
+
+    def test_relative_remote_url_normalized(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = tmp.path / "vault"
+            for d in ("_meta", "1-Projects"):
+                (vault / d).mkdir(parents=True)
+            remote = tmp.path / "shared.git"
+            remote.mkdir(parents=True)
+            _git("init", "-q", "--bare", cwd=remote)
+            parent = vault / "1-Projects" / "Parent"
+            parent.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=parent)
+            _git("config", "user.email", "test@test", cwd=parent)
+            _git("config", "user.name", "Test", cwd=parent)
+            (parent / "f.txt").write_text("p", encoding="utf-8")
+            _git("add", ".", cwd=parent)
+            _git("commit", "-q", "-m", "init", cwd=parent)
+            _git("remote", "add", "origin", str(remote), cwd=parent)
+            child = vault / "1-Projects" / "Child-copy"
+            child.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=child)
+            _git("config", "user.email", "test@test", cwd=child)
+            _git("config", "user.name", "Test", cwd=child)
+            (child / "f.txt").write_text("c", encoding="utf-8")
+            _git("add", ".", cwd=child)
+            _git("commit", "-q", "-m", "init", cwd=child)
+            _git("remote", "add", "origin", "../../../shared.git", cwd=child)
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "Parent", "roots": [str(parent)], "status": "active"},
+                {"name": "Child-copy", "roots": [str(child)], "status": "active"}]}), encoding="utf-8")
+            frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
+            self.assertIn("Child-copy", frags)
+            frag = frags["Child-copy"]
+            self.assertEqual(frag["evidence"], "shared_remote")
+            self.assertFalse(frag["auto_apply"])
+        finally:
+            tmp.cleanup()
+
+    def test_worktree_of_nested_foreign_repo_is_not_parent_worktree(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault, work = tmp.path / "vault", tmp.path / "work"
+            for d in ("_meta", "1-Projects/Parent", "1-Projects/Parent Wt"):
+                (vault / d).mkdir(parents=True)
+            parent = work / "parent"
+            parent.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=parent)
+            _git("config", "user.email", "test@test", cwd=parent)
+            _git("config", "user.name", "Test", cwd=parent)
+            (parent / "f.txt").write_text("p", encoding="utf-8")
+            _git("add", ".", cwd=parent)
+            _git("commit", "-q", "-m", "init", cwd=parent)
+            foreign = parent / "foreign.git"
+            _git("init", "-q", "--bare", "-b", "main", str(foreign), cwd=work)
+            _git("push", "-q", str(foreign), "main", cwd=parent)
+            _git("worktree", "add", "-q", str(work / "parent-wt"), "main", cwd=foreign)
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "Parent", "roots": [str(parent)], "status": "active"},
+                {"name": "Parent Wt", "roots": [str(work / "parent-wt")], "status": "active"}]}), encoding="utf-8")
+            frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
+            self.assertFalse(frags.get("Parent Wt", {"auto_apply": False})["auto_apply"])
+        finally:
+            tmp.cleanup()
+
+    def test_hand_made_worktree_files_are_not_registration(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault, work = tmp.path / "vault", tmp.path / "work"
+            for d in ("_meta", "1-Projects/Parent", "1-Projects/Parent Fake"):
+                (vault / d).mkdir(parents=True)
+            parent = work / "parent"
+            parent.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=parent)
+            _git("config", "user.email", "test@test", cwd=parent)
+            _git("config", "user.name", "Test", cwd=parent)
+            (parent / "f.txt").write_text("p", encoding="utf-8")
+            _git("add", ".", cwd=parent)
+            _git("commit", "-q", "-m", "init", cwd=parent)
+            frag, admin = work / "parent-fake", work / "unregistered-admin"
+            frag.mkdir()
+            admin.mkdir()
+            (frag / ".git").write_text(f"gitdir: {admin}\n", encoding="utf-8")
+            (admin / "gitdir").write_text(f"{frag / '.git'}\n", encoding="utf-8")
+            (admin / "commondir").write_text(f"{parent / '.git'}\n", encoding="utf-8")
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "Parent", "roots": [str(parent)], "status": "active"},
+                {"name": "Parent Fake", "roots": [str(frag)], "status": "active"}]}), encoding="utf-8")
+            frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
+            self.assertFalse(frags.get("Parent Fake", {"auto_apply": False})["auto_apply"])
+        finally:
+            tmp.cleanup()
+
+    def test_ambiguous_root_marked_guess(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = tmp.path / "vault"
+            for d in ("_meta", "1-Projects"):
+                (vault / d).mkdir(parents=True)
+            repo = tmp.path / "shared-repo"
+            repo.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=repo)
+            _git("config", "user.email", "test@test", cwd=repo)
+            _git("config", "user.name", "Test", cwd=repo)
+            (repo / "f.txt").write_text("s", encoding="utf-8")
+            _git("add", ".", cwd=repo)
+            _git("commit", "-q", "-m", "init", cwd=repo)
+            remote = tmp.path / "shared.git"
+            remote.mkdir(parents=True)
+            _git("init", "-q", "--bare", cwd=remote)
+            _git("remote", "add", "origin", str(remote), cwd=repo)
+            shutil.copytree(repo, vault / "1-Projects" / "ProjA")
+            shutil.copytree(repo, vault / "1-Projects" / "ProjB")
+            shutil.copytree(repo, vault / "1-Projects" / "ProjA-wt")
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "ProjA", "roots": [str(vault / "1-Projects" / "ProjA")], "status": "active"},
+                {"name": "ProjB", "roots": [str(vault / "1-Projects" / "ProjA")], "status": "active"},
+                {"name": "ProjA-wt", "roots": [str(vault / "1-Projects" / "ProjA-wt")], "status": "active"}]}), encoding="utf-8")
+            frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
+            self.assertIn("ProjA-wt", frags)
+            frag = frags["ProjA-wt"]
+            self.assertEqual(frag["evidence"], "guess")
+            self.assertFalse(frag["auto_apply"])
+        finally:
+            tmp.cleanup()
+
+    def test_same_root_marked_same_root(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = tmp.path / "vault"
+            for d in ("_meta", "1-Projects"):
+                (vault / d).mkdir(parents=True)
+            repo = tmp.path / "main-repo"
+            repo.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=repo)
+            _git("config", "user.email", "test@test", cwd=repo)
+            _git("config", "user.name", "Test", cwd=repo)
+            (repo / "f.txt").write_text("m", encoding="utf-8")
+            _git("add", ".", cwd=repo)
+            _git("commit", "-q", "-m", "init", cwd=repo)
+            remote = tmp.path / "main.git"
+            remote.mkdir(parents=True)
+            _git("init", "-q", "--bare", cwd=remote)
+            _git("remote", "add", "origin", str(remote), cwd=repo)
+            frag = tmp.path / "frag-repo"
+            frag.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=frag)
+            _git("config", "user.email", "test@test", cwd=frag)
+            _git("config", "user.name", "Test", cwd=frag)
+            (frag / "f.txt").write_text("f", encoding="utf-8")
+            _git("add", ".", cwd=frag)
+            _git("commit", "-q", "-m", "init", cwd=frag)
+            _git("remote", "add", "origin", str(remote), cwd=frag)
+            shutil.copytree(repo, vault / "1-Projects" / "Main")
+            shutil.copytree(repo, vault / "1-Projects" / "Main-copy")
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "Main", "roots": [str(vault / "1-Projects" / "Main")], "status": "active"},
+                {"name": "Main-copy", "roots": [str(vault / "1-Projects" / "Main")], "status": "active"}]}), encoding="utf-8")
+            frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
+            if "Main-copy" in frags:
+                frag_item = frags["Main-copy"]
+                self.assertEqual(frag_item["evidence"], "guess")
+                self.assertFalse(frag_item["auto_apply"])
+        finally:
+            tmp.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()
