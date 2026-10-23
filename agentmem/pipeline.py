@@ -93,7 +93,8 @@ def _load_receipt(cfg, agent, sid, part, start):
                 or r["receipt_sha"] != _receipt_hash(r) or _hash(r["text"]) != r["content_sha"]):
             raise ValueError("receipt identity or hash mismatch")
         _validated_path(cfg, r["note_path"])
-        _validate_note(r["text"], agent, sid, r.get("note_part", part), expected_project=r.get("project"))
+        _validate_note(r["text"], agent, sid, r.get("note_part", part),
+                       expected_project=r.get("note_project", r.get("project")))
         return r
     except (ValueError, KeyError, TypeError) as error:
         raise ValueError("capture_identity_conflict: invalid receipt") from error
@@ -246,7 +247,8 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
             text = redact_session_note(text, cfg.privacy_email_allowlist)
             receipt = dict(version=1, agent=agent, session_id=sid, part=part, start=t.start, end=t.end,
                            project=project, summary=summary, digest_sha=d.sha, note_path=path.relative_to(cfg.vault).as_posix(),
-                           note_part=note_part, base_content_sha=_hash(previous_text) if is_continuation else None,
+                           note_part=note_part, note_project=previous_fields.get("project", project),
+                           base_content_sha=_hash(previous_text) if is_continuation else None,
                            text=text, content_sha=_hash(text), when=when.isoformat(), summarizer=kind, cost=cost,
                            prefix_sha=t.prefix_sha, evidence="transcript", related_projects=attribution.related_projects,
                            source_warnings=_redact_values(t.warnings, cfg.privacy_email_allowlist))
@@ -283,7 +285,7 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
     if hashlib.sha256(persisted).hexdigest() != receipt["content_sha"]:
         raise ValueError("capture_identity_conflict: persisted note bytes differ")
     _validate_note(persisted.decode("utf-8"), agent, sid, receipt.get("note_part", part),
-                   expected_project=receipt.get("project"))
+                   expected_project=receipt.get("note_project", receipt.get("project")))
     link = _link(cfg, path)
     project, summary, kind = receipt["project"], receipt["summary"], receipt["summarizer"]
     when = _parse_time(receipt["when"])
