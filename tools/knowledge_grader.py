@@ -190,6 +190,12 @@ def _freshness_warning(citation, heads):
 
 
 def grade_query(query, gold, context, *, corpus, vault):
+    if isinstance(context, dict) and "items" in context:
+        return _grade_structured(query, gold, context, corpus=corpus, vault=vault)
+    return _grade_query(query, gold, context, corpus=corpus, vault=vault)
+
+
+def _grade_query(query, gold, context, *, corpus, vault, proven_citations=None):
     """Score visible prose against authored facts and trusted note identities.
 
     A claim can be supported by any of its independently registered source spans.
@@ -223,8 +229,8 @@ def grade_query(query, gold, context, *, corpus, vault):
         if context.get("project_id", query["project"]) != query["project"]:
             failures.append("foreign_context_project")
         index = EvidenceIndex(corpus, vault)
-        citations = []
-        for snippet in snippets:
+        citations = list(proven_citations or [])
+        for snippet in ([] if proven_citations is not None else snippets):
             try:
                 if snippet.get("project_id", query["project"]) != query["project"]:
                     raise ValueError("foreign_snippet_project")
@@ -314,6 +320,172 @@ def grade_query(query, gold, context, *, corpus, vault):
         failures.append("invalid_grading_setup:" + str(error))
     outcome["pass"] = not failures
     return outcome
+
+
+def _structured_citations(query, context, corpus, vault):
+    from agentmem.knowledge import policy as policy
+    from agentmem.knowledge.store import KnowledgeStore
+    if context.get("status") != "ok" or context.get("project_id") != query["project"]:
+        raise ValueError("invalid_context_scope_or_status")
+    mode = "current" if query.get("mode") == "as_of" else query.get("mode", "current")
+    if context.get("mode") != mode or context.get("as_of") != query.get("as_of"):
+        raise ValueError("context_mode_mismatch")
+    items = context["items"]
+    if not isinstance(items, list) or not items:
+        raise ValueError("empty_context")
+    sources = corpus.get("sources", [])
+    citations, cited_claims = [], set()
+    with KnowledgeStore(Path(vault) / "_meta/knowledge.sqlite", vault=vault) as store:
+        store.db.execute("BEGIN")
+        try:
+            project = store.db.execute("SELECT * FROM projects WHERE id=?", (query["project"],)).fetchone()
+            if project is None or project["privacy"] == "excluded" or project["revision"] != context.get("project_revision"):
+                raise ValueError("stale_or_foreign_project")
+            if project["archived"] and mode != "history":
+                raise ValueError("archived_current_access")
+            for bundle in items:
+                if not isinstance(bundle, dict):
+                    raise ValueError("invalid_bundle")
+                alternatives = bundle.get("alternatives", [bundle])
+                if "alternatives" in bundle:
+                    if set(bundle) != {"status", "claim_ids", "alternatives", "omitted_alternatives"}:
+                        raise ValueError("invalid_conflict_bundle")
+                    if bundle["status"] != "unresolved" or bundle["omitted_alternatives"] != 0 or not alternatives:
+                        raise ValueError("incomplete_conflict_bundle")
+                    if sorted(bundle["claim_ids"]) != sorted(cid for item in alternatives for cid in item["claim_ids"]):
+                        raise ValueError("forged_conflict_ids")
+                for item in alternatives:
+                    required = {"claim_ids", "status", "evidence_level", "user_stated", "statement", "rationale", "freshness",
+                                "valid_from", "valid_to", "recorded_at", "citations", "relations"}
+                    if not isinstance(item, dict) or set(item) - required - {"freshness_warning", "section"} or required - set(item):
+                        raise ValueError("invalid_claim_bundle")
+                    if len(item["claim_ids"]) != 1:
+                        raise ValueError("missing_or_forged_claim_id")
+                    cid = item["claim_ids"][0]
+                    row = store.db.execute("SELECT * FROM claims WHERE id=? AND project_id=?", (cid, query["project"])).fetchone()
+                    if row is None or cid in cited_claims:
+                        raise ValueError("missing_foreign_or_duplicate_claim")
+                    cited_claims.add(cid)
+                    for key in ("statement", "rationale", "status", "evidence_level", "valid_from", "valid_to", "recorded_at"):
+                        if item[key] != row[key]:
+                            raise ValueError("forged_claim_field:" + key)
+                    if row["status"] in ("retracted", "quarantined"):
+                        raise ValueError("ineligible_claim")
+                    if row["status"] == "disputed" and bundle.get("status") != "unresolved":
+                        raise ValueError("hidden_dispute")
+                    related = store.db.execute("SELECT c.* FROM relations r JOIN claims c ON "
+                        "c.id=CASE WHEN r.from_id=? THEN r.to_id ELSE r.from_id END "
+                        "WHERE r.project_id=? AND r.kind='contradicts' AND (r.from_id=? OR r.to_id=?) "
+                        "AND c.project_id=? AND c.status IN ('reported','accepted','disputed')",
+                        (cid, query["project"], cid, cid, query["project"])).fetchall()
+                    eligible_related = []
+                    for other in related:
+                        if query.get("as_of"):
+                            instant = datetime.fromisoformat(query["as_of"].replace("Z", "+00:00"))
+                            if (not other["valid_from"] or other["valid_end_state"] == "unknown" or other["valid_precision"] != "instant"
+                                    or datetime.fromisoformat(other["valid_from"].replace("Z", "+00:00")) > instant
+                                    or (other["valid_to"] and datetime.fromisoformat(other["valid_to"].replace("Z", "+00:00")) <= instant)):
+                                continue
+                        eligible_related.append(other["id"])
+                    if eligible_related and (bundle.get("status") != "unresolved" or not set(eligible_related) <= set(bundle["claim_ids"])):
+                        raise ValueError("hidden_conflicting_alternative")
+                    if bundle.get("status") == "unresolved" and row["status"] != "disputed" and not eligible_related:
+                        raise ValueError("forged_dispute")
+                    if query.get("as_of"):
+                        instant = datetime.fromisoformat(query["as_of"].replace("Z", "+00:00"))
+                        start, end = row["valid_from"], row["valid_to"]
+                        if (not start or row["valid_end_state"] == "unknown" or row["valid_precision"] != "instant"
+                                or datetime.fromisoformat(start.replace("Z", "+00:00")) > instant
+                                or (end and datetime.fromisoformat(end.replace("Z", "+00:00")) <= instant)):
+                            raise ValueError("ineligible_as_of_claim")
+                    elif mode == "current" and row["status"] == "superseded":
+                        raise ValueError("superseded_current_claim")
+                    if row["status"] == "superseded" and item.get("section") != "history":
+                        raise ValueError("unlabeled_history")
+                    all_support = store.db.execute("SELECT s.*,e.source_start,e.source_end,e.quote_sha FROM evidence e "
+                        "JOIN sources s ON s.id=e.source_id WHERE e.claim_id=? AND e.role='supports'", (cid,)).fetchall()
+                    intact = [s for s in all_support if s["project_id"] == query["project"] and s["privacy"] != "excluded"
+                        and policy.sha_text(s["excerpt"]) == s["content_sha"]
+                        and 0 <= s["source_start"] < s["source_end"] <= len(s["excerpt"])
+                        and policy.sha_text(s["excerpt"][s["source_start"]:s["source_end"]]) == s["quote_sha"]]
+                    user = any(s["speaker"] == "user" for s in intact)
+                    if type(item["user_stated"]) is not bool or item["user_stated"] != user:
+                        raise ValueError("missing_or_forged_user_stated")
+                    if not item["citations"]:
+                        raise ValueError("missing_source_id")
+                    fixture_ids = set()
+                    for citation in item["citations"]:
+                        if set(citation) != {"source_id", "note_path", "start", "end", "quote_sha", "quote", "source_kind"}:
+                            raise ValueError("invalid_citation_shape")
+                        eligible = [s for s in intact if s["id"] == citation["source_id"]]
+                        if not eligible:
+                            raise ValueError("unproven_source_id")
+                        source = eligible[0]
+                        start, end = citation["start"], citation["end"]
+                        if (type(start) is not int or type(end) is not int or not source["source_start"] <= start < end <= source["source_end"]
+                                or end - start > 240 or source["excerpt"][start:end] != citation["quote"]
+                                or policy.sha_text(citation["quote"]) != citation["quote_sha"]
+                                or citation["note_path"] != source["note_path"] or citation["source_kind"] != source["kind"]):
+                            raise ValueError("forged_quote")
+                        policy.relative_path(citation["note_path"], Path(vault))
+                        support_text = source["excerpt"][source["source_start"]:source["source_end"]]
+                        if not _supports(support_text, item["statement"]) or (item["rationale"] and not _supports(support_text, item["rationale"])):
+                            raise ValueError("unsupported_claim_content")
+                        fixture_ids.update(s["id"] for s in sources if _identity(s) == _identity(dict(source))
+                            and s["project_id"] == query["project"] and _supports(source["excerpt"], s.get("text", "")))
+                    text = item["statement"] + "\nReason: " + item["rationale"]
+                    text += "\nStatus: " + item["status"] + "; evidence: " + item["evidence_level"]
+                    if user:
+                        text += "; user_stated"
+                    if bundle.get("status") == "unresolved":
+                        text += "; unresolved alternatives; disputed"
+                    live = next((p.get("repo", {}).get("head") for p in corpus.get("projects", []) if p["id"] == query["project"]), None)
+                    moved = {s["repo_head"] for s in intact if live and s["repo_head"] and s["repo_head"] != live}
+                    if moved:
+                        warning = item.get("freshness_warning", "")
+                        if (item["freshness"] != "repo_moved" or not _positive(warning, LABELS["repo_moved"])
+                                or not _positive(warning, LABELS["live_verification_required"]) or any(head not in warning for head in moved)):
+                            raise ValueError("missing_repo_moved_label")
+                        text += "\n" + warning
+                    elif item["freshness"] not in ("unknown", "current"):
+                        raise ValueError("forged_freshness")
+                    elif item.get("freshness_warning"):
+                        raise ValueError("forged_freshness_warning")
+                    for relation in item["relations"]:
+                        if set(relation) != {"from_id", "kind", "to_id"} or not store.db.execute(
+                            "SELECT 1 FROM relations WHERE project_id=? AND from_id=? AND kind=? AND to_id=?",
+                            (query["project"], relation["from_id"], relation["kind"], relation["to_id"])).fetchone():
+                            raise ValueError("forged_relation")
+                    citations.append(Citation(item["citations"][0]["note_path"], text, frozenset(fixture_ids)))
+        finally:
+            store.db.execute("ROLLBACK")
+    return citations
+
+
+def _grade_structured(query, gold, context, *, corpus, vault):
+    try:
+        from agentmem.knowledge.policy import canonical
+        from agentmem.knowledge.models import KnowledgeError
+        encoded = canonical(context).encode("utf-8")
+        if context.get("budget_unit") != "tokens_est_3b":
+            raise ValueError("unmeasured_tokenizer")
+        used = math.ceil(len(encoded) / 3)
+        if context.get("used") != used or context.get("budget") != query.get("budget", 2400) or used > query.get("budget", 2400):
+            raise ValueError("invalid_or_exceeded_budget")
+        citations = _structured_citations(query, context, corpus, Path(vault).resolve())
+        adapter = dict(snippets=[dict(path=c.path, content=c.text) for c in citations], project_id=context["project_id"],
+                       budget_unit="tokens_est_3b")
+        result = _grade_query(dict(query, budget=max(query.get("budget", 2400), 8000)), gold, adapter,
+                              corpus=corpus, vault=vault, proven_citations=citations)
+        for forbidden in gold.get("forbidden_strings", []):
+            if forbidden in encoded.decode("utf-8"):
+                result["failures"].append("forbidden_string_present:" + forbidden)
+        result.update(packed_bytes=len(encoded), used=used, budget_unit="tokens_est_3b")
+        result["pass"] = not result["failures"]
+        return result
+    except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, KnowledgeError) as error:
+        return dict(query_id=query["query_id"], **{"pass": False}, failures=["invalid_structured_context:" + str(error)],
+                    snippet_count=0, packed_bytes=0, unmeasured=[])
 
 
 def lifecycle_check(vault, corpus):
