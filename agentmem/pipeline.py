@@ -10,6 +10,7 @@ A retry after a crash between 1 and 3 finds the note, re-reconciles (idempotent 
 import hashlib
 import json
 import os
+import re
 import time
 import traceback
 from datetime import datetime
@@ -247,7 +248,8 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
     when = _parse_time(receipt["when"])
     cost, consolidated = receipt["cost"], False
     if project != projects.UNSORTED:
-        extra_cost, consolidated = consolidate_into_project(cfg, project, summary, link, when, kind, consolidator)
+        extra_cost, consolidated = consolidate_into_project(cfg, project, summary, link, when, kind, consolidator,
+                                                            order_part=part)
         cost += extra_cost
     for related in receipt["related_projects"]:
         note_path = projects.note_path(cfg.vault, related)
@@ -260,6 +262,9 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                        summarizer=kind, cost=cost, sha=receipt["digest_sha"], consolidated=consolidated,
                        summary_json=json.dumps(summary, ensure_ascii=False),
                        error=_source_error(receipt.get("source_warnings", [])))
+    if project != projects.UNSORTED:
+        exclude = {(agent, sid, part)} if not consolidated else set()
+        consolidate_pending(cfg, man, summarizer=summarizer, consolidator=consolidator, exclude=exclude)
     if cfg.knowledge_mode != "off" and project != projects.UNSORTED:
         try:
             outcome = ksources.maybe_import_after_capture(cfg, receipt)
@@ -294,8 +299,18 @@ def _pending_lines(summary: dict, link: str, date: str) -> list:
     return out or [f"- [ ] {date} [[{link}]] — review session for state changes"]
 
 
+def _pending_marker(pending: str, link: str):
+    for line in pending.splitlines():
+        if f"[[{link}]]" not in line or "status update pending" not in line:
+            continue
+        base = re.search(r"\bbase=([0-9a-f]{64})\b", line)
+        order = re.search(r"\border=(\d+):(\d+)\b", line)
+        return (base[1] if base else None, (int(order[1]), int(order[2])) if order else None)
+    return None, None
+
+
 def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str, when: datetime,
-                             summary_kind: str, consolidator=None) -> tuple:
+                             summary_kind: str, consolidator=None, order_override=None, order_part: int = 1) -> tuple:
     """Reconcile one session into its project note. Returns (cost, consolidated?)."""
     if consolidator is None:
         consolidator = lambda state, current_summary, link, date, timeout: llm.consolidate(
@@ -309,9 +324,25 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         if not note_path.exists():
             notes.update_project_note(note_path, project, date, email_allowlist=cfg.privacy_email_allowlist)
         text = notes.ensure_blocks(note_path.read_text(encoding="utf-8"))
+        current_state = notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END)
+        pending = notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)
+        order_time = int(order_override if order_override is not None else when.timestamp() * 1_000_000)
+        order = (order_time, int(order_part))
+        base_revision = hashlib.sha256(current_state.encode("utf-8")).hexdigest()
+        pending_base, pending_order = _pending_marker(pending, link)
         session_marker = f"[[{link}|"
         if (session_marker in notes.get_block(text, notes.SESS_BEGIN, notes.SESS_END)
                 and f"[[{link}]]" not in notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)):
+            return 0.0, True
+        if notes.state_order(text) > order:
+            items = _pending_lines(summary, link, date)
+            notes.append_project_history(notes.project_history_path(note_path), project, date, link, items,
+                                         "Superseded pending update", email_allowlist=cfg.privacy_email_allowlist)
+            notes.update_project_note(note_path, project, date, pending_clear=f"[[{link}]]",
+                                      session_link=link, session_line=session_line,
+                                      email_allowlist=cfg.privacy_email_allowlist)
+            log(cfg, "pending-superseded", project=project, note=link,
+                base_revision=pending_base or base_revision, order=pending_order or order)
             return 0.0, True
         if (summary_kind != "deterministic" and cfg.summarizer != "none"
                 and ksources._privacy_for(cfg, project) not in ("local_only", "excluded")):
@@ -322,11 +353,22 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                     return cost, False
                 notes.update_project_note(note_path, project, date, state=state, pending_clear=f"[[{link}]]",
                                           session_link=link, session_line=session_line,
+                                          state_order_value=order,
                                           email_allowlist=cfg.privacy_email_allowlist)
                 return cost, True
             except llm.LLMError as e:
                 log(cfg, "llm-fallback", step="consolidate", project=project, note=link, error=str(e))
-        notes.update_project_note(note_path, project, date, pending_add=_pending_lines(summary, link, date),
+                reason = str(e)
+        else:
+            reason = "summary is deterministic or project consolidation is unavailable"
+        reason = " ".join(reason.split())
+        pending_order = pending_order or order
+        pending_lines = [f"- [ ] {date} [[{link}]] — status update pending ({reason[:180]}; "
+                         f"base={pending_base or base_revision}; order={pending_order[0]}:{pending_order[1]})"]
+        pending_lines += [line for line in _pending_lines(summary, link, date)
+                          if "status update pending" not in line]
+        notes.update_project_note(note_path, project, date, pending_clear=f"[[{link}]]",
+                                  pending_add=pending_lines,
                                   session_link=link, session_line=session_line,
                                   email_allowlist=cfg.privacy_email_allowlist)
         return 0.0, False
@@ -353,13 +395,16 @@ def _validate_pending_identity(cfg, man, row, text, summary):
         raise ValueError("capture_identity_conflict: masked pending source range differs")
 
 
-def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidator=None, limit: int = 20) -> dict:
+def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidator=None, limit: int = 20,
+                        exclude: set = None) -> dict:
     """Retry reconciliation for captures that fell back (LLM down, or deterministic summary)."""
     if summarizer is None:
         summarizer = lambda digest, timeout: llm.summarize(
             digest, timeout=timeout, email_allowlist=cfg.privacy_email_allowlist)
     done = failed = 0
-    for row in man.unconsolidated()[:limit]:
+    excluded = exclude or set()
+    rows = [row for row in man.unconsolidated() if (row["agent"], row["session_id"], row["part"]) not in excluded]
+    for row in rows[:limit]:
         if ksources._privacy_for(cfg, row["project"]) == "excluded":
             failed += 1
             continue
@@ -368,7 +413,9 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
         try:
             path = _validated_path(cfg, row["note_path"])
             persisted = path.read_bytes()
-            _validate_pending_identity(cfg, man, row, persisted.decode("utf-8"), summary)
+            text = persisted.decode("utf-8")
+            _validate_pending_identity(cfg, man, row, text, summary)
+            fields = notes.session_metadata(text, note_type="memory" if row["summarizer"] == "remember" else "session")
             receipt = _load_receipt(cfg, row["agent"], row["session_id"], row["part"], row["start_offset"] or 0)
             if receipt and (hashlib.sha256(persisted).hexdigest() != receipt["content_sha"] or summary != receipt["summary"]):
                 raise ValueError("capture_identity_conflict: pending evidence mismatch")
@@ -380,7 +427,10 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
         if kind == "deterministic" and cfg.summarizer != "none":
             kind = "persisted"
         link = Path(row["note_path"]).with_suffix("").as_posix()
-        cost, ok = consolidate_into_project(cfg, row["project"], summary, link, _parse_time(row["date"]), kind, consolidator)
+        session_when = _parse_time(fields.get("started")) if fields.get("started") else _parse_time(row["date"])
+        cost, ok = consolidate_into_project(cfg, row["project"], summary, link, session_when, kind, consolidator,
+                                            order_override=int(session_when.timestamp() * 1_000_000),
+                                            order_part=int(row["part"]))
         if ok:
             man.set_consolidated(row["agent"], row["session_id"], row["part"], 1, cost)
             done += 1

@@ -176,13 +176,58 @@ def touch_updated(text: str, today: str) -> str:
     return re.sub(r"(?m)^updated: .*$", f"updated: {today}", text, count=1) if text.startswith("---") else text
 
 
+def project_history_path(path: Path) -> Path:
+    return path.with_name("History.md")
+
+
+def state_order(text: str) -> tuple:
+    header = text.split("\n---\n", 1)[0] if text.startswith("---\n") else ""
+    match = re.search(r"(?m)^agentmem_state_order: (\d+):(\d+)$", header)
+    return (int(match[1]), int(match[2])) if match else (0, 0)
+
+
+def touch_state_order(text: str, order: tuple) -> str:
+    if not text.startswith("---\n") or "\n---\n" not in text[4:]:
+        return text
+    header, body = text[4:].split("\n---\n", 1)
+    value = f"{order[0]}:{order[1]}"
+    if re.search(r"(?m)^agentmem_state_order: \d+:\d+$", header):
+        header = re.sub(r"(?m)^agentmem_state_order: \d+:\d+$", f"agentmem_state_order: {value}", header, count=1)
+    else:
+        header += f"\nagentmem_state_order: {value}"
+    return "---\n" + header + "\n---\n" + body
+
+
+def append_project_history(path: Path, project: str, date: str, session_link: str, items, reason: str,
+                           email_allowlist=None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = path.read_text(encoding="utf-8") if path.exists() else f"# {project} history\n"
+    suffix = f"[[{session_link}]]" if session_link else "session evidence unavailable"
+    entries = [f"- {date} {reason}: {redact(item.strip(), email_allowlist=email_allowlist)} ({suffix})" for item in items
+               if item and item.strip() and item.strip().lower() not in ("- none", "- none yet")]
+    additions = [entry for entry in entries if entry not in text]
+    if additions:
+        atomic_write(path, text.rstrip("\n") + "\n\n" + "\n".join(additions) + "\n")
+
+
 def update_project_note(path: Path, project: str, today: str, *, state=None, pending_add=None, pending_clear=None,
-                        session_link=None, session_line=None, email_allowlist=None) -> None:
+                        session_link=None, session_line=None, state_order_value=None, email_allowlist=None) -> None:
     """Caller holds the project lock. Re-reads the note, edits only managed blocks, writes atomically."""
     text = path.read_text(encoding="utf-8") if path.exists() else new_project_note(project, today)
     text = ensure_blocks(text)
     if state is not None:
+        old_state = get_block(text, STATE_BEGIN, STATE_END)
+        old_bullets = [line.strip()[2:] for line in old_state.splitlines()
+                       if line.strip().startswith("- ") and line.strip().lower() not in ("- none", "- none yet")]
+        new_bullets = {line.strip()[2:] for line in state.splitlines()
+                       if line.strip().startswith("- ") and line.strip().lower() not in ("- none", "- none yet")}
+        displaced = [item for item in old_bullets if item not in new_bullets]
+        if displaced:
+            append_project_history(project_history_path(path), project, today, session_link or "", displaced,
+                                   "Displaced status item", email_allowlist=email_allowlist)
         text = set_block(text, STATE_BEGIN, STATE_END, state)
+        if state_order_value is not None:
+            text = touch_state_order(text, state_order_value)
     if pending_add or pending_clear:
         lines = [l for l in get_block(text, PENDING_BEGIN, PENDING_END).splitlines() if l.strip()]
         if pending_clear:

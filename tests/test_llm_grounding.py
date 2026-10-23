@@ -82,6 +82,33 @@ class SummaryGroundingTests(unittest.TestCase):
         self.assertIn("[[0-Sessions/session-b#e1]]", state)
         self.assertIn("Keep every prior fact and decision unless the cited session evidence contradicts it.", invoke.call_args.args[0])
 
+    def test_oversized_consolidation_retries_once_with_shorten_instruction(self):
+        oversized = "\n".join([
+            "### Current state", "- " + ("old detail " * 900), "", "### Active decisions", "- none", "",
+            "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
+        ])
+        shortened = "\n".join([
+            "### Current state", "- compact state", "", "### Active decisions", "- none", "",
+            "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
+        ])
+        with patch.object(llm, "_run", side_effect=[{"state_markdown": oversized}, {"state_markdown": shortened}]) as invoke:
+            state, _ = llm.consolidate("", {}, "[[0-Sessions/session-a]]", "2026-10-23")
+
+        self.assertEqual(state, shortened)
+        self.assertEqual(invoke.call_count, 2)
+        self.assertIn("Shorten it to 8000 characters or fewer", invoke.call_args.args[1])
+
+    def test_second_oversized_consolidation_fails_after_one_retry(self):
+        oversized = "\n".join([
+            "### Current state", "- " + ("old detail " * 900), "", "### Active decisions", "- none", "",
+            "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
+        ])
+        with patch.object(llm, "_run", side_effect=[{"state_markdown": oversized}, {"state_markdown": oversized}]) as invoke:
+            with self.assertRaisesRegex(llm.LLMError, "consolidation output too long"):
+                llm.consolidate("", {}, "[[0-Sessions/session-a]]", "2026-10-23")
+
+        self.assertEqual(invoke.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
