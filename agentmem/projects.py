@@ -312,7 +312,7 @@ def attribute(cwd, map_path, files=(), text="", create=True):
     for proj in data["projects"]:
         name = proj["name"]
         count_files = min(10, file_owners[name])
-        count_paths = path_owners[name]
+        count_paths = min(3, path_owners[name])
         names = {name, *proj.get("aliases", []), *(Path(r).name for r in proj.get("roots", []))}
         names = {n.strip() for n in names if len(n.strip()) >= 4 and n.strip().lower() not in _STOP_NAMES}
         count_names = int(any(re.search(r"(?<![\w-])" + re.escape(n).replace(r"\ ", r"[\s_-]+").replace(r"\-", r"[\s_-]+") + r"(?![\w-])", text, re.I) for n in names))
