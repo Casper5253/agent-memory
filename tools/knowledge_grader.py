@@ -191,8 +191,15 @@ def _freshness_warning(citation, heads):
 
 def grade_query(query, gold, context, *, corpus, vault):
     if isinstance(context, dict) and "items" in context:
-        return _grade_structured(query, gold, context, corpus=corpus, vault=vault)
-    return _grade_query(query, gold, context, corpus=corpus, vault=vault)
+        result = _grade_structured(query, gold, context, corpus=corpus, vault=vault)
+    else:
+        result = _grade_query(query, gold, context, corpus=corpus, vault=vault)
+    if query.get("case") in OPERATIONAL_CASES or (query.get("case") == "T21" and query.get("mode") == "current"):
+        result["unmeasured"] = ["fault_execution:" + query["case"]]
+        if "operational_evidence_not_measured" not in result["failures"]:
+            result["failures"].append("operational_evidence_not_measured")
+        result["pass"] = False
+    return result
 
 
 def _grade_query(query, gold, context, *, corpus, vault, proven_citations=None):
