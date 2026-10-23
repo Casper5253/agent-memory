@@ -178,19 +178,41 @@ def search(cfg: Config, terms: str, n: int = 8, layers=None, semantic: bool = Fa
         except Exception as e:  # noqa: BLE001 - QMD down: degrade to a bounded scan, say so
             return fallback_search(cfg, terms, n, layers, reason=str(e))
         return [_build_hit(cfg, it) for it in items]
+    try:
+        superset_items = _qmd_search(cfg, terms, n, collections, semantic)
+    except FileNotFoundError:
+        return fallback_search(cfg, terms, n, layers, reason="qmd not installed")
+    except Exception as e:  # noqa: BLE001
+        return fallback_search(cfg, terms, n, layers, reason=str(e))
+    superset_paths = set()
+    for it in superset_items:
+        it["_disk_path"] = _to_disk(cfg, it.get("file") or it.get("path") or "")
+        superset_paths.add(it["_disk_path"])
+    per_term_limit = max(25 * n, 200)
     per_term_hits = []
     for word in words:
         try:
-            items = _qmd_search(cfg, word, n, collections, semantic)
+            items = _qmd_search(cfg, word, per_term_limit, collections, semantic)
         except FileNotFoundError:
             return fallback_search(cfg, terms, n, layers, reason="qmd not installed")
-        except Exception:  # noqa: BLE001
-            items = []
+        except Exception as e:  # noqa: BLE001
+            return fallback_search(cfg, terms, n, layers, reason=str(e))
         for it in items:
             it["_disk_path"] = _to_disk(cfg, it.get("file") or it.get("path") or "")
         per_term_hits.append(items)
     merged = _majority_merge(per_term_hits, len(words), n)
-    hits = [_build_hit(cfg, it) for it in merged]
+    hits = [_build_hit(cfg, it) for it in superset_items]
+    seen_paths = set(superset_paths)
+    remaining = n - len(hits)
+    for it in merged:
+        if remaining <= 0:
+            break
+        if it["_disk_path"] not in seen_paths:
+            hits.append(_build_hit(cfg, it))
+            seen_paths.add(it["_disk_path"])
+            remaining -= 1
+    for it in superset_items:
+        it.pop("_disk_path", None)
     for it in merged:
         it.pop("_disk_path", None)
     return hits

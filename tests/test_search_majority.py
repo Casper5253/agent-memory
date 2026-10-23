@@ -295,5 +295,211 @@ class FallbackMajorityTest(unittest.TestCase):
         self.assertTrue(all("fallback" in h for h in hits))
 
 
+class SupersetGuaranteeTest(unittest.TestCase):
+    """The all-terms QMD query must run first; its hits stay first in QMD order.
+    A multi-term search may never return fewer of those hits than the old code.
+    Corpus: each term alone matches more than n notes.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if _qmd_base() is None:
+            raise unittest.SkipTest("qmd not installed")
+        audit_tmp = ROOT / ".audit" / "tmp"
+        audit_tmp.mkdir(parents=True, exist_ok=True)
+        cls._tmpdir = tempfile.TemporaryDirectory(prefix="superset-test-", dir=str(audit_tmp))
+        cls.base = Path(cls._tmpdir.name)
+        cls.vault = cls.base / "vault"
+        for d in ("_meta/queue", "_meta/locks", "_meta/logs", "0-Sessions", "1-Projects",
+                  "2-Areas", "3-Resources", "4-Archive"):
+            (cls.vault / d).mkdir(parents=True, exist_ok=True)
+
+        for i in range(12):
+            (cls.vault / "3-Resources" / f"all-terms-{i:02d}.md").write_text(
+                f"# AllTerms {i}\n\ncomprehensive coverage of redhot bluecold greenfast topics. " * 12,
+                encoding="utf-8")
+        for i in range(10):
+            (cls.vault / "3-Resources" / f"only-red-{i:02d}.md").write_text(
+                f"# OnlyRed {i}\n\nredhot redhot redhot mentions without the others. " * 12,
+                encoding="utf-8")
+        for i in range(10):
+            (cls.vault / "3-Resources" / f"only-blue-{i:02d}.md").write_text(
+                f"# OnlyBlue {i}\n\nbluecold bluecold bluecold here without the others. " * 12,
+                encoding="utf-8")
+        for i in range(10):
+            (cls.vault / "3-Resources" / f"only-green-{i:02d}.md").write_text(
+                f"# OnlyGreen {i}\n\ngreenfast greenfast greenfast without the others. " * 12,
+                encoding="utf-8")
+
+        cls.env = _make_isolated_env(cls.base)
+        cls.index_name = "superidx"
+        for folder, name in [("1-Projects", "vault-projects"), ("0-Sessions", "vault-sessions"),
+                             ("2-Areas", "vault-areas"), ("3-Resources", "vault-resources"),
+                             ("4-Archive", "vault-archive")]:
+            _run_qmd(cls.env, ["collection", "add", str(cls.vault / folder),
+                               "--name", name, "--mask", "**/*.md"], cls.index_name)
+        _run_qmd(cls.env, ["update"], cls.index_name, timeout=120)
+        cls.cfg = Config(
+            vault=cls.vault, summarizer="none", auto_index=False,
+            embeddings=False, qmd_index=cls.index_name,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmpdir.cleanup()
+
+    def _search(self, terms, n=8, **kwargs):
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            return search(self.cfg, terms, n=n, **kwargs)
+
+    def _qmd_direct(self, terms, n):
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            return _qmd_search(self.cfg, terms, n,
+                               [c for c, (_, _, _) in __import__("agentmem.search", fromlist=["COLLECTIONS"]).COLLECTIONS.items()],
+                               False)
+
+    def test_superset_hits_all_present_in_output(self):
+        n = 8
+        superset_raw = self._qmd_direct("redhot bluecold greenfast", n)
+        superset_paths = set()
+        for it in superset_raw:
+            p = it.get("file") or it.get("path") or ""
+            m = __import__("re").match(r"qmd://([^/]+)/([^?]*)", p or "")
+            if m:
+                coll = __import__("agentmem.search", fromlist=["COLLECTIONS"]).COLLECTIONS
+                superset_paths.add(str(self.vault / coll[m.group(1)][0] / m.group(2)))
+            else:
+                superset_paths.add(p)
+        self.assertTrue(len(superset_paths) > 0, "superset query must return some hits")
+        hits = self._search("redhot bluecold greenfast", n=n)
+        hit_paths = [h["path"] for h in hits]
+        for sp in superset_paths:
+            self.assertIn(sp, hit_paths,
+                          f"superset hit {sp} missing from multi-term output: {hit_paths}")
+
+    def test_superset_hits_appear_before_majority_fill(self):
+        n = 8
+        superset_raw = self._qmd_direct("redhot bluecold greenfast", n)
+        superset_order = []
+        for it in superset_raw:
+            p = it.get("file") or it.get("path") or ""
+            m = __import__("re").match(r"qmd://([^/]+)/([^?]*)", p or "")
+            if m:
+                coll = __import__("agentmem.search", fromlist=["COLLECTIONS"]).COLLECTIONS
+                superset_order.append(str(self.vault / coll[m.group(1)][0] / m.group(2)))
+            else:
+                superset_order.append(p)
+        hits = self._search("redhot bluecold greenfast", n=n)
+        hit_paths = [h["path"] for h in hits]
+        superset_in_output = [p for p in hit_paths if p in set(superset_order)]
+        superset_filtered = [p for p in superset_order if p in set(hit_paths)]
+        self.assertEqual(superset_in_output, superset_filtered,
+                         "superset hits must appear in the same relative QMD order")
+        if len(superset_filtered) < len(superset_order):
+            last_superset_idx = hit_paths.index(superset_filtered[-1])
+            non_superset_before = [hit_paths[i] for i in range(last_superset_idx)
+                                   if hit_paths[i] not in set(superset_order)]
+            self.assertEqual(non_superset_before, [],
+                             "non-superset items must not appear before the last superset hit")
+
+
+class PerTermCandidateLimitTest(unittest.TestCase):
+    """Per-term QMD search must use limit max(25*n, 200), not n."""
+
+    def setUp(self):
+        self._tmp = fx.tmpdir()
+        self.tmp = Path(self._tmp.name)
+        self.cfg = fx.make_vault(self.tmp)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_per_term_limit_is_max_25n_200(self):
+        captured_n = []
+        real_qmd_search = __import__("agentmem.search", fromlist=["_qmd_search"])._qmd_search
+
+        def fake_qmd_search(cfg, terms, n, collections, semantic):
+            captured_n.append(n)
+            return real_qmd_search(cfg, terms, n, collections, semantic)
+
+        with mock.patch("agentmem.search._qmd_search", side_effect=fake_qmd_search):
+            try:
+                search(self.cfg, "alpha beta gamma", n=8)
+            except Exception:
+                pass
+        multi_term_calls = captured_n[1:] if len(captured_n) > 1 else captured_n
+        expected_limit = max(25 * 8, 200)
+        for call_n in multi_term_calls:
+            self.assertEqual(call_n, expected_limit,
+                             f"per-term search must use limit {expected_limit}, got {call_n}")
+
+    def test_per_term_limit_scales_with_n(self):
+        captured_n = []
+        real_qmd_search = __import__("agentmem.search", fromlist=["_qmd_search"])._qmd_search
+
+        def fake_qmd_search(cfg, terms, n, collections, semantic):
+            captured_n.append(n)
+            return real_qmd_search(cfg, terms, n, collections, semantic)
+
+        with mock.patch("agentmem.search._qmd_search", side_effect=fake_qmd_search):
+            try:
+                search(self.cfg, "alpha beta gamma", n=20)
+            except Exception:
+                pass
+        multi_term_calls = captured_n[1:] if len(captured_n) > 1 else captured_n
+        expected_limit = max(25 * 20, 200)
+        for call_n in multi_term_calls:
+            self.assertEqual(call_n, expected_limit,
+                             f"per-term search with n=20 must use limit {expected_limit}, got {call_n}")
+
+
+class QMDPerTermFailureFallbackTest(unittest.TestCase):
+    """A QMD failure on any per-term search falls back to fallback_search with its reason."""
+
+    def setUp(self):
+        self._tmp = fx.tmpdir()
+        self.tmp = Path(self._tmp.name)
+        self.cfg = fx.make_vault(self.tmp)
+        (self.cfg.vault / "3-Resources" / "fallback-note.md").write_text(
+            "# Fallback\n\nalpha beta gamma mentioned here for fallback. " * 10, encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_per_term_qmd_failure_triggers_fallback(self):
+        call_count = [0]
+
+        def fake_qmd_search(cfg, terms, n, collections, semantic):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return [{"file": "qmd://vault-resources/found.md", "score": 10,
+                         "snippet": "alpha beta gamma", "title": "found"}]
+            raise RuntimeError("simulated QMD per-term failure")
+
+        with mock.patch("agentmem.search._qmd_search", side_effect=fake_qmd_search):
+            hits = search(self.cfg, "alpha beta gamma", n=8)
+        self.assertTrue(len(hits) > 0, "fallback must return results")
+        self.assertTrue(all("fallback" in h for h in hits),
+                        "all fallback hits must have a 'fallback' reason field")
+        self.assertIn("simulated QMD per-term failure",
+                      hits[0].get("fallback", ""),
+                      "fallback reason must contain the QMD error message")
+
+    def test_file_not_found_on_per_term_triggers_fallback(self):
+        call_count = [0]
+
+        def fake_qmd_search(cfg, terms, n, collections, semantic):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return [{"file": "qmd://vault-resources/found.md", "score": 10,
+                         "snippet": "alpha beta gamma", "title": "found"}]
+            raise FileNotFoundError("qmd not installed")
+
+        with mock.patch("agentmem.search._qmd_search", side_effect=fake_qmd_search):
+            hits = search(self.cfg, "alpha beta gamma", n=8)
+        self.assertTrue(len(hits) > 0)
+        self.assertTrue(all("fallback" in h for h in hits))
+
+
 if __name__ == "__main__":
     unittest.main()
