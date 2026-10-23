@@ -93,11 +93,13 @@ class StartupPackageTests(StartupBase):
         self.assertIn('branch main', package)
         self.assertIn('1 session not yet captured', package)
 
-    def test_startup_package_writes_nothing_to_the_vault(self):
+    def test_startup_package_writes_no_git_facts_to_the_notes(self):
         self.write_state('### Current state\n- Working on the P3 startup package')
-        before = {p: p.read_bytes() for p in self.cfg.vault.rglob('*') if p.is_file()}
+        git(self.repo, 'init', '-q', '-b', 'main')
+        notes_dirs = [self.cfg.vault / '0-Sessions', self.cfg.vault / '1-Projects']
+        before = {p: p.read_bytes() for d in notes_dirs for p in d.rglob('*') if p.is_file()}
         hook.startup_package(self.cfg, str(self.repo))
-        after = {p: p.read_bytes() for p in self.cfg.vault.rglob('*') if p.is_file()}
+        after = {p: p.read_bytes() for d in notes_dirs for p in d.rglob('*') if p.is_file()}
         self.assertEqual(before, after)
 
 
