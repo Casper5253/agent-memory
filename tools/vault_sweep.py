@@ -102,11 +102,37 @@ def _worktree_parent_git_dir(git_file: Path) -> Path | None:
         return None
     gitdir = raw.split(":", 1)[1].strip()
     resolved = (git_file.parent / gitdir).resolve() if not os.path.isabs(gitdir) else Path(gitdir).resolve()
+    admin_gitdir_file = resolved / "gitdir"
+    if not admin_gitdir_file.is_file():
+        return None
+    back_ref = _read(admin_gitdir_file)
+    if not back_ref:
+        return None
+    back_path = back_ref.strip()
+    back_resolved = (resolved / back_path).resolve() if not os.path.isabs(back_path) else Path(back_path).resolve()
+    if back_resolved != git_file.resolve():
+        return None
     return _resolve_git_dir(resolved)
 
 
 def _norm_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _normalize_remote_url(url: str, repo_root: Path) -> str:
+    if not url:
+        return ""
+    if url.startswith("../") or url.startswith("./") or url.startswith("..\\") or url.startswith(".\\"):
+        url = str((repo_root / url).resolve())
+    url = url.replace("\\", "/")
+    while "//" in url:
+        url = url.replace("//", "/")
+    if os.name == "nt":
+        url = url.lower()
+    url = url.rstrip("/")
+    if url.endswith(".git"):
+        url = url[:-4]
+    return url
 
 
 def _words(name: str) -> set[str]:
@@ -182,25 +208,55 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
             if url:
                 confirmed_origins.setdefault(url, []).append(n)
 
-    root_to_name = {_resolved(p): n for n, p in proj_folders.items()}
+    root_to_names: dict[str, list[str]] = {}
+    for n, p in proj_folders.items():
+        r = _resolved(p)
+        root_to_names.setdefault(r, []).append(n)
+    ambiguous_roots = {r for r, names in root_to_names.items() if len(names) > 1}
+
+    root_to_name = {}
+    for r, names in root_to_names.items():
+        if len(names) == 1:
+            root_to_name[r] = names[0]
+
     items = []
     for name in sorted(all_frags):
         path, parent_gd = all_frags[name]
         evidence, parent = None, None
 
         if parent_gd:
-            parent = root_to_name.get(_resolved(parent_gd.parent))
-            if parent and parent != name:
-                evidence = "worktree"
-            else:
+            frag_root = _resolved(path)
+            if frag_root in ambiguous_roots:
                 parent = None
+                evidence = None
+            else:
+                parent = root_to_name.get(_resolved(parent_gd.parent))
+                if parent and parent != name:
+                    parent_root = _resolved(proj_folders[parent])
+                    if frag_root == parent_root:
+                        evidence = "guess"
+                    else:
+                        evidence = "worktree"
+                else:
+                    parent = None
 
         if not parent and name in name_frags:
             cand = name_frags[name]
-            own_url = _read_origin(path / ".git") if (path / ".git").is_dir() else None
-            cand_url = _read_origin(proj_folders[cand] / ".git") if (proj_folders[cand] / ".git").is_dir() else None
-            evidence = "shared_remote" if own_url and own_url == cand_url else "guess"
-            parent = cand
+            frag_root = _resolved(path)
+            cand_root = _resolved(proj_folders[cand])
+            if frag_root in ambiguous_roots or cand_root in ambiguous_roots:
+                evidence = "guess"
+                parent = cand
+            elif frag_root == cand_root:
+                evidence = "guess"
+                parent = cand
+            else:
+                own_url = _read_origin(path / ".git") if (path / ".git").is_dir() else None
+                cand_url = _read_origin(proj_folders[cand] / ".git") if (proj_folders[cand] / ".git").is_dir() else None
+                own_norm = _normalize_remote_url(own_url, path) if own_url else None
+                cand_norm = _normalize_remote_url(cand_url, proj_folders[cand]) if cand_url else None
+                evidence = "shared_remote" if own_norm and cand_norm and own_norm == cand_norm else "guess"
+                parent = cand
 
         if not parent and not parent_gd:
             parent = _find_parent(name, None, confirmed_non_frag)
