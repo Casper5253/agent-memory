@@ -237,9 +237,17 @@ def project_config(vault, names):
                   project_privacy={name: PROJECT_PRIVACY for name in names})
 
 
-def session_notes(vault, names):
-    """Session notes of the named projects, matched on normalized name. Malformed notes are listed."""
+def load_fragment_map(sweep_plan):
+    """Merged fragment folder to target project, read from the applied sweep plan."""
+    plan = json.loads(sweep_plan.read_text(encoding="utf-8"))
+    return {normalized_name(entry["folder"]): entry["proposed_parent"]
+            for entry in plan.get("fragments", []) if entry.get("auto_apply")}
+
+
+def session_notes(vault, names, fragments=None):
+    """Session notes of the named projects. A fragment name resolves to its target first. Malformed notes are listed."""
     wanted = {normalized_name(name): name for name in names}
+    fragments = fragments or {}
     notes, skipped = [], []
     for path in sorted((vault / SESSIONS_DIR).rglob("*.md")):
         rel = path.relative_to(vault).as_posix()
@@ -251,7 +259,8 @@ def session_notes(vault, names):
         except ValueError as error:
             skipped.append(dict(session=rel, reason=str(error)))
             continue
-        project = wanted.get(normalized_name(fields.get("project", "")))
+        frontmatter_project = fields.get("project", "")
+        project = wanted.get(normalized_name(fragments.get(normalized_name(frontmatter_project), frontmatter_project)))
         if project is None:
             continue
         if "date" not in fields:
@@ -269,7 +278,7 @@ def session_receipt(note):
         content_sha=kp.sha_text(note["text"]), when=fields["date"] + "T00:00:00Z", repo_head=None)
 
 
-def run_batches(vault, questions_path, out):
+def run_batches(vault, questions_path, out, fragments=None):
     if not vault.is_dir():
         raise SetupError("--vault is not a directory")
     if (out / "index.jsonl").exists():
@@ -277,7 +286,7 @@ def run_batches(vault, questions_path, out):
     check_frozen(questions_path)
     names = sorted({question["project"] for question in load_questions(questions_path)})
     cfg = project_config(vault, names)
-    notes, skipped = session_notes(vault, names)
+    notes, skipped = session_notes(vault, names, fragments)
     out.mkdir(parents=True, exist_ok=True)
     rows, seen = [], set()
     with tempfile.TemporaryDirectory(prefix="set-r-batches-", dir=str(ek.repo_tmp())) as directory:
@@ -375,7 +384,8 @@ def run_import(vault, batches, proposals, store_path):
 
 
 def batches_cli(args):
-    rows, skipped = run_batches(Path(args.vault), Path(args.questions), Path(args.out))
+    fragments = load_fragment_map(Path(args.sweep_plan))
+    rows, skipped = run_batches(Path(args.vault), Path(args.questions), Path(args.out), fragments)
     for item in skipped:
         print("skipped: " + json.dumps(item, ensure_ascii=False))
     print(f"batches {len(rows)} tokens {sum(row['tokens'] for row in rows)} skipped {len(skipped)} -> {args.out}")
@@ -408,6 +418,7 @@ def main(argv=None):
     batches.add_argument("--vault", required=True)
     batches.add_argument("--questions", required=True)
     batches.add_argument("--out", required=True)
+    batches.add_argument("--sweep-plan", required=True, help="applied sweep plan; its fragment merges map projects")
     importer = commands.add_parser("import", help="import batches and apply hand-written or model proposals as reported")
     importer.add_argument("--vault", required=True)
     importer.add_argument("--batches", required=True)

@@ -301,6 +301,18 @@ class BatchesAndImport(unittest.TestCase):
         self.assertEqual([row["status"] for row in evidence], ["reported"])
         self.assertEqual(tuple(proposal[0]), ("haiku-v1", one["source_ids"][0]))
 
+    def test_a_merged_fragment_project_resolves_to_its_target(self):
+        write_session(self.vault, "frag.md", "claude", "sess-frag", "Demo Fragment", "Fragment work for the demo.")
+        plan = self.tmp / "plan-final.json"
+        plan.write_text(json.dumps({"fragments": [
+            {"folder": "Demo Fragment", "proposed_parent": "Demo App", "evidence": "worktree", "auto_apply": True}]}),
+            encoding="utf-8")
+        self.assertNotIn(session_key("frag.md"), [row["session"] for row in sr.run_batches(
+            self.vault, self.questions, self.tmp / "no-map")[0]])
+        rows, _ = sr.run_batches(self.vault, self.questions, self.tmp / "mapped", sr.load_fragment_map(plan))
+        frag = [row for row in rows if row["session"] == session_key("frag.md")]
+        self.assertEqual([row["project"] for row in frag], ["Demo App"])
+
     def test_import_refuses_an_existing_store(self):
         self.build_batches()
         store = self.tmp / "store.sqlite"
