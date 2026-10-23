@@ -110,6 +110,18 @@ class FileOwnership(unittest.TestCase):
                 self.assertNotIn("Unmapped Repository", result.signals)
                 self.assertEqual(self.map_path.read_bytes(), before)
 
+        result = projects.attribute(str(self.parent), self.map_path,
+            files=[path, str(repository / "outside.py")], create=False)
+        self.assertEqual(result.signals["Nested Project"]["files"], 1)
+        self.assertEqual(result.signals["Unmapped Repository"]["files"], 1)
+        self.assertEqual(self.map_path.read_bytes(), before)
+
+        self.data["projects"].append({"name": "Repository Owner", "roots": [str(repository)]})
+        self.save()
+        result = self.attribute([path])
+        self.assertEqual(result.signals["Repository Owner"]["files"], 1)
+        self.assertEqual(result.signals["Nested Project"]["files"], 0)
+
     def test_nested_repository_is_not_hidden_by_cached_outer_repository(self):
         self.git(self.parent, "init", "-q")
         nested = self.parent / "nested"

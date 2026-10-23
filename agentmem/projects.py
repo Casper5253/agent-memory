@@ -251,7 +251,17 @@ def _path_project(path, data, cache):
     if not os.path.isabs(path):
         return None
     repository = _repository_for_file(path, cache)
-    return _repository_project(repository, data) if repository else _explicit(path, data)
+    if not repository:
+        return _explicit(path, data)
+    owner = _repository_project(repository, data)
+    if owner:
+        return owner
+    eligible = {**data, "projects": [
+        {**p, "roots": [r for r in p.get("roots", [])
+                        if _is_under(_norm(path), _norm(r))
+                        and _repository_for_file(r, cache) == repository]}
+        for p in data["projects"]]}
+    return _explicit(path, eligible)
 
 
 def _add_path_candidates(data, paths, cache):
@@ -261,7 +271,7 @@ def _add_path_candidates(data, paths, cache):
             continue
         repository = _repository_for_file(path, cache)
         if repository:
-            if _repository_project(repository, data):
+            if _path_project(path, data, cache):
                 continue
             directory = repository
         else:
@@ -295,9 +305,10 @@ def attribute(cwd, map_path, files=(), text="", create=True):
         edited.add(_norm(path))
     mentioned = _paths_in_text(text)
     repositories = {}
+    owners = {path: _path_project(path, data, repositories) for path in edited | mentioned}
     generated = _add_path_candidates(data, edited | mentioned, repositories)
-    file_owners = Counter(_path_project(path, data, repositories) for path in edited)
-    path_owners = Counter(_path_project(path, data, repositories) for path in mentioned)
+    file_owners = Counter(owners[path] or _path_project(path, data, repositories) for path in edited)
+    path_owners = Counter(owners[path] or _path_project(path, data, repositories) for path in mentioned)
     known = {p["name"] for p in original["projects"]}
     pins = []
     for pin in original.get("pins", []):
