@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 
-OPERATIONAL_CASES = frozenset({"T12", "T13", "T14", "T16", "T17", "T18", "T19", "T20", "T24"})
+OPERATIONAL_CASES = frozenset({"T11", "T12", "T13", "T14", "T16", "T17", "T18", "T19", "T20", "T24"})
 LABELS = {
     "reported": r"\b(?:reported|historical record|according to|source says)\b",
     "user_stated": r"\b(?:user stated|stated by the user|user explicitly chose|user directly stated)\b",
@@ -26,10 +26,21 @@ LABELS = {
     "command_attempt": r"\b(?:command attempt|command was attempted|command attempted)\b",
     "current_access_rejected": r"\b(?:current access rejected|current context rejected|current access denied)\b",
 }
-UNCERTAINTY = re.compile(r"\b(?:unresolved|uncertain|disputed|conflicting reports|disagree|no evidence|not recorded|unrecorded|missing evidence|no .{0,60} recorded)\b")
-RESOLUTION = re.compile(r"\b(?:no unresolved|not uncertain|no uncertainty|no contradiction|no disagreement|only current truth|only correct choice|resolved|accepted current|sole current|the only alternative|with certainty|winner)\b")
+UNCERTAINTY = re.compile(r"\b(?:unresolved|uncertain|disputed|conflicting reports|disagree|no evidence|not recorded|unrecorded|missing evidence|no .{0,60} recorded|no success output (?:was )?(?:captured|recorded)|success output (?:was )?(?:not|never) captured)\b")
+RESOLUTION = re.compile(r"\b(?:no unresolved|not uncertain|no uncertainty|no contradiction|no disagreement|only current truth|only correct choice|resolved|accepted current|sole current|the only alternative|with certainty|winner|all tests passed|tests? (?:passed|succeeded)|test run succeeded)\b")
 CURRENT_ASSERTION = r"\b(?:accepted.{0,35}(?:current|use now)|current (?:decision|choice|truth)|use .{0,60} now|now use)\b"
 QUERY_STOPWORDS = frozenset("a an and are as at be been by can could did do does for from had has have how i in is it its may me of on or our should that the their then these this those to was we were what when where which while who why will with would you your".split())
+K0_UNREVIEWED_CASES = frozenset({"T02", "T03", "T04"})
+
+
+def gate_query_applicable(arm, query):
+    return not (arm == "K0" and query.get("case") in K0_UNREVIEWED_CASES
+                and query.get("variant") != "unreviewed")
+
+
+def applicable_gate_rows(rows, queries, arm):
+    return {qid: row for qid, row in rows.items()
+            if qid in queries and gate_query_applicable(arm, queries[qid]) and not row.get("unmeasured")}
 
 
 def formulate_query(question):
@@ -40,6 +51,11 @@ def formulate_query(question):
 
 def _space(text):
     return " ".join(text.split())
+
+
+def _has_explicit_label(text, field, value):
+    return bool(re.search(r"(?:^|\n)\s*" + re.escape(field) + r"(?:\s+level)?\s*:\s*"
+                          + re.escape(value) + r"\b", text, re.IGNORECASE))
 
 
 def _plain(text):
@@ -127,6 +143,8 @@ class Citation:
     path: str
     text: str
     source_ids: frozenset
+    status: str = ""
+    evidence_level: str = ""
 
 
 class EvidenceIndex:
@@ -282,10 +300,12 @@ def _grade_query(query, gold, context, *, corpus, vault, proven_citations=None):
                 moved = index.moved_heads(citation, claim, query["project"])
                 if moved and not _freshness_warning(citation, moved):
                     failures.append("unqualified_moved_repository_fact:" + claim["id"])
-            if _positive(citation.text, r"\baccepted\b") and not any(
+            acceptance_asserted = citation.status == "accepted" or _has_explicit_label(citation.text, "status", "accepted")
+            verification_asserted = citation.evidence_level == "verified" or _has_explicit_label(citation.text, "evidence", "verified")
+            if acceptance_asserted and not any(
                     claim["id"] in accepted or claim.get("status") in ("accepted", "superseded") for claim in matching_claims):
                 failures.append("unsupported_acceptance")
-            if _positive(citation.text, r"\bverified\b") and not any(
+            if verification_asserted and not any(
                     claim.get("evidence_level") == "verified" for claim in matching_claims):
                 failures.append("unsupported_verification")
             if query.get("case") == "T15" and (not matching_claims or any(
@@ -481,11 +501,12 @@ def _structured_citations(query, context, corpus, vault):
                             "SELECT 1 FROM relations WHERE project_id=? AND from_id=? AND kind=? AND to_id=?",
                             (query["project"], relation["from_id"], relation["kind"], relation["to_id"])).fetchone():
                             raise ValueError("forged_relation")
-                    citations.append(Citation(item["citations"][0]["note_path"], text, frozenset(fixture_ids)))
+                    citations.append(Citation(item["citations"][0]["note_path"], text, frozenset(fixture_ids),
+                                              item["status"], item["evidence_level"]))
             proven = _proven_warnings(store, query) & set(context.get("warnings") or [])
             if proven:
                 note = "\nWarnings: " + "; ".join(sorted(w.replace("_", " ") for w in proven))
-                citations = [Citation(c.path, c.text + note, c.source_ids) for c in citations]
+                citations = [Citation(c.path, c.text + note, c.source_ids, c.status, c.evidence_level) for c in citations]
         finally:
             store.db.execute("ROLLBACK")
     return citations
@@ -522,8 +543,9 @@ def _grade_structured(query, gold, context, *, corpus, vault):
         result = _grade_query(dict(query, budget=max(query.get("budget", 2400), 8000)), gold, adapter,
                               corpus=corpus, vault=vault, proven_citations=citations)
         for forbidden in gold.get("forbidden_strings", []):
-            if forbidden in encoded.decode("utf-8"):
-                result["failures"].append("forbidden_string_present:" + forbidden)
+            failure = "forbidden_string_present:" + forbidden
+            if forbidden in encoded.decode("utf-8") and failure not in result["failures"]:
+                result["failures"].append(failure)
         result.update(packed_bytes=len(encoded), used=used, budget_unit="tokens_est_3b")
         result["pass"] = not result["failures"]
         return result

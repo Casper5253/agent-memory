@@ -10,7 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from tools.knowledge_grader import grade_query, lifecycle_check
+from tools import knowledge_grader
+from tools.knowledge_grader import grade_query, lifecycle_check, UNCERTAINTY, RESOLUTION
 from agentmem.manifest import Manifest
 
 
@@ -62,6 +63,12 @@ class StructuredKnowledgeGrader(unittest.TestCase):
         self.gold["required_sources"] = [next(s for s in source_ids if s != selected)]
         result = self.grade(context)
         self.assertTrue(result["pass"], result)
+
+    def test_structured_forbidden_string_is_reported_once(self):
+        self.gold["forbidden_strings"] = ["Atomic cursor writes."]
+        result = self.grade()
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["failures"].count("forbidden_string_present:Atomic cursor writes."), 1)
 
     def test_wrong_forged_missing_and_foreign_ids_fail(self):
         original = self.fixture.context()
@@ -339,8 +346,14 @@ class KnowledgeGrader(unittest.TestCase):
 
     def test_reported_or_disputed_labels_cannot_hide_automatic_acceptance(self):
         path = self.vault / "0-Sessions/session-current.md"
-        path.write_text(path.read_text() + "This is accepted.\n")
+        path.write_text(path.read_text() + "Status: accepted.\n")
         self.assertFalse(self.grade()["pass"])
+
+    def test_source_mentions_of_acceptance_and_verification_are_not_authority_labels(self):
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() + "The source discussion mentions accepted and verified as words.\n")
+        result = self.grade()
+        self.assertTrue(result["pass"], result)
 
     def test_superseded_label_cannot_hide_a_current_recommendation(self):
         old = self.add_note("old", "Use JSON for synthetic storage.", "old-copy", "old-source",
@@ -375,6 +388,30 @@ class KnowledgeGrader(unittest.TestCase):
         path = self.vault / "0-Sessions/session-current.md"
         path.write_text(path.read_text() + "revision_conflict\n")
         self.assertFalse(self.grade()["pass"])
+
+    def test_t11_fault_plan_without_execution_is_unmeasured(self):
+        self.query["case"] = "T11"
+        result = self.grade()
+        self.assertEqual(result["unmeasured"], ["fault_execution:T11"])
+        self.assertIn("operational_evidence_not_measured", result["failures"])
+        self.assertFalse(result["pass"])
+
+    def test_missing_success_output_after_command_attempt_counts_as_uncertainty(self):
+        self.gold["expected_uncertainty"] = True
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() +
+                        "A test command was attempted for test-runner; no success output was captured.\n")
+        result = self.grade()
+        self.assertTrue(result["pass"], result)
+
+    def test_command_attempt_and_unsupported_pass_claim_do_not_resolve_uncertainty(self):
+        self.gold["expected_uncertainty"] = True
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() +
+                        "A test command was attempted for test-runner. All tests passed.\n")
+        result = self.grade()
+        self.assertFalse(result["pass"])
+        self.assertIn("uncertainty_missing_or_denied", result["failures"])
 
     def test_budget_is_recomputed_from_the_emitted_package(self):
         self.query["budget"] = 20
@@ -418,6 +455,28 @@ class KnowledgeGrader(unittest.TestCase):
             with self.subTest(query=query["query_id"]):
                 self.assertFalse(grade_query(query, expected, package, corpus=corpus, vault=self.vault)["pass"])
                 self.assertFalse(grade_query(query, expected, self.package([]), corpus=corpus, vault=self.vault)["pass"])
+
+
+class GateApplicabilityTests(unittest.TestCase):
+    def test_k0_gate_excludes_reviewed_t03_without_dropping_audit_rows(self):
+        queries = {
+            "reviewed": {"case": "T03", "variant": "reviewed"},
+            "unreviewed": {"case": "T03", "variant": "unreviewed"},
+        }
+        rows = {
+            "reviewed": {"pass": False, "unmeasured": []},
+            "unreviewed": {"pass": True, "unmeasured": []},
+        }
+
+        selector = getattr(knowledge_grader, "applicable_gate_rows", None)
+        self.assertIsNotNone(selector, "gate scoring must expose arm applicability")
+        k0 = selector(rows, queries, "K0")
+        k = selector(rows, queries, "K")
+
+        self.assertEqual(set(k0), {"unreviewed"})
+        self.assertEqual(k0["unreviewed"]["pass"], True)
+        self.assertEqual(set(k), {"reviewed", "unreviewed"})
+        self.assertEqual(set(rows), {"reviewed", "unreviewed"})
 
 
 if __name__ == "__main__":

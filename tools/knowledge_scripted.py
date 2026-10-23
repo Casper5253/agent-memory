@@ -17,6 +17,14 @@ def seed_repository_heads(roots, projects):
             (Path(directory) / ".git" / "HEAD").write_text(head + "\n", encoding="ascii")
 
 
+def _instruction_only(sentence):
+    return bool(re.search(
+        r"\b(?:ignore|disregard|override)\s+(?:(?:all|the)\s+)?(?:previous|prior|earlier)\s+instructions\b"
+        r"|\bmark\s+this\s+(?:as\s+)?(?:verified|accepted)\b"
+        r"|\b(?:execute|run)\s+(?:a\s+)?(?:shell|terminal|system)\s+command\b",
+        sentence, re.IGNORECASE))
+
+
 class ScriptedExtractor:
     version = "scripted-v1"
 
@@ -34,12 +42,16 @@ class ScriptedExtractor:
             if fenced:
                 text = fenced[1].strip()
             text = re.sub(r"^(?:The source says:|According to the source:)\s*", "", text)
-            subject = re.search(r"\b[\w]+(?:-[\w]+){2,}\b", text)
-            if not subject or re.match(r"(?i)^(?:record|review|add|follow|please)\b", text):
+            head, separator, rationale = text.partition(" Reason: ")
+            sentences = re.split(r"(?<=[.!?])\s+", head)
+            statement = next((sentence.strip() for sentence in sentences
+                              if not _instruction_only(sentence)
+                              and not re.match(r"(?i)^(?:record|review|add|follow|please)\b", sentence.strip())
+                              and re.search(r"\b[\w]+(?:-[\w]+){2,}\b", sentence)), "")
+            subject = re.search(r"\b[\w]+(?:-[\w]+){2,}\b", statement)
+            if not subject:
                 continue
             subject = subject[0]
-            statement, separator, rationale = text.partition(" Reason: ")
-            statement = re.split(r"(?<=[.!?])\s+", statement)[0].strip()
             if not statement or len(statement) > 600:
                 continue
             rationale = rationale.strip().rstrip(".") if separator else ""
