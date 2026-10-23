@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS captures (
 );
 CREATE INDEX IF NOT EXISTS captures_project ON captures(project, date);
 CREATE INDEX IF NOT EXISTS sessions_status ON sessions(status, last_activity);
+CREATE TABLE IF NOT EXISTS hook_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT NOT NULL, session_id TEXT NOT NULL, event TEXT NOT NULL, ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS hook_events_session ON hook_events(agent, session_id, id);
 """
 
 
@@ -71,15 +76,43 @@ class Manifest:
                        " end_seen=CASE WHEN ? THEN 1 ELSE end_seen END, status=?, updated=? WHERE agent=? AND session_id=?",
                        (cwd, source, now, int(end), status, now, agent, session_id))
 
+    def record_event(self, agent, session_id, event, ts=None):
+        """Keep every hook event so a session's start and end can be reconstructed later."""
+        with self.tx() as db:
+            db.execute("INSERT INTO hook_events(agent, session_id, event, ts) VALUES (?,?,?,?)",
+                       (agent, session_id, event, ts or time.time()))
+
+    def events(self, agent, session_id):
+        return self.db.execute("SELECT agent, session_id, event, ts FROM hook_events WHERE agent=? AND session_id=?"
+                               " ORDER BY id", (agent, session_id)).fetchall()
+
+    def unended(self):
+        """Sessions whose latest recorded hook event is not an end: started (or resumed) and never closed."""
+        return self.db.execute(
+            "SELECT e.agent, e.session_id, e.event AS last_event, e.ts AS last_ts FROM hook_events e"
+            " JOIN (SELECT agent, session_id, max(id) AS last_id FROM hook_events GROUP BY agent, session_id) m"
+            " ON e.id = m.last_id WHERE e.event != 'end' ORDER BY e.ts").fetchall()
+
     def get(self, agent, session_id):
         return self.db.execute("SELECT * FROM sessions WHERE agent=? AND session_id=?", (agent, session_id)).fetchone()
 
-    def ready(self, settle_s: float, max_attempts: int, now=None):
-        """Sessions to capture now: ended or idle past the settle window, and not in retry backoff."""
+    def ready(self, settle_s: float, _max_attempts=None, now=None):
+        """Sessions to capture now: ended or idle past the settle window, and not in retry backoff.
+
+        Errors are retried indefinitely under the capped backoff (see fail). The old attempt cap is gone: a
+        transient failure, such as a transcript that is not written yet, must not be given up on. Use failed()
+        to list the sessions that have exhausted a given number of attempts.
+        """
         now = now or time.time()
         return self.db.execute(
-            "SELECT * FROM sessions WHERE status IN ('pending','error') AND attempts < ? AND COALESCE(next_try,0) <= ?"
-            " AND (end_seen = 1 OR last_activity <= ?) ORDER BY last_activity", (max_attempts, now, now - settle_s)).fetchall()
+            "SELECT * FROM sessions WHERE status IN ('pending','error') AND COALESCE(next_try,0) <= ?"
+            " AND (end_seen = 1 OR last_activity <= ?) ORDER BY last_activity", (now, now - settle_s)).fetchall()
+
+    def failed(self, max_attempts: int):
+        """Sessions in error after at least max_attempts failures, with the reason from the latest failure."""
+        return self.db.execute(
+            "SELECT agent, session_id, attempts, last_error, next_try, updated FROM sessions"
+            " WHERE status='error' AND attempts >= ? ORDER BY updated DESC", (max_attempts,)).fetchall()
 
     def mark(self, agent, session_id, **fields):
         fields["updated"] = time.time()
@@ -95,6 +128,17 @@ class Manifest:
             backoff = min(3600, 60 * 2 ** (attempts - 1))
             db.execute("UPDATE sessions SET status='error', attempts=?, next_try=?, last_error=?, updated=? WHERE agent=? AND session_id=?",
                        (attempts, now + backoff, error[:500], now, agent, session_id))
+
+    def health(self, max_attempts: int):
+        """Counts for the session-start hook: sessions not yet captured, retrying errors, exhausted errors, unended."""
+        rows = self.db.execute(
+            "SELECT"
+            " sum(status='pending') AS pending,"
+            " sum(status='error' AND attempts < ?) AS retrying,"
+            " sum(status='error' AND attempts >= ?) AS failed"
+            " FROM sessions", (max_attempts, max_attempts)).fetchone()
+        return {"pending": rows["pending"] or 0, "retrying": rows["retrying"] or 0, "failed": rows["failed"] or 0,
+                "unended": len(self.unended())}
 
     # ------------------------------------------------------------------ captures
     def capture(self, agent, session_id, part):
