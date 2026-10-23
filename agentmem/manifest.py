@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS captures (
 );
 CREATE INDEX IF NOT EXISTS captures_project ON captures(project, date);
 CREATE INDEX IF NOT EXISTS sessions_status ON sessions(status, last_activity);
+CREATE TABLE IF NOT EXISTS hook_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT NOT NULL, session_id TEXT NOT NULL, event TEXT NOT NULL, ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS hook_events_session ON hook_events(agent, session_id, id);
 """
 
 
@@ -70,6 +75,23 @@ class Manifest:
             db.execute("UPDATE sessions SET cwd=COALESCE(?, cwd), source=COALESCE(?, source), last_activity=?,"
                        " end_seen=CASE WHEN ? THEN 1 ELSE end_seen END, status=?, updated=? WHERE agent=? AND session_id=?",
                        (cwd, source, now, int(end), status, now, agent, session_id))
+
+    def record_event(self, agent, session_id, event, ts=None):
+        """Keep every hook event so a session's start and end can be reconstructed later."""
+        with self.tx() as db:
+            db.execute("INSERT INTO hook_events(agent, session_id, event, ts) VALUES (?,?,?,?)",
+                       (agent, session_id, event, ts or time.time()))
+
+    def events(self, agent, session_id):
+        return self.db.execute("SELECT agent, session_id, event, ts FROM hook_events WHERE agent=? AND session_id=?"
+                               " ORDER BY id", (agent, session_id)).fetchall()
+
+    def unended(self):
+        """Sessions whose latest recorded hook event is not an end: started (or resumed) and never closed."""
+        return self.db.execute(
+            "SELECT e.agent, e.session_id, e.event AS last_event, e.ts AS last_ts FROM hook_events e"
+            " JOIN (SELECT agent, session_id, max(id) AS last_id FROM hook_events GROUP BY agent, session_id) m"
+            " ON e.id = m.last_id WHERE e.event != 'end' ORDER BY e.ts").fetchall()
 
     def get(self, agent, session_id):
         return self.db.execute("SELECT * FROM sessions WHERE agent=? AND session_id=?", (agent, session_id)).fetchone()

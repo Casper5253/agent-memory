@@ -33,6 +33,7 @@ def drain_queue(cfg: Config, man: Manifest) -> int:
             if job.get("agent") in ("claude", "codex", "opencode") and job.get("session_id"):
                 man.touch(job["agent"], job["session_id"], cwd=job.get("cwd") or None, source=job.get("source") or None,
                           end=job.get("event") == "end", now=job.get("ts"))
+                man.record_event(job["agent"], job["session_id"], job.get("event") or "", job.get("ts"))
                 n += 1
         except (json.JSONDecodeError, OSError) as e:
             log(cfg, "bad-job", job=path.name, error=str(e))
