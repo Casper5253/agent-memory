@@ -1,5 +1,6 @@
 """Synthetic tests for WP-03 proposal pipeline and fixture validator path."""
 import json
+import inspect
 import os
 import sqlite3
 import sys
@@ -15,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from agentmem.knowledge import policy as p
+from agentmem.config import Config
 from agentmem.knowledge import proposals as kprop
 from agentmem.knowledge.models import CaptureIdentity, KnowledgeError, SourceInput, ValidationError
 from agentmem.knowledge.policy import sha_text
@@ -48,6 +50,8 @@ class ProposalCase(unittest.TestCase):
         self.store = KnowledgeStore.create(self.path)
         self.pid = str(uuid.uuid4())
         self.store.register_project(self.pid, "Alpha", [str(self.root / "alpha")], privacy="model_allowed")
+        self.cfg = Config(vault=self.root, knowledge_mode="shadow",
+            knowledge_project_ids={"Alpha": self.pid}, project_privacy={"Alpha": "model_allowed"})
 
     def tearDown(self):
         self.store.close()
@@ -246,6 +250,21 @@ class AuthorityInjection(ProposalCase):
 
 
 class LifecycleRegressions(ProposalCase):
+    def test_configuration_is_required_keyword_only_on_both_entry_points(self):
+        for entry in (kprop.extract_and_apply,kprop.process_pending_extract_jobs):
+            parameter = inspect.signature(entry).parameters["cfg"]
+            self.assertEqual(parameter.kind,inspect.Parameter.KEYWORD_ONLY)
+            self.assertIs(parameter.default,inspect.Parameter.empty)
+
+    def test_runner_honors_name_keyed_privacy_flip_without_refreshing_store(self):
+        self.import_source()
+        self.cfg.project_privacy["Alpha"] = "local_only"
+        seen = []
+        results = kprop.process_pending_extract_jobs(str(self.path),lambda prompt:seen.append(prompt) or "{}",cfg=self.cfg)
+        self.assertEqual(self.store.get_project(self.pid)["privacy"],"model_allowed")
+        self.assertEqual(seen,[])
+        self.assertEqual(results[0]["error_code"],"model_disallowed")
+
     def output(self, sid):
         return self.bind_fixture((FIXTURE_DIR / "valid_minimal.json").read_text(encoding="utf-8"), sid)
 
