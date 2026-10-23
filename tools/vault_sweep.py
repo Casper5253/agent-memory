@@ -35,7 +35,6 @@ STALE_REF = re.compile(
     r"|HEAD\s+(?P<head_sha>[0-9a-f]{7,}))",
     re.IGNORECASE,
 )
-REPO_KW = ("repo", "repository", "head", "commit")
 FRAG_SUFFIXES = ("-worktree", "-wt", "-copy", "-tmp", "-dev", "-feature")
 GENERIC_WORDS = {"app", "project", "repo", "service", "lib", "tool", "test", "main"}
 WIKI_LINK = re.compile(r"\[\[([^\]|#]+?)(?:[#|][^\]]*)?\]\]")
