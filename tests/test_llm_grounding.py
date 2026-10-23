@@ -1,0 +1,87 @@
+import unittest
+from types import SimpleNamespace
+from pathlib import Path
+from unittest.mock import patch
+
+from agentmem import llm
+
+
+class SummaryGroundingTests(unittest.TestCase):
+    def test_false_runtime_cwd_conflict_without_digest_citation_is_dropped(self):
+        digest = "Added a parser guard in parser.py after the failing case."
+        model_output = {
+            "title": "Parser guard",
+            "summary": (
+                "The session added a parser guard. The project cwd conflicts with "
+                "C:\\Users\\caspe\\.agents\\memory\\runtime\\tmp."
+            ),
+            "what_happened": ["Added a parser guard in parser.py."],
+            "decisions": [],
+            "facts": ["The parser guard is in parser.py."],
+            "open_questions": [],
+            "next_steps": [],
+            "citations": [
+                {"section": "summary", "claim": "The session added a parser guard.",
+                 "quote": "Added a parser guard in parser.py after the failing case."},
+                {"section": "what_happened", "claim": "Added a parser guard in parser.py.",
+                 "quote": "Added a parser guard in parser.py after the failing case."},
+                {"section": "facts", "claim": "The parser guard is in parser.py.",
+                 "quote": "Added a parser guard in parser.py after the failing case."},
+            ],
+        }
+        with patch.object(llm, "_run", return_value=model_output):
+            summary = llm.summarize(digest)
+
+        self.assertEqual(summary["summary"], "The session added a parser guard.")
+        self.assertNotIn("runtime\\tmp", summary["summary"].lower())
+        self.assertEqual(summary["what_happened"], ["Added a parser guard in parser.py."])
+
+    def test_model_runs_in_neutral_temporary_directory(self):
+        seen = {}
+
+        def run(*args, **kwargs):
+            seen.update(kwargs)
+            seen["argv"] = args[0]
+            return SimpleNamespace(returncode=0, stdout=b'{"result":"{}"}', stderr=b"")
+
+        with patch.object(llm.shutil, "which", return_value="claude.exe"), patch.object(llm.subprocess, "run", side_effect=run):
+            llm._run(llm.SUMMARY_SYSTEM, "digest", "haiku", 10)
+
+        self.assertTrue(Path(seen["cwd"]).name.startswith("agentmem-llm-"))
+        self.assertNotIn("runtime\\tmp", seen["cwd"].lower())
+        prompt = seen["argv"][seen["argv"].index("--system-prompt") + 1]
+        self.assertIn("own working directory, environment", prompt)
+        self.assertIn("not evidence", prompt)
+
+    def test_new_status_bullet_must_link_to_summary_evidence(self):
+        state = "\n".join([
+            "### Current state", "- New project status", "", "### Active decisions", "- none",
+            "", "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
+        ])
+        summary = {"summary": "Session changed status.", "citations": [
+            {"section": "summary", "claim": "Session changed status.", "quote": "Changed status."},
+        ]}
+        with patch.object(llm, "_run", return_value={"state_markdown": state}):
+            with self.assertRaisesRegex(llm.LLMError, "new status statement missing digest citation"):
+                llm.consolidate("- Existing state", summary, "[[0-Sessions/session-a]]", "2026-10-23")
+
+    def test_existing_facts_are_preserved_and_new_status_links_to_evidence(self):
+        old_fact = "- Existing endpoint remains supported."
+        output = "\n".join([
+            "### Current state", old_fact + "\n- New endpoint is supported [[0-Sessions/session-b#e1]]", "",
+            "### Active decisions", "- none", "", "### Superseded decisions", "- none", "",
+            "### Open questions and next steps", "- none",
+        ])
+        summary = {"summary": "Added endpoint support.", "citations": [
+            {"section": "summary", "claim": "Added endpoint support.", "quote": "Added endpoint support."},
+        ]}
+        with patch.object(llm, "_run", return_value={"state_markdown": output}) as invoke:
+            state, _ = llm.consolidate(old_fact, summary, "[[0-Sessions/session-b]]", "2026-10-23")
+
+        self.assertIn(old_fact, state)
+        self.assertIn("[[0-Sessions/session-b#e1]]", state)
+        self.assertIn("Keep every prior fact and decision unless the cited session evidence contradicts it.", invoke.call_args.args[0])
+
+
+if __name__ == "__main__":
+    unittest.main()

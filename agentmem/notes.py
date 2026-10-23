@@ -120,6 +120,16 @@ def render_session(*, agent, session_id, project, part, when, started, ended, so
         f"- Transcript: `{source}` (range {start}–{end})",
         f"- Captured by agentmem ({summarizer}); quality gate: {gate_reason}", "",
     ]
+    citations = summary.get("citations", [])
+    if citations:
+        body += ["## Evidence", ""]
+        for index, citation in enumerate(citations, 1):
+            if not isinstance(citation, dict):
+                continue
+            claim = redact(str(citation.get("claim") or ""), email_allowlist=email_allowlist)
+            quote = redact(str(citation.get("quote") or ""), email_allowlist=email_allowlist)
+            if claim and quote:
+                body += [f"### E{index}", "", f"- Claim: {claim}", f"- Digest span: {quote}", ""]
     return "\n".join(fm + body)
 
 
