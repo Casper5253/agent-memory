@@ -256,3 +256,33 @@ class ContextCase(unittest.TestCase):
                 def search(self, *args, **kwargs):
                     return [{"file": raw, "snippet": "CANARY"}]
             self.assertEqual(build_context(self.store, replace(self.request, query="different"), Unsafe()).items, [])
+
+    def test_fresh_cli_process_reads_supported_capture_without_mutation(self):
+        cid = self.claim()
+        runtime = self.vault / "runtime"
+        runtime.mkdir()
+        (runtime / "config.json").write_text(json.dumps(dict(knowledge_mode="shadow", qmd_index="wp04-test",
+            project_privacy={"Alpha": "model_allowed"})), encoding="utf-8")
+        env = dict(os.environ, AGENTMEM_HOME=str(runtime), XDG_CACHE_HOME=str(self.vault / "cache"),
+            XDG_CONFIG_HOME=str(self.vault / "config"), INDEX_PATH=str(self.vault / "cache" / "qmd" / "index.sqlite"))
+        executable = "import sys;sys.path.insert(0,sys.argv.pop(1));from agentmem.cli import main;sys.exit(main())"
+        command = [sys.executable, "-B", "-I", "-c", executable, str(ROOT), "--vault", str(self.vault)]
+        before = self.path.read_bytes()
+        result = subprocess.run(command + ["context", "storage", "--project", self.pid, "--json"],
+            capture_output=True, env=env, cwd=self.project_root, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["items"][0]["claim_ids"], [cid])
+        self.assertEqual(self.path.read_bytes(), before)
+        invalid = subprocess.run(command + ["context", "storage", "--budget", "12", "--project", self.pid, "--json"],
+            capture_output=True, env=env, cwd=self.project_root, timeout=10)
+        self.assertEqual(invalid.returncode, 2)
+        self.assertEqual(json.loads(invalid.stdout)["errors"][0]["code"], "invalid_budget")
+        self.store.close()
+        missing = self.vault / "missing-vault"
+        (missing / "_meta").mkdir(parents=True)
+        unavailable = subprocess.run([sys.executable, "-B", "-I", "-c", executable, str(ROOT), "--vault", str(missing),
+            "context", "storage", "--project", self.pid, "--json"], capture_output=True, env=env, timeout=10)
+        self.assertEqual(unavailable.returncode, 4)
+        self.assertEqual(json.loads(unavailable.stdout)["status"], "unavailable")
+        self.assertFalse((missing / "_meta" / "knowledge.sqlite").exists())
