@@ -56,6 +56,9 @@ def _build_vault(base: Path) -> Path:
     tmp = _Tmp(base)
     vault = tmp.path / "vault"
     work = tmp.path / "work"
+    work.mkdir(parents=True)
+    # Synthetic non-repository paths must not inherit the checkout's containing repository.
+    (work / ".git").write_text("gitdir: unavailable", encoding="utf-8")
     for d in ("_meta", "1-Projects/demo-app", "1-Projects/my-lib",
               "0-Sessions/2026/01", "Projects-Old"):
         (vault / d).mkdir(parents=True, exist_ok=True)
@@ -302,6 +305,26 @@ class SweepTests(unittest.TestCase):
     def test_f_relative_project_files_outweigh_one_foreign_path(self):
         ra = self._plan()["re_attribution"]
         self.assertEqual([i for i in ra["items"] if "reattr-relative" in i["note"]], [])
+
+    def test_f_summary_paths_are_not_stated_user_path_signals(self):
+        data = json.loads((self.vault / "_meta" / "projects.json").read_text(encoding="utf-8"))
+        foreign = next(p["roots"][0] for p in data["projects"] if p["name"] == "My Lib")
+        paths = [str(Path(foreign) / ("config-" + str(i) + ".json")) for i in range(10)]
+        path = self.vault / "0-Sessions/2026/01/summary-path-noise.md"
+        text = ('---\ntype: session\nproject: "Demo App"\n---\n\n# My Lib summary references ' + " ".join(paths)
+                + '\n\n## Executive summary\n\n' + " ".join(paths)
+                + '\n\n## Artifacts and modified files\n\n- `none recorded`\n\n## Commands run\n\n'
+                + "\n".join('- `' + p + '`' for p in paths) + '\n')
+        path.write_text(text,encoding="utf-8")
+        try:
+            items = self._plan()["re_attribution"]["items"]
+            self.assertFalse(any(i["note"].endswith(path.name) for i in items))
+            self.assertTrue(any("reattr-misfiled" in i["note"] for i in items))
+            for item in items:
+                for signal in item["signals"].values():
+                    self.assertEqual((signal["paths"],signal["names"]),(0,0))
+        finally:
+            path.unlink()
 
     def test_f_auto_apply_false_on_every_item(self):
         plan = self._plan()

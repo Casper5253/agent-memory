@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -219,13 +220,55 @@ def _fold_candidates(data):
     return {**data, "projects": list(merged.values())}
 
 
-def _add_path_candidates(data, paths):
+def _repository_for_file(path, cache):
+    directory = Path(path)
+    if not directory.is_dir():
+        directory = directory.parent
+    visited = []
+    repository = None
+    for current in (directory, *directory.parents):
+        key = _norm(current)
+        if key in cache:
+            repository = cache[key]
+            break
+        visited.append(key)
+        marker = current / ".git"
+        if marker.is_dir() or marker.is_file():
+            repository = repository_root(str(current)) or None
+            break
+    for key in visited:
+        cache[key] = repository
+    return repository
+
+
+def _repository_project(repository, data):
+    target = _norm(repository)
+    return next((p["name"] for p in data["projects"]
+                 if any(_norm(root) == target for root in p.get("roots", []))), None)
+
+
+def _path_project(path, data, cache):
+    if not os.path.isabs(path):
+        return None
+    repository = _repository_for_file(path, cache)
+    return _repository_project(repository, data) if repository else _explicit(path, data)
+
+
+def _add_path_candidates(data, paths, cache):
     generated = {}
     for path in sorted(paths):
-        if not os.path.isabs(path) or is_generic(path) or _explicit(path, data):
+        if not os.path.isabs(path):
             continue
-        directory = path if os.path.isdir(path) else os.path.dirname(path)
-        derived = _derive(_routing_cwd(directory, data))
+        repository = _repository_for_file(path, cache)
+        if repository:
+            if _repository_project(repository, data):
+                continue
+            directory = repository
+        else:
+            if is_generic(path) or _explicit(path, data):
+                continue
+            directory = path if os.path.isdir(path) else os.path.dirname(path)
+        derived = _derive(repository or _routing_cwd(directory, data))
         if not derived or derived[0] == ENVIRONMENT or not Path(derived[1]).is_dir():
             continue
         name, root = derived
@@ -251,7 +294,10 @@ def attribute(cwd, map_path, files=(), text="", create=True):
         path = path if os.path.isabs(path) else os.path.join(cwd or "", path)
         edited.add(_norm(path))
     mentioned = _paths_in_text(text)
-    generated = _add_path_candidates(data, edited | mentioned)
+    repositories = {}
+    generated = _add_path_candidates(data, edited | mentioned, repositories)
+    file_owners = Counter(_path_project(path, data, repositories) for path in edited)
+    path_owners = Counter(_path_project(path, data, repositories) for path in mentioned)
     known = {p["name"] for p in original["projects"]}
     pins = []
     for pin in original.get("pins", []):
@@ -265,9 +311,8 @@ def attribute(cwd, map_path, files=(), text="", create=True):
     signals = {}
     for proj in data["projects"]:
         name = proj["name"]
-        roots = [_norm(r) for r in proj.get("roots", [])]
-        count_files = min(10, sum(any(_is_under(p, r) for r in roots) for p in edited))
-        count_paths = sum(any(_is_under(p, r) for r in roots) for p in mentioned)
+        count_files = min(10, file_owners[name])
+        count_paths = min(3, path_owners[name])
         names = {name, *proj.get("aliases", []), *(Path(r).name for r in proj.get("roots", []))}
         names = {n.strip() for n in names if len(n.strip()) >= 4 and n.strip().lower() not in _STOP_NAMES}
         count_names = int(any(re.search(r"(?<![\w-])" + re.escape(n).replace(r"\ ", r"[\s_-]+").replace(r"\-", r"[\s_-]+") + r"(?![\w-])", text, re.I) for n in names))

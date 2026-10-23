@@ -447,20 +447,6 @@ def _extract_artifact_paths(text: str) -> list[str]:
     return paths
 
 
-def _extract_note_text(text: str) -> str:
-    parts = []
-    title = re.search(r"(?m)^# (.+)$", text)
-    if title:
-        parts.append(title.group(1))
-    cmds = re.search(r"(?ms)^## Commands run\n\n(.*?)(?=\n## |\Z)", text)
-    if cmds:
-        for line in cmds.group(1).splitlines():
-            m = re.match(r"^- `(.+?)`$", line.strip())
-            if m and m.group(1) != "none":
-                parts.append(m.group(1))
-    return " ".join(parts)
-
-
 def _scan_re_attribution(vault: Path) -> dict:
     from agentmem.projects import attribute
     map_path = vault / "_meta" / "projects.json"
@@ -482,10 +468,9 @@ def _scan_re_attribution(vault: Path) -> dict:
         # Legacy notes list files inside the session folder relative to it, and that folder was the filed project's root.
         filed_root = _repo_root(vault, filed) or _first_root(vault, filed)
         files = [f if os.path.isabs(f) or not filed_root else str(filed_root / f) for f in _extract_artifact_paths(text)]
-        note_text = _extract_note_text(text)
         try:
             result = attribute(cwd=str(filed_root) if filed_root else "", map_path=map_path, files=files,
-                               text=note_text, create=False)
+                               text="", create=False)
         except Exception:
             continue
         if result.method != "content":
