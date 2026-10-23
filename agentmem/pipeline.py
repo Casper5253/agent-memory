@@ -333,6 +333,42 @@ def _redact_values(value, email_allowlist=None):
     return value
 
 
+def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
+    """Register aged Claude and Codex JSONL transcripts before the ordinary settle-window drain.
+
+    The next capture drain scans ~/.claude/projects and ~/.codex/sessions. It uses file modification
+    time for the existing settle rule and then lets normal parsing, gating, privacy, and retry handling
+    decide whether to capture. OpenCode exports require a known session id, so they remain hook-bound.
+    """
+    now = now or time.time()
+    settle_s = cfg.settle_minutes * 60
+    discovered = 0
+    roots = (("claude", Path(os.environ.get("AGENTMEM_CLAUDE_TRANSCRIPTS_ROOT", CLAUDE_TRANSCRIPTS_ROOT))),
+             ("codex", Path(os.environ.get("AGENTMEM_CODEX_TRANSCRIPTS_ROOT", CODEX_TRANSCRIPTS_ROOT))))
+    for agent, root in roots:
+        if not root.is_dir():
+            continue
+        for source in root.rglob("*.jsonl"):
+            try:
+                modified = source.stat().st_mtime
+                if modified > now - settle_s:
+                    continue
+                match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", source.name)
+                known_id = source.stem if agent == "claude" else (match.group(0) if match else "")
+                if known_id and man.get(agent, known_id) is not None:
+                    continue
+                transcript = adapters.read(agent, source.stem, str(source))
+                if not transcript.session_id or not transcript.cwd or not transcript.events:
+                    continue
+                if man.get(agent, transcript.session_id) is not None:
+                    continue
+                man.touch(agent, transcript.session_id, cwd=transcript.cwd, source=str(source), now=modified)
+                discovered += 1
+            except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+                continue
+    return discovered
+
+
 def _pending_lines(summary: dict, link: str, date: str) -> list:
     out = [f"- [ ] {date} [[{link}]] — {d['decision']}" for d in summary.get("decisions", [])[:6]]
     out += [f"- [ ] {date} [[{link}]] — fact: {s}" for s in summary.get("facts", [])[:4]]
@@ -483,6 +519,7 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
 def process_ready(cfg: Config, man: Manifest, budget_s: float = 900, summarizer=None, consolidator=None) -> list:
     results = []
     deadline = time.monotonic() + budget_s
+    _discover_orphan_transcripts(cfg, man)
     for row in man.ready(cfg.settle_minutes * 60, cfg.max_attempts):
         if time.monotonic() > deadline or cfg.paused():
             break

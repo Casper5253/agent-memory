@@ -26,6 +26,15 @@ class Base(unittest.TestCase):
         self.cfg = fx.make_vault(self.tmp)
         self.cwd = str(self.tmp / "work" / "demo-app")
         self.man = Manifest(self.cfg.manifest_path)
+        self.transcript_roots = self.tmp / "orphan-scan"
+        (self.transcript_roots / "claude").mkdir(parents=True)
+        (self.transcript_roots / "codex").mkdir(parents=True)
+        self.scan_env = mock.patch.dict(os.environ, {
+            "AGENTMEM_CLAUDE_TRANSCRIPTS_ROOT": str(self.transcript_roots / "claude"),
+            "AGENTMEM_CODEX_TRANSCRIPTS_ROOT": str(self.transcript_roots / "codex"),
+        })
+        self.scan_env.start()
+        self.addCleanup(self.scan_env.stop)
 
     def tearDown(self):
         self.man.close()
