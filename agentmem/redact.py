@@ -48,6 +48,7 @@ _IBAN = re.compile(r"(?<![A-Z0-9])[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]){11,30}(?![A-Z0-
 _CARD = re.compile(r"(?<![A-Z0-9])(?:\d[ -]?){12,18}\d(?![A-Z0-9])", re.I)
 _BSN = re.compile(r"(?<![A-Z0-9.\-])[1-9]\d{8}(?![A-Z0-9.\-])", re.I)
 _PHONE = re.compile(r"(?<![\w+])\+(?:\d[ -]?){7,14}\d(?!\d)")
+_NO_REPLY = re.compile(r"(?:(?:no-?reply|donotreply|do-not-reply)(?:[+.][^@]*)?@|[^@]*@(?:[^@]*\.)?noreply\.)", re.I)
 _EMAIL = re.compile(r"(?<![\w.+/@-])[A-Z0-9][A-Z0-9.!#$%&'*+/=?^_`{|}~-]*@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)*\.[A-Z]{2,}(?![A-Z])", re.I)
 _BSN_KEYWORD = re.compile(r"\b(?:bsn|burgerservicenummer|sofi)\b", re.I)
 _IBAN_LENGTHS = {"NL": 18, "DE": 22, "GB": 22, "BE": 16, "FR": 27}
@@ -147,7 +148,7 @@ def findings(text: str, email_allowlist=None) -> list[Finding]:
                           (category != "bsn" or _has_bsn_keyword(text, match.start(), match.end())))
     allow = _email_allowlist(email_allowlist)
     candidates.extend(Finding("email", match.start(), match.end()) for match in _EMAIL.finditer(text)
-                      if match.group(0).casefold() not in allow)
+                      if match.group(0).casefold() not in allow and not _NO_REPLY.match(match.group(0)))
     priority = {"secret": 0, "iban": 1, "payment_card": 2, "bsn": 3, "phone": 4, "email": 5}
     selected = []
     for item in sorted(candidates, key=lambda f: (f.start, priority[f.category], -(f.end - f.start))):

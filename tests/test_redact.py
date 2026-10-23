@@ -62,6 +62,11 @@ class PersonalDataRedactionTests(unittest.TestCase):
         self.assertEqual(redact(value), value)
         self.assertEqual(redact("email user@example.com"), "email [REDACTED]")
 
+    def test_no_reply_service_addresses_are_not_personal(self):
+        value = "Co-Authored-By: Claude <noreply@anthropic.com>; 123+bot@users.noreply.github.com"
+        self.assertEqual(redact(value), "Co-Authored-By: Claude <noreply@anthropic.com>; 123+bot@users.noreply.github.com")
+        self.assertEqual(redact("mail jan.noreplyfan@example.com"), "mail [REDACTED]")
+
     def test_bsn_requires_nearby_keyword_and_strict_identifier_boundaries(self):
         self.assertEqual(redact("BSN 111222333"), "BSN [REDACTED]")
         for value in ("111222333", "line-111222333", "id.111222333", "x111222333"):
