@@ -67,7 +67,7 @@ def _load_questions(path):
                 raise SetupError(f"question {qid} has invalid {field}")
         if not isinstance(row.get("gold_evidence"), (list, str)):
             raise SetupError(f"question {qid} has invalid gold_evidence")
-        if not isinstance(row.get("stale_trap"), (list, str)):
+        if "stale_trap" not in row or not isinstance(row["stale_trap"], (list, str, type(None))):
             raise SetupError(f"question {qid} has invalid stale_trap")
         by_id[qid] = row
     if not by_id:

@@ -119,6 +119,19 @@ class SetRGradeTests(unittest.TestCase):
                 self.assertNotIn('"package_id"', encoded)
                 self.assertNotIn('"key"', encoded)
 
+    def test_question_without_stale_trap_gets_grade_tasks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            questions, questions_path, _, package_path, _, key_path, answers = seed_inputs(root, count=2)
+            questions[0]["stale_trap"] = None
+            write_jsonl(questions_path, questions)
+            result = run_cli("grade-tasks", "--answers", answers, "--packages", package_path,
+                             "--key", key_path, "--questions", questions_path, "--out", root / "grade", "--seed", "3")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            traps = [read_json(path).get("stale_trap", "absent") for path in (root / "grade").rglob("*.json")
+                     if path.name != "map.json"]
+            self.assertIn(None, traps)
+
     def test_tally_counts_pair_and_single_grades_without_exposing_answers(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
