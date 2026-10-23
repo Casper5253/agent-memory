@@ -56,6 +56,14 @@ def integer(value, minimum=0):
     return value
 
 
+ENTITY_KINDS = ("project", "file", "component", "concept")
+CLAIM_KINDS = ("fact", "decision", "preference", "question", "task")
+RELATION_KINDS = ("contradicts", "depends_on", "derived_from")
+EVIDENCE_ROLES = ("supports", "refutes", "context")
+PRECISIONS = ("instant", "day", "unknown")
+END_STATES = ("unknown", "open", "closed")
+
+
 def enum(value, choices):
     if not isinstance(value, str) or value not in choices:
         raise ValidationError("invalid_enum")
@@ -97,8 +105,8 @@ def time_value(value, precision):
 
 
 def temporal(start, end, precision, end_state):
-    enum(precision, ("instant", "day", "unknown"))
-    enum(end_state, ("unknown", "open", "closed"))
+    enum(precision, PRECISIONS)
+    enum(end_state, END_STATES)
     if (start is None) != (precision == "unknown"):
         raise ValidationError("invalid_interval")
     for value in (start, end):
@@ -246,7 +254,7 @@ def validate_proposal(model_json):
     for item in model_json["entities"]:
         keys(item, ("ref", "kind", "canonical_key", "display_name", "aliases"))
         ref(item["ref"])
-        enum(item["kind"], ("project", "file", "component", "concept"))
+        enum(item["kind"], ENTITY_KINDS)
         text(item["canonical_key"])
         text(item["display_name"], 120)
         if not isinstance(item["aliases"], list) or len(item["aliases"]) > 10:
@@ -263,7 +271,7 @@ def validate_proposal(model_json):
         ref(item["ref"])
         if ref(item["subject_ref"]) not in entity_refs:
             raise ValidationError("unknown_ref")
-        enum(item["kind"], ("fact", "decision", "preference", "question", "task"))
+        enum(item["kind"], CLAIM_KINDS)
         text(item["predicate"], 120)
         value_json(item["value"])
         text(item["statement"], 600)
@@ -289,7 +297,7 @@ def validate_proposal(model_json):
         return ClaimEndpoint(claim_id=item["claim_id"], expected_revision=item["expected_revision"])
     for item in model_json["relations"]:
         keys(item, ("from", "kind", "to", "rationale"))
-        enum(item["kind"], ("contradicts", "depends_on", "derived_from"))
+        enum(item["kind"], RELATION_KINDS)
         text(item["rationale"], 1000)
         relations.append(RelationInput(endpoint(item["from"]), item["kind"], endpoint(item["to"]), item["rationale"]))
     return ValidatedProposal(1, tuple(entities), tuple(claims), tuple(relations))
@@ -303,7 +311,7 @@ def evidence_span(item):
     digest(item["source_id"])
     integer(item["start"])
     integer(item["end"], item["start"] + 1)
-    enum(item["role"], ("supports", "refutes", "context"))
+    enum(item["role"], EVIDENCE_ROLES)
     return EvidenceSpan(**item)
 
 

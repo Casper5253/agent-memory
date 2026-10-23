@@ -400,3 +400,17 @@ class LifecycleRegressions(ProposalCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PromptEnumTests(unittest.TestCase):
+    def test_prompt_lists_exactly_the_values_the_policy_accepts(self):
+        lines = {line.split(":", 1)[0].strip("- `").strip(): line.split(":", 1)[1]
+                 for line in kprop._prompt_text().splitlines() if line.startswith("- ") and ":" in line}
+        expected = {
+            "entity `kind": p.ENTITY_KINDS, "claim `kind": p.CLAIM_KINDS, "relation `kind": p.RELATION_KINDS,
+            "evidence `role": p.EVIDENCE_ROLES,
+        }
+        for label, values in expected.items():
+            listed = lines[label].split("(")[0].replace(" ", "").split(",")
+            self.assertEqual(listed, list(values), label)
+        self.assertIn(", ".join(p.PRECISIONS) + "; end state: " + ", ".join(p.END_STATES), kprop._prompt_text())

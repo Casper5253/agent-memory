@@ -139,8 +139,11 @@ def _call_model(model, prompt, timeout_s):
     return value
 
 
+PROMPT_VERSION = "v2"
+
+
 def _prompt_text() -> str:
-    path = Path(__file__).with_suffix("").parent / "prompts" / "extract_v1.txt"
+    path = Path(__file__).with_suffix("").parent / "prompts" / f"extract_{PROMPT_VERSION}.txt"
     return path.read_text(encoding="utf-8")
 
 
@@ -253,7 +256,7 @@ def extract_and_apply(store_path: str, source_id: str, model_callable, *,
                       cfg: Config,
                       max_input_units: int = _DEFAULT_INPUT_UNITS,
                       max_output_bytes: int = _MAX_OUTPUT_BYTES,
-                      extractor_version: str = "v1", prompt_version: str = "v1",
+                      extractor_version: str = "v1", prompt_version: str = PROMPT_VERSION,
                       timeout_s: float = _MODEL_TIMEOUT, _lease: ExtractionLease | None = None) -> ApplyResult:
     """Check current privacy, call the model outside DB locks, then apply as reported."""
     path = Path(store_path).resolve()
