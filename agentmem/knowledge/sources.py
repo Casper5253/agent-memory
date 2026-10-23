@@ -249,7 +249,10 @@ def _privacy_for(cfg: Config, project_name: str) -> str | None:
 
 
 def _ensure_project(store: KnowledgeStore, cfg: Config, project_name: str) -> str | None:
-    """Return project_id if enrolled, registering the project on first import."""
+    """Return project_id if enrolled, registering the project on first import.
+    
+    Also updates stored privacy when config privacy differs from stored.
+    """
     pid = _project_id_for(cfg, project_name)
     if pid is None:
         return None
@@ -257,7 +260,10 @@ def _ensure_project(store: KnowledgeStore, cfg: Config, project_name: str) -> st
     if privacy is None:
         return None
     try:
-        store.get_project(pid)
+        project = store.get_project(pid)
+        # Update privacy if config changed
+        if project["privacy"] != privacy:
+            store.update_project_privacy(pid, privacy)
     except Exception as exc:
         if getattr(exc, "code", "") != "project_not_found":
             raise

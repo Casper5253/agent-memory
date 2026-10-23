@@ -75,7 +75,7 @@ def _load_receipt(cfg, agent, sid, part, start):
                 or r["receipt_sha"] != _receipt_hash(r) or _hash(r["text"]) != r["content_sha"]):
             raise ValueError("receipt identity or hash mismatch")
         _validated_path(cfg, r["note_path"])
-        _validate_note(r["text"], agent, sid, part)
+        _validate_note(r["text"], agent, sid, part, expected_project=r.get("project"))
         return r
     except (ValueError, KeyError, TypeError) as error:
         raise ValueError("capture_identity_conflict: invalid receipt") from error
@@ -88,10 +88,12 @@ def _validated_path(cfg, relative):
     return path
 
 
-def _validate_note(text, agent, sid, part):
+def _validate_note(text, agent, sid, part, expected_project=None):
     fields = notes.session_metadata(text)
     if (fields.get("agent"), fields.get("session_id"), fields.get("part")) != (agent, sid, str(part)):
         raise ValueError("capture_identity_conflict: note identity mismatch")
+    if expected_project is not None and fields.get("project") != expected_project:
+        raise ValueError("capture_identity_conflict: note project mismatch")
     return fields
 
 
@@ -234,7 +236,7 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
     persisted = path.read_bytes()
     if hashlib.sha256(persisted).hexdigest() != receipt["content_sha"]:
         raise ValueError("capture_identity_conflict: persisted note bytes differ")
-    _validate_note(persisted.decode("utf-8"), agent, sid, part)
+    _validate_note(persisted.decode("utf-8"), agent, sid, part, expected_project=receipt.get("project"))
     link = _link(cfg, path)
     project, summary, kind = receipt["project"], receipt["summary"], receipt["summarizer"]
     when = _parse_time(receipt["when"])

@@ -407,6 +407,59 @@ class CaptureRegressions(SourceCase):
         source = self.store.db.execute("SELECT kind FROM sources").fetchone()
         self.assertEqual(source["kind"],"legacy_note")
 
+    def test_privacy_flip_after_enrollment_blocks_model_calls(self):
+        """After enrollment, flipping project privacy to local_only must block model calls."""
+        from agentmem.knowledge import proposals as kprop
+        cfg = self.prepare()
+        self.assertEqual(self.capture(cfg)[0], "captured")
+        jobs_before = self.store.db.execute("SELECT state FROM jobs WHERE kind='extract'").fetchall()
+        self.assertTrue(any(j[0] == "pending" for j in jobs_before))
+        cfg.project_privacy["Demo App"] = "local_only"
+        seen = []
+        kprop.process_pending_extract_jobs(str(self.db_path), lambda p: seen.append(p) or "{}", cfg=cfg)
+        self.assertEqual(len(seen), 0, "model should not be called when privacy is local_only")
+
+    def test_resume_rejects_tampered_receipt_project(self):
+        """Resume must reject receipt with tampered project field."""
+        from agentmem import pipeline
+        from agentmem.manifest import Manifest
+        cfg = self.prepare()
+        beta = str(uuid.uuid4())
+        self.store.register_project(beta, "Beta", [str(self.root / "beta")], privacy="model_allowed")
+        cfg.knowledge_project_ids["Beta"] = beta
+        cfg.project_privacy["Beta"] = "model_allowed"
+        with patch.object(pipeline, "consolidate_into_project", side_effect=RuntimeError("crash")):
+            try:
+                self.capture(cfg)
+            except RuntimeError:
+                pass
+        path = next((cfg.meta / "capture-receipts").glob("*.json"))
+        r = json.loads(path.read_text(encoding="utf-8"))
+        r["project"] = "Beta"
+        r["receipt_sha"] = pipeline._receipt_hash(r)
+        path.write_text(json.dumps(r), encoding="utf-8")
+        with self.assertRaises(ValueError) as cm:
+            self.capture(cfg)
+        error_msg = str(cm.exception)
+        self.assertIn("capture_identity_conflict", error_msg)
+        self.assertIn("invalid receipt", error_msg)
+
+    def test_max_calls_counts_only_model_invocations(self):
+        """max_calls should count only jobs that actually invoked the model, not blocked ones."""
+        from agentmem.knowledge import proposals as kprop
+        import json
+        cfg = self.prepare()
+        self.assertEqual(self.capture(cfg)[0], "captured")
+        seen = []
+        def valid_model(prompt):
+            seen.append(prompt)
+            return json.dumps({"schema_version": 1, "entities": [], "claims": [], "relations": []})
+        results = kprop.process_pending_extract_jobs(
+            str(self.db_path), valid_model, max_calls=1, cfg=cfg)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["status"], "applied")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -246,13 +246,26 @@ def extract_and_apply(store_path: str, source_id: str, model_callable, *,
                       max_input_units: int = _DEFAULT_INPUT_UNITS,
                       max_output_bytes: int = _MAX_OUTPUT_BYTES,
                       extractor_version: str = "v1", prompt_version: str = "v1",
-                      timeout_s: float = _MODEL_TIMEOUT, _lease: ExtractionLease | None = None) -> ApplyResult:
-    """Isolated model call outside DB locks, then persist and apply as reported."""
+                      timeout_s: float = _MODEL_TIMEOUT, _lease: ExtractionLease | None = None,
+                      cfg=None) -> ApplyResult:
+    """Isolated model call outside DB locks, then persist and apply as reported.
+    
+    When cfg is provided, checks current project privacy before model call.
+    """
     path = Path(store_path).resolve()
     with KnowledgeStore(path) as reader:
         input_dict = build_proposal_input(reader, source_id, max_input_units=max_input_units)
         project_id = input_dict["project_id"]
         if not _privacy_ok(reader, project_id, source_id):
+            raise KnowledgeError("model_disallowed")
+    # Check current cfg privacy before model call
+    if cfg is not None:
+        project_name = None
+        for name, pid in cfg.knowledge_project_ids.items():
+            if pid == project_id:
+                project_name = name
+                break
+        if project_name and cfg.project_privacy.get(project_name) in ("local_only", "excluded"):
             raise KnowledgeError("model_disallowed")
     lease = _lease or _claim_lease(path, source_id)
     if lease is None:
@@ -293,10 +306,16 @@ def extract_and_apply(store_path: str, source_id: str, model_callable, *,
 def process_pending_extract_jobs(store_path: str, model_callable, *, limit: int = 10,
                                  max_input_units: int = _DEFAULT_INPUT_UNITS,
                                  max_calls: int = 2, budget_s: float = 300,
-                                 timeout_s: float = _MODEL_TIMEOUT) -> list:
-    """Durable extraction runner for queued jobs. Returns one result per processed job."""
+                                 timeout_s: float = _MODEL_TIMEOUT,
+                                 cfg=None) -> list:
+    """Durable extraction runner for queued jobs. Returns one result per processed job.
+    
+    When cfg is provided, checks current project privacy before each model call.
+    max_calls counts only jobs that actually invoked the model (not blocked by privacy).
+    """
     path = Path(store_path).resolve()
     results = []
+    model_call_count = 0
     deadline = time.monotonic() + budget_s
     with KnowledgeStore(path, writable=True) as store:
         rows = store.db.execute(
@@ -305,15 +324,21 @@ def process_pending_extract_jobs(store_path: str, model_callable, *, limit: int 
             "ORDER BY next_try_at NULLS LAST, attempts LIMIT ?", (_now(), _now(), limit)).fetchall()
         jobs = [(r["id"], r["project_id"], r["source_id"]) for r in rows]
     for job_id, project_id, source_id in jobs:
-        if len(results) >= max_calls or time.monotonic() >= deadline:
+        if model_call_count >= max_calls or time.monotonic() >= deadline:
             break
         lease = None
         try:
             lease = _claim_lease(path, source_id, job_id)
             if lease is None:
                 raise KnowledgeError("attempt_limit")
+            # Check current privacy before model call
+            if cfg is not None:
+                project = cfg.project_privacy.get(project_id)
+                if project in ("local_only", "excluded"):
+                    raise KnowledgeError("model_disallowed")
             result = extract_and_apply(str(path), source_id, model_callable, max_input_units=max_input_units,
-                                       timeout_s=min(timeout_s, deadline-time.monotonic()), _lease=lease)
+                                       timeout_s=min(timeout_s, deadline-time.monotonic()), _lease=lease, cfg=cfg)
+            model_call_count += 1
             results.append({"job_id": job_id, "status": "applied", "result": result})
         except KnowledgeError as exc:
             if lease is not None:
