@@ -118,13 +118,21 @@ def knowledge_items(arm, question):
             project=question["project"], budget=BUDGET_TOKENS)).to_dict()
     if response.get("status") != "ok":
         return [], dict(backend="knowledge", hit_count=0, search_error=str(response.get("errors", response.get("status"))))
-    items = []
-    for item in response["items"]:
-        text = f"[{item['status']}] {item['statement']}"
-        if item.get("rationale"):
-            text += f" Rationale: {item['rationale']}"
-        items.append(dict(text=text, citations=item["citations"]))
+    items = knowledge_entries(response["items"])
     return items, dict(backend="knowledge", hit_count=len(items), search_error="")
+
+
+def knowledge_entries(response_items):
+    """Render context items as texts with citations. An unresolved item carries its competing claims as alternatives."""
+    entries = []
+    for item in response_items:
+        claims = [item] if "statement" in item else item.get("alternatives", [])
+        for claim in claims:
+            text = f"[{claim['status']}] {claim['statement']}"
+            if claim.get("rationale"):
+                text += f" Rationale: {claim['rationale']}"
+            entries.append(dict(text=text, citations=claim["citations"]))
+    return entries
 
 
 def prepare_baseline(stack, base, arm_name, vault_source):

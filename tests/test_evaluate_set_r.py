@@ -328,5 +328,22 @@ class BatchesAndImport(unittest.TestCase):
         self.assertIn("note_changed_since_batch", [item["reason"] for item in counts["skipped"]])
 
 
+class KnowledgeEntries(unittest.TestCase):
+    def test_unresolved_items_render_each_alternative_and_plain_items_render_once(self):
+        citation = [dict(source_id="s1", start=0, end=4)]
+        items = [
+            dict(status="accepted", statement="Demo App uses SQLite.", rationale="Atomic writes.", citations=citation),
+            dict(status="unresolved", claim_ids=["a", "b"], alternatives=[
+                dict(status="disputed", statement="Cursor is in SQLite.", rationale="", citations=citation),
+                dict(status="disputed", statement="Cursor is in a file.", rationale="", citations=citation)]),
+        ]
+        entries = sr.knowledge_entries(items)
+        self.assertEqual([entry["text"] for entry in entries], [
+            "[accepted] Demo App uses SQLite. Rationale: Atomic writes.",
+            "[disputed] Cursor is in SQLite.",
+            "[disputed] Cursor is in a file."])
+        self.assertTrue(all(entry["citations"] == citation for entry in entries))
+
+
 if __name__ == "__main__":
     unittest.main()
