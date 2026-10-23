@@ -462,7 +462,8 @@ def _scan_stale(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
             continue
         proj_name = note.parent.name
         repo = proj_folders.get(proj_name)
-        cur = _git(["rev-parse", "--verify", "HEAD^{commit}"], repo).strip() if repo else None
+        current_head = _git(["rev-parse", "--verify", "HEAD^{commit}"], repo) if repo else None
+        cur = current_head.strip() if current_head else None
         for line_index, line in enumerate(block.splitlines()):
             s = line.strip()
             searchable = re.sub(r"\[\[[^\]]*\]\]", "", s)

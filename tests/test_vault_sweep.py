@@ -321,6 +321,30 @@ class SweepTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_c_stale_scan_marks_non_repository_project_unresolved(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = tmp.path / "vault"
+            project = vault / "1-Projects" / "Demo"
+            project.mkdir(parents=True)
+            project_root = tmp.path / "unversioned"
+            project_root.mkdir()
+            (project_root / ".git").write_text("gitdir: unavailable", encoding="utf-8")
+            note = project / "Demo.md"
+            note.write_text(
+                "<!-- agentmem:state:begin -->\n"
+                "- main at 1234567\n"
+                "<!-- agentmem:state:end -->\n", encoding="utf-8",
+            )
+            items = _load_sweep()._scan_stale(vault, {"Demo": project_root})
+            self.assertEqual(len(items), 1, items)
+            self.assertIsNone(items[0]["current_head"])
+            self.assertFalse(items[0]["stale"])
+            self.assertFalse(items[0]["auto_apply"])
+            self.assertEqual(items[0]["reason"], "unresolved")
+        finally:
+            tmp.cleanup()
+
     def test_d_broken_links_detected(self):
         plan = self._plan()
         targets = [b["target"] for b in plan["broken_links"]]
