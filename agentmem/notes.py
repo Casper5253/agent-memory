@@ -83,13 +83,13 @@ def summary_from_session(text):
 
 def render_session(*, agent, session_id, project, part, when, started, ended, source, start, end, summarizer,
                    summary, files, commands, gate_reason, prev_link=None, project_note=None,
-                   repo_head=None, attribution=None, email_allowlist=None) -> str:
+                   repo_head=None, attribution=None, source_hash="", email_allowlist=None) -> str:
     tags = ["session", f"agent/{agent}", f"project/{slug(project, 8)}"]
     fm = [
         "---", "type: session", f"agent: {agent}", f"session_id: {_yaml_str(session_id)}",
         f"project: {_yaml_str(project)}", f"date: {when:%Y-%m-%d}", f"started: {_yaml_str(started)}",
         f"ended: {_yaml_str(ended)}", f"part: {part}", f"summarizer: {summarizer}",
-        f"files_modified: {len(files)}", "immutable: true",
+        f"files_modified: {len(files)}", "immutable: true", "logical_session: true",
         "repo_head: " + (_yaml_str(repo_head) if repo_head else "null"),
         *([f"attribution_method: {attribution.method}",
            "attribution_signals: " + json.dumps(attribution.signals, ensure_ascii=False, sort_keys=True),
@@ -108,18 +108,24 @@ def render_session(*, agent, session_id, project, part, when, started, ended, so
         f"# {redact(summary.get('title') or 'Session', email_allowlist=email_allowlist)}", "",
         f"> Historical record of a {agent} session on {when:%Y-%m-%d}. It may be outdated: the current state lives in {plink}.",
         *( [f"> Continues [[{prev_link}]]."] if prev_link else [] ), "",
-        "## Executive summary", "", redact(summary.get("summary", ""), email_allowlist=email_allowlist), "",
-        "## What happened", "", bullets(summary.get("what_happened", [])), "",
-        "## Decisions and rationale", "", decisions, "",
-        "## Confirmed facts", "", bullets(summary.get("facts", [])), "",
-        "## Artifacts and modified files", "", bullets([f"`{f}`" for f in files[:60]]), "",
-        "## Commands run", "", bullets([f"`{c}`" for c in commands[:25]], "- none"), "",
-        "## Open questions and next steps", "",
-        bullets(summary.get("open_questions", []) + [f"Next: {s}" for s in summary.get("next_steps", [])]), "",
-        "## Source", "",
-        f"- Transcript: `{source}` (range {start}–{end})",
-        f"- Captured by agentmem ({summarizer}); quality gate: {gate_reason}", "",
     ]
+    sections = [
+        ("Executive summary", redact(summary.get("summary", ""), email_allowlist=email_allowlist)),
+        ("What happened", bullets(summary.get("what_happened", []), "")),
+        ("Decisions and rationale", decisions if summary.get("decisions") else ""),
+        ("Confirmed facts", bullets(summary.get("facts", []), "")),
+        ("Artifacts and modified files", bullets([f"`{f}`" for f in files[:60]], "")),
+        ("Commands run", bullets([f"`{c}`" for c in commands[:25]], "")),
+        ("Open questions and next steps", bullets(summary.get("open_questions", []) +
+                                                     [f"Next: {s}" for s in summary.get("next_steps", [])], "")),
+    ]
+    for heading, content in sections:
+        if content.strip():
+            body += [f"## {heading}", "", content, ""]
+    body += ["## Source", "", f"- Transcript: `{source}` (range {start}–{end})"]
+    if source_hash:
+        body.append(f"- SHA-256: `{source_hash}`")
+    body += [f"- Captured by agentmem ({summarizer}); quality gate: {gate_reason}", ""]
     citations = summary.get("citations", [])
     if citations:
         body += ["## Evidence", ""]
@@ -131,6 +137,53 @@ def render_session(*, agent, session_id, project, part, when, started, ended, so
             if claim and quote:
                 body += [f"### E{index}", "", f"- Claim: {claim}", f"- Digest span: {quote}", ""]
     return "\n".join(fm + body)
+
+
+def append_session_continuation(text, *, when, source, start, end, source_hash, summarizer, summary, files,
+                                commands, gate_reason, capture_part, project, email_allowlist=None) -> str:
+    fields = session_metadata(text)
+    if fields.get("logical_session") != "true":
+        raise ValueError("capture_identity_conflict: prior note is not a logical session note")
+    date = when.strftime("%Y-%m-%d %H:%M %Z").strip()
+    chunks = [f"\n## Continued {date}\n"]
+
+    def add(heading, value):
+        if value and value.strip():
+            chunks.append(f"\n### {heading}\n\n{value.strip()}\n")
+
+    add("Executive summary", redact(summary.get("summary", ""), email_allowlist=email_allowlist))
+    add("What happened", "\n".join(f"- {redact(v, email_allowlist=email_allowlist)}"
+                                     for v in summary.get("what_happened", []) if str(v).strip()))
+    decisions = "\n".join("- **" + redact(str(d.get("decision", "")), email_allowlist=email_allowlist) + "**" +
+                          ((" — " + redact(str(d.get("rationale", "")), email_allowlist=email_allowlist))
+                           if d.get("rationale") else "") for d in summary.get("decisions", [])
+                          if str(d.get("decision", "")).strip())
+    add("Decisions and rationale", decisions)
+    add("Confirmed facts", "\n".join(f"- {redact(v, email_allowlist=email_allowlist)}"
+                                      for v in summary.get("facts", []) if str(v).strip()))
+    add("Artifacts and modified files", "\n".join(f"- `{redact(v, email_allowlist=email_allowlist)}`"
+                                                   for v in files[:60] if str(v).strip()))
+    add("Commands run", "\n".join(f"- `{redact(v, email_allowlist=email_allowlist)}`"
+                                    for v in commands[:25] if str(v).strip()))
+    add("Open questions and next steps", "\n".join(f"- {redact(v, email_allowlist=email_allowlist)}"
+                   for v in summary.get("open_questions", []) + [f"Next: {v}" for v in summary.get("next_steps", [])]
+                   if str(v).strip()))
+    receipt = (f"- Capture part: {capture_part}\n- Project: {redact(project, email_allowlist=email_allowlist)}\n"
+               f"- Transcript range: `{start}–{end}`\n- SHA-256: `{source_hash}`\n- Source: `{source}`\n"
+               f"- Captured by agentmem ({summarizer}); quality gate: {gate_reason}")
+    add("Receipt", receipt)
+    return text.rstrip() + "\n" + "".join(chunks)
+
+
+def continuation_project(text, capture_part):
+    sections = re.split(r"(?m)^## Continued ", text)[1:]
+    for section in reversed(sections):
+        section = re.split(r"(?m)^## Continued ", section, maxsplit=1)[0]
+        part_match = re.search(r"(?m)^- Capture part: (\d+)$", section)
+        project_match = re.search(r"(?m)^- Project: (.+)$", section)
+        if part_match and int(part_match[1]) == capture_part and project_match:
+            return project_match[1]
+    return None
 
 
 # ---------------------------------------------------------------------------------- project notes

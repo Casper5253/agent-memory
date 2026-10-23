@@ -18,11 +18,14 @@ from pathlib import Path
 
 from . import adapters, extract, llm, notes, projects
 from .config import Config
-from .fsutil import create_once, file_lock
+from .fsutil import atomic_write, create_once, file_lock
 from .knowledge import sources as ksources
 from .logutil import log
 from .manifest import Manifest
 from .redact import redact, redact_session_note
+
+CLAUDE_TRANSCRIPTS_ROOT = Path.home() / ".claude" / "projects"
+CODEX_TRANSCRIPTS_ROOT = Path.home() / ".codex" / "sessions"
 
 
 def _parse_time(value: str) -> datetime:
@@ -58,6 +61,20 @@ def _hash(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _source_range_hash(transcript):
+    if transcript.agent == "opencode":
+        data = adapters.export_opencode(transcript.session_id)
+        messages = data.get("messages") or []
+        selected = messages[transcript.start:transcript.end]
+        raw = json.dumps(selected, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    else:
+        path = Path(transcript.source)
+        with path.open("rb") as source:
+            source.seek(transcript.start)
+            raw = source.read(transcript.end - transcript.start)
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _receipt_path(cfg, agent, sid, part):
     return cfg.meta / "capture-receipts" / (_identity_key(agent, sid, part) + ".json")
 
@@ -75,8 +92,14 @@ def _load_receipt(cfg, agent, sid, part, start):
         if (r["version"] != 1 or (r["agent"], r["session_id"], r["part"], r["start"]) != (agent, sid, part, start)
                 or r["receipt_sha"] != _receipt_hash(r) or _hash(r["text"]) != r["content_sha"]):
             raise ValueError("receipt identity or hash mismatch")
+        note_part = int(r.get("note_part", part))
+        if note_part == part and r.get("note_project", r.get("project")) != r.get("project"):
+            raise ValueError("capture_identity_conflict: initial capture project differs from note project")
+        if note_part < part and notes.continuation_project(r["text"], part) != r.get("project"):
+            raise ValueError("capture_identity_conflict: continuation project differs from note receipt")
         _validated_path(cfg, r["note_path"])
-        _validate_note(r["text"], agent, sid, part, expected_project=r.get("project"))
+        _validate_note(r["text"], agent, sid, note_part,
+                       expected_project=r.get("note_project", r.get("project")))
         return r
     except (ValueError, KeyError, TypeError) as error:
         raise ValueError("capture_identity_conflict: invalid receipt") from error
@@ -206,17 +229,32 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                 summary = extract.fallback_summary(t, d)
             summary = _redact_values(summary, cfg.privacy_email_allowlist)
             summary["repo_head"] = repo_head
+            source_hash = _source_range_hash(t)
             previous = man.capture(agent, sid, part - 1) if part > 1 else None
-            path = notes.session_note_path(cfg.sessions_dir, when, agent, summary.get("title") or t.title or "session", sid, part)
-            text = notes.render_session(agent=agent, session_id=sid, project=project, part=part, when=when,
+            previous_path = _validated_path(cfg, previous["note_path"]) if previous else None
+            previous_text = previous_path.read_text(encoding="utf-8") if previous_path and previous_path.exists() else ""
+            previous_fields = notes.session_metadata(previous_text) if previous_text else {}
+            is_continuation = previous_fields.get("logical_session") == "true"
+            note_part = int(previous_fields.get("part", "1")) if is_continuation else part
+            path = previous_path if is_continuation else notes.session_note_path(
+                cfg.sessions_dir, when, agent, summary.get("title") or t.title or "session", sid, part)
+            if is_continuation:
+                text = notes.append_session_continuation(previous_text, when=when, source=t.source, start=t.start,
+                        end=t.end, source_hash=source_hash, summarizer=kind, summary=summary, files=d.files,
+                        commands=d.commands, gate_reason=d.gate_reason, capture_part=part, project=project,
+                        email_allowlist=cfg.privacy_email_allowlist)
+            else:
+                text = notes.render_session(agent=agent, session_id=sid, project=project, part=part, when=when,
                         started=t.started, ended=t.ended, source=t.source, start=t.start, end=t.end, summarizer=kind,
                         summary=summary, files=d.files, commands=d.commands, gate_reason=d.gate_reason,
                         prev_link=Path(previous["note_path"]).with_suffix("").as_posix() if previous else None,
                         project_note=_link(cfg, projects.note_path(cfg.vault, project)), repo_head=repo_head,
-                        attribution=attribution, email_allowlist=cfg.privacy_email_allowlist)
+                        attribution=attribution, source_hash=source_hash, email_allowlist=cfg.privacy_email_allowlist)
             text = redact_session_note(text, cfg.privacy_email_allowlist)
             receipt = dict(version=1, agent=agent, session_id=sid, part=part, start=t.start, end=t.end,
                            project=project, summary=summary, digest_sha=d.sha, note_path=path.relative_to(cfg.vault).as_posix(),
+                           note_part=note_part, note_project=previous_fields.get("project", project),
+                           base_content_sha=_hash(previous_text) if is_continuation else None,
                            text=text, content_sha=_hash(text), when=when.isoformat(), summarizer=kind, cost=cost,
                            prefix_sha=t.prefix_sha, evidence="transcript", related_projects=attribution.related_projects,
                            source_warnings=_redact_values(t.warnings, cfg.privacy_email_allowlist))
@@ -238,11 +276,22 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
         man.mark(agent, sid, status="skipped", end_seen=0, project=receipt["project"], skip_reason="project excluded")
         return "excluded"
     path = _validated_path(cfg, receipt["note_path"])
-    create_once(path, receipt["text"])
+    base_sha = receipt.get("base_content_sha")
+    if base_sha:
+        if not path.exists():
+            raise ValueError("capture_identity_conflict: continuation base note is missing")
+        current_sha = _hash(path.read_text(encoding="utf-8"))
+        if current_sha == base_sha:
+            atomic_write(path, receipt["text"])
+        elif current_sha != receipt["content_sha"]:
+            raise ValueError("capture_identity_conflict: continuation base note changed")
+    else:
+        create_once(path, receipt["text"])
     persisted = path.read_bytes()
     if hashlib.sha256(persisted).hexdigest() != receipt["content_sha"]:
         raise ValueError("capture_identity_conflict: persisted note bytes differ")
-    _validate_note(persisted.decode("utf-8"), agent, sid, part, expected_project=receipt.get("project"))
+    _validate_note(persisted.decode("utf-8"), agent, sid, receipt.get("note_part", part),
+                   expected_project=receipt.get("note_project", receipt.get("project")))
     link = _link(cfg, path)
     project, summary, kind = receipt["project"], receipt["summary"], receipt["summarizer"]
     when = _parse_time(receipt["when"])
@@ -290,6 +339,42 @@ def _redact_values(value, email_allowlist=None):
     if isinstance(value, list):
         return [_redact_values(v, email_allowlist) for v in value]
     return value
+
+
+def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
+    """Register aged Claude and Codex JSONL transcripts before the ordinary settle-window drain.
+
+    The next capture drain scans ~/.claude/projects and ~/.codex/sessions. It uses file modification
+    time for the existing settle rule and then lets normal parsing, gating, privacy, and retry handling
+    decide whether to capture. OpenCode exports require a known session id, so they remain hook-bound.
+    """
+    now = now or time.time()
+    settle_s = cfg.settle_minutes * 60
+    discovered = 0
+    roots = (("claude", Path(os.environ.get("AGENTMEM_CLAUDE_TRANSCRIPTS_ROOT", CLAUDE_TRANSCRIPTS_ROOT))),
+             ("codex", Path(os.environ.get("AGENTMEM_CODEX_TRANSCRIPTS_ROOT", CODEX_TRANSCRIPTS_ROOT))))
+    for agent, root in roots:
+        if not root.is_dir():
+            continue
+        for source in root.rglob("*.jsonl"):
+            try:
+                modified = source.stat().st_mtime
+                if modified > now - settle_s:
+                    continue
+                match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", source.name)
+                known_id = source.stem if agent == "claude" else (match.group(0) if match else "")
+                if known_id and man.get(agent, known_id) is not None:
+                    continue
+                transcript = adapters.read(agent, source.stem, str(source))
+                if not transcript.session_id or not transcript.cwd or not transcript.events:
+                    continue
+                if man.get(agent, transcript.session_id) is not None:
+                    continue
+                man.touch(agent, transcript.session_id, cwd=transcript.cwd, source=str(source), now=modified)
+                discovered += 1
+            except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+                continue
+    return discovered
 
 
 def _pending_lines(summary: dict, link: str, date: str) -> list:
@@ -442,6 +527,7 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
 def process_ready(cfg: Config, man: Manifest, budget_s: float = 900, summarizer=None, consolidator=None) -> list:
     results = []
     deadline = time.monotonic() + budget_s
+    _discover_orphan_transcripts(cfg, man)
     for row in man.ready(cfg.settle_minutes * 60, cfg.max_attempts):
         if time.monotonic() > deadline or cfg.paused():
             break
