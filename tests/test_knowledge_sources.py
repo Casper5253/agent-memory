@@ -100,6 +100,28 @@ class SourceCase(unittest.TestCase):
 
 
 class BuildReceiptPackets(SourceCase):
+    def test_claude_marked_pastes_split_from_typed_user_text(self):
+        t = Transcript("claude","s1","synthetic.jsonl")
+        t.events = [Event("user","text",'Typed before. <pasted_content id="p1">PASTE_CANARY</pasted_content id="p1"> Typed after.')]
+        packets = ksources.build_receipt_packets(t)
+        self.assertEqual([(p["speaker"],p["excerpt"]) for p in packets],
+                         [("user","Typed before. "),("pasted","PASTE_CANARY"),("user"," Typed after.")])
+        self.assertEqual([p["span_ordinal"] for p in packets],[0,1,2])
+        t.events = [Event("user","text","Typed with fences:\n```\ndata\n```" + "x" * 1501)]
+        self.assertEqual(ksources.build_receipt_packets(t)[0]["speaker"],"user")
+
+    def test_codex_unmarked_pastes_use_heuristics(self):
+        t = Transcript("codex","s1","synthetic.jsonl")
+        for text in ("Pasted text:\n```\nCANARY\n```", "Quoted text:\n> CANARY", "x" * 1501):
+            t.events = [Event("user","text",text)]
+            self.assertEqual(ksources.build_receipt_packets(t)[0]["speaker"],"pasted")
+
+    def test_opencode_unmarked_pastes_use_heuristics(self):
+        t = Transcript("opencode","s1","opencode:s1")
+        for text in ("Pasted text:\n```\nCANARY\n```", "Quoted text:\n> CANARY", "x" * 1501):
+            t.events = [Event("user","text",text)]
+            self.assertEqual(ksources.build_receipt_packets(t)[0]["speaker"],"pasted")
+
     def test_selects_user_and_final_assistant_text(self):
         t = Transcript(agent="codex", session_id="s1", source="src.jsonl")
         t.events = [
@@ -145,11 +167,14 @@ class BuildReceiptPackets(SourceCase):
         self.assertEqual(packets[0]["repo_head"], head)
 
     def test_no_raw_transcript_copy_only_redacted_hash(self):
-        t = Transcript(agent="codex", session_id="s1", source="src.jsonl")
-        t.events = [Event("user", "text", "The password: Password123 is the secret.")]
+        raw = '{"message":"The password: Password123 is the secret."}\n'
+        path = self.root / "synthetic.jsonl"
+        path.write_bytes(raw.encode())
+        t = Transcript(agent="codex", session_id="s1", source=str(path))
+        t.events = [Event("user", "text", "The password: Password123 is the secret.", cursor_end=len(raw.encode()))]
         packets = ksources.build_receipt_packets(t)
         self.assertNotIn("Password123", packets[0]["excerpt"])
-        self.assertEqual(packets[0]["original_range_sha"], sha_text("The password: Password123 is the secret."))
+        self.assertEqual(packets[0]["original_range_sha"], sha_text(raw))
 
 
 class ImportFromReceipt(SourceCase):
@@ -203,7 +228,7 @@ class ImportFromReceipt(SourceCase):
         first = ksources.import_capture_for_receipt(cfg, self.store, receipt)
         second = ksources.import_capture_for_receipt(cfg, self.store, receipt)
         self.assertTrue(second.import_result.replayed)
-        changed = _receipt(sources=[_source_packet(0)], digest_sha="0" * 64)
+        changed = _receipt(sources=[_source_packet(0)], content_sha="0" * 64)
         from agentmem.knowledge.models import KnowledgeError
         with self.assertRaises(KnowledgeError) as caught:
             ksources.import_capture_for_receipt(cfg, self.store, changed)
@@ -314,7 +339,7 @@ class CaptureRegressions(SourceCase):
             self.assertEqual(self.capture(cfg)[0], "captured")
         receipt = json.loads(next((cfg.meta / "capture-receipts").glob("*.json")).read_text(encoding="utf-8"))
         self.assertNotIn("sources", receipt)
-        self.assertNotIn("source_warnings", receipt)
+        self.assertEqual(receipt["source_warnings"], [])
 
     def test_scan_rejects_bad_receipt_hash_and_manifest_project_mismatch(self):
         from agentmem import pipeline
@@ -358,6 +383,29 @@ class CaptureRegressions(SourceCase):
     def test_interior_fences_and_quotes_are_pasted(self):
         for text in ("Here is data:\n```\nPASTED_CANARY\n```", "Here is a quote:\n> PASTED_CANARY"):
             self.assertEqual(ksources._speaker(Event("user", "text", text)), "pasted")
+
+    def test_opencode_hashes_canonical_original_messages_without_tool_output(self):
+        from agentmem import adapters
+        from agentmem.knowledge.policy import canonical
+        cfg = self.prepare()
+        exported = self.fx.opencode_export("synthetic-opencode", self.cwd, self.fx.SUBSTANTIAL)
+        for message in exported["messages"]:
+            for part in message["parts"]:
+                if part.get("type") == "tool":
+                    part.setdefault("state", {})["output"] = "TOOL_OUTPUT_CANARY"
+        t = adapters.read_opencode("synthetic-opencode",data=exported)
+        packets = ksources.build_receipt_packets(t, original_messages=exported["messages"])
+        for packet in packets:
+            raw = exported["messages"][packet["start"]:packet["end"]]
+            self.assertEqual(packet["original_range_sha"],sha_text(canonical(raw)))
+        self.assertNotIn("TOOL_OUTPUT_CANARY",canonical(packets))
+
+    def test_packet_outage_cannot_break_enabled_capture(self):
+        cfg = self.prepare()
+        with patch.object(ksources,"build_receipt_packets",side_effect=OSError("synthetic packet outage")):
+            self.assertEqual(self.capture(cfg)[0],"captured")
+        source = self.store.db.execute("SELECT kind FROM sources").fetchone()
+        self.assertEqual(source["kind"],"legacy_note")
 
 
 if __name__ == "__main__":

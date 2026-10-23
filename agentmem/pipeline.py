@@ -152,7 +152,13 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                     prefix = adapters.read(agent, sid, source, end=row["captured_until"])
                     if prefix.prefix_sha != previous["prefix_sha"]:
                         raise ValueError("source_change: earlier OpenCode messages mutated")
-            t = adapters.read(agent, sid, source, start=row["captured_until"])
+            original_messages = None
+            if agent == "opencode" and cfg.knowledge_mode != "off":
+                exported = adapters.export_opencode(sid)
+                t = adapters.read_opencode(sid, start=row["captured_until"], data=exported)
+                original_messages = exported.get("messages") or []
+            else:
+                t = adapters.read(agent, sid, source, start=row["captured_until"])
             source_error = _source_error(t.warnings)
             for warning in t.warnings:
                 log(cfg, "capture-source-warning", agent=agent, session=sid, **warning)
@@ -175,10 +181,14 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
             edited = [p for ev in t.events if ev.kind == "edit" for p in ev.paths]
             attribution = projects.attribute(cwd, cfg.projects_map, files=edited, text="\n".join(d.prompts))
             project = attribution.project
+            if ksources._privacy_for(cfg, project) == "excluded":
+                man.mark(agent, sid, status="skipped", end_seen=0, project=project, skip_reason="project excluded")
+                return "excluded"
             repo_head = projects.repo_head(cwd)
             when = _parse_time(t.started)
             cost, kind, summary = 0.0, "deterministic", None
-            if cfg.summarizer == "claude-haiku":
+            if (cfg.summarizer == "claude-haiku"
+                    and ksources._privacy_for(cfg, project) not in ("local_only", "excluded")):
                 try:
                     summary = summarizer(d.text, timeout=cfg.llm_timeout_s)
                     cost = summary.pop("_cost_usd", 0.0)
@@ -198,15 +208,27 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                         project_note=_link(cfg, projects.note_path(cfg.vault, project)), repo_head=repo_head,
                         attribution=attribution)
             text = redact_session_note(text)
-            source_packets = ksources.build_receipt_packets(t, repo_head)
             receipt = dict(version=1, agent=agent, session_id=sid, part=part, start=t.start, end=t.end,
                            project=project, summary=summary, digest_sha=d.sha, note_path=path.relative_to(cfg.vault).as_posix(),
                            text=text, content_sha=_hash(text), when=when.isoformat(), summarizer=kind, cost=cost,
                            prefix_sha=t.prefix_sha, evidence="transcript", related_projects=attribution.related_projects,
-                           source_warnings=t.warnings, sources=source_packets)
+                           source_warnings=t.warnings)
+            if cfg.knowledge_mode != "off":
+                try:
+                    receipt["sources"] = ksources.build_receipt_packets(t, repo_head, part=part,
+                        note_path=receipt["note_path"], origin_group=d.sha,
+                        privacy=ksources._privacy_for(cfg, project) or "model_allowed", original_messages=original_messages)
+                except Exception:
+                    log(cfg, "knowledge-packet-error", agent=agent, session=sid, part=part)
+        if ksources._privacy_for(cfg, receipt["project"]) == "excluded":
+            man.mark(agent, sid, status="skipped", end_seen=0, project=receipt["project"], skip_reason="project excluded")
+            return "excluded"
         receipt["receipt_sha"] = _receipt_hash(receipt)
         create_once(_receipt_path(cfg, agent, sid, part), json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
         receipt = _load_receipt(cfg, agent, sid, part, row["captured_until"])
+    if ksources._privacy_for(cfg, receipt["project"]) == "excluded":
+        man.mark(agent, sid, status="skipped", end_seen=0, project=receipt["project"], skip_reason="project excluded")
+        return "excluded"
     path = _validated_path(cfg, receipt["note_path"])
     create_once(path, receipt["text"])
     persisted = path.read_bytes()
@@ -232,7 +254,9 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                        error=_source_error(receipt.get("source_warnings", [])))
     if cfg.knowledge_mode != "off" and project != projects.UNSORTED:
         try:
-            ksources.maybe_import_after_capture(cfg, receipt)
+            outcome = ksources.maybe_import_after_capture(cfg, receipt)
+            if outcome.status == "error":
+                log(cfg, "knowledge-import-error", agent=agent, session=sid, part=part, reason=outcome.reason)
         except Exception as e:  # noqa: BLE001 - knowledge must never break capture
             log(cfg, "knowledge-import-error", agent=agent, session=sid, part=part, project=project,
                 error=f"{type(e).__name__}: {e}")
@@ -266,6 +290,8 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                              summary_kind: str, consolidator=None) -> tuple:
     """Reconcile one session into its project note. Returns (cost, consolidated?)."""
     consolidator = consolidator or llm.consolidate
+    if ksources._privacy_for(cfg, project) == "excluded":
+        return 0.0, False
     note_path = projects.note_path(cfg.vault, project)
     date = f"{when:%Y-%m-%d}"
     session_line = f"- {date} [[{link}|{summary.get('title') or 'session'}]]"
@@ -277,10 +303,13 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         if (session_marker in notes.get_block(text, notes.SESS_BEGIN, notes.SESS_END)
                 and f"[[{link}]]" not in notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)):
             return 0.0, True
-        if summary_kind != "deterministic" and cfg.summarizer != "none":
+        if (summary_kind != "deterministic" and cfg.summarizer != "none"
+                and ksources._privacy_for(cfg, project) not in ("local_only", "excluded")):
             try:
                 state, cost = consolidator(notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END), summary,
                                            f"[[{link}]]", date, timeout=cfg.llm_timeout_s)
+                if ksources._privacy_for(cfg, project) == "excluded":
+                    return cost, False
                 notes.update_project_note(note_path, project, date, state=state, pending_clear=f"[[{link}]]",
                                           session_link=link, session_line=session_line)
                 return cost, True
@@ -317,6 +346,9 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
     summarizer = summarizer or llm.summarize
     done = failed = 0
     for row in man.unconsolidated()[:limit]:
+        if ksources._privacy_for(cfg, row["project"]) == "excluded":
+            failed += 1
+            continue
         summary = json.loads(row["summary_json"] or "{}")
         kind = row["summarizer"]
         try:

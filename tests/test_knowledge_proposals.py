@@ -4,6 +4,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 import uuid
 from contextlib import closing
@@ -237,7 +238,6 @@ class AuthorityInjection(ProposalCase):
         source_id = self.import_source()
         raw = (FIXTURE_DIR / "valid_authority_injection.json").read_text(encoding="utf-8")
         raw = self.bind_fixture(raw, source_id)
-        # save_proposal strips authority keys during validation.
         rev = self.store.get_project(self.pid)["revision"]
         proposal_id = self.store.save_proposal(self.pid, source_id, raw, rev)
         result = self.store.apply_proposal(self.pid, proposal_id, rev, proposal_id)
@@ -303,6 +303,77 @@ class LifecycleRegressions(ProposalCase):
         self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), timeout), [])
         self.assertEqual(called, [1, 2, 3])
         self.assertEqual(row["state"], "quarantined")
+
+    def test_real_deadline_discards_late_thread_result(self):
+        sid = self.import_source()
+        release, started, finished = threading.Event(), threading.Event(), threading.Event()
+        def slow(prompt):
+            started.set()
+            release.wait(5)
+            finished.set()
+            return self.output(sid)
+        try:
+            self.assertCode("model_timeout", lambda: kprop.extract_and_apply(
+                str(self.path), sid, slow, timeout_s=0.03))
+            self.assertTrue(started.is_set())
+        finally:
+            release.set()
+        self.assertTrue(finished.wait(2))
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM claims").fetchone()[0], 0)
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM proposals").fetchone()[0], 0)
+
+    def test_attempt_cap_includes_other_job_generations(self):
+        sid = self.import_source()
+        self.store.db.execute("UPDATE jobs SET state='error',attempts=3 WHERE source_id=?", (sid,))
+        key = sha_text("new-generation")
+        self.store.db.execute("INSERT INTO jobs VALUES (?,?,?,'extract',?,NULL,'pending',0,NULL,NULL,NULL,NULL)",
+                              (key,self.pid,sid,key))
+        called = []
+        result = kprop.process_pending_extract_jobs(str(self.path), lambda prompt: called.append(prompt))
+        self.assertEqual(result[0]["error_code"], "attempt_limit")
+        self.assertEqual(called, [])
+
+    def test_expiry_at_commit_rolls_back_claims(self):
+        sid = self.import_source()
+        expired = []
+        finish = kprop._LeasedStore._finish
+        now = kprop._now
+        def expire_after_writes(writer, *args, **kwargs):
+            finish(writer,*args,**kwargs)
+            expired.append(True)
+        with patch.object(kprop._LeasedStore,"_finish",expire_after_writes), patch.object(kprop,"_now",
+                side_effect=lambda: "2999-01-01T00:00:00Z" if expired else now()):
+            self.assertCode("lease_lost",lambda: kprop.extract_and_apply(str(self.path),sid,lambda prompt:self.output(sid)))
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM claims").fetchone()[0],0)
+        self.assertEqual(self.store.db.execute("SELECT state FROM proposals").fetchone()[0],"ready")
+
+    def test_schema_invalid_output_is_not_retried(self):
+        self.import_source()
+        called = []
+        def invalid(prompt):
+            called.append(prompt)
+            return "not json"
+        self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), invalid)[0]["error_code"], "invalid_json")
+        self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), invalid), [])
+        self.assertEqual(len(called), 1)
+
+    def test_authority_and_foreign_source_controls_reach_the_validator(self):
+        other = self.import_source(session="other", excerpt="OTHER_GROUP_CANARY " * 3)
+        beta = str(uuid.uuid4())
+        self.store.register_project(beta,"Beta",[str(self.root / "beta")],privacy="model_allowed")
+        self.import_source(session="beta",project_id=beta,excerpt="FOREIGN_PROJECT_CANARY " * 3)
+        for name, code in (("status","invalid_keys"),("evidence_level","invalid_keys"),("source_id","evidence_scope")):
+            sid = self.import_source(session=name)
+            body = json.loads(self.output(sid))
+            if name == "source_id":
+                body["claims"][0]["evidence"][0]["source_id"] = other
+            else:
+                body["claims"][0][name] = "accepted" if name == "status" else "verified"
+            seen=[]
+            self.assertCode(code, lambda: kprop.extract_and_apply(str(self.path),sid,
+                lambda prompt: seen.append(prompt) or json.dumps(body)))
+            self.assertNotIn("OTHER_GROUP_CANARY",seen[0])
+            self.assertNotIn("FOREIGN_PROJECT_CANARY",seen[0])
 
 
 if __name__ == "__main__":

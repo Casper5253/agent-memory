@@ -84,6 +84,15 @@ def remember_item(cfg: Config, text: str, *, kind: str = "fact", project: str = 
         attribution.related_projects = sorted(name for name, signal in attribution.signals.items()
                                               if name != project and signal["score"] >= 3)
     project = attribution.project
+    if pipeline.ksources._privacy_for(cfg, project) == "excluded":
+        man = Manifest(cfg.manifest_path)
+        try:
+            sid = "remember-" + uuid.uuid4().hex[:8]
+            man.touch(agent, sid, end=True)
+            man.mark(agent, sid, status="skipped", end_seen=0, project=project, skip_reason="project excluded")
+        finally:
+            man.close()
+        return {"status": "excluded", "project": project, "evidence": None, "updated": None, "consolidated": False}
     when = datetime.now().astimezone()
     item_id = uuid.uuid4().hex[:8]
     plink = (f"[[{projects.note_path(cfg.vault, project).relative_to(cfg.vault).with_suffix('').as_posix()}|{project}]]"

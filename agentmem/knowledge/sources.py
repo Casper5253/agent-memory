@@ -2,12 +2,12 @@
 
 Builds redacted, bounded source packets from transcripts or legacy notes,
 resolves project identity and privacy, and imports at most once per capture.
-The post-capture seam and durable scan live here; capture itself never waits
-on the knowledge store.
+The post-capture seam catches store errors after immutable note publication.
 """
 import hashlib
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,11 +18,13 @@ from ..knowledge.policy import canonical, sha_text
 from ..knowledge.store import KnowledgeStore, import_capture
 from ..projects import load_map
 from ..redact import redact
+from ..logutil import log
 
 _PACKET_LIMIT = 32 * 1024
 _EXCERPT_LIMIT = 6000
 _FORMAT_VERSION = "v1"
 _REDACTOR_VERSION = "agentmem-v1"
+_CLAUDE_PASTE = re.compile(r'<pasted_content id="([^"<>\r\n]+)">(.*?)</pasted_content id="\1">', re.S)
 
 
 class KnowledgeImportError(ValueError):
@@ -39,17 +41,33 @@ def _identity_key(agent: str, session_id: str, part: int) -> str:
     return hashlib.sha256(json.dumps([agent, session_id, part], separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def _speaker(event) -> str:
+def _speaker(event, agent: str = "") -> str:
     """Speaker classification per 04 heuristics."""
     if event.role == "assistant":
         return "assistant"
     if event.role != "user":
         return "unknown"
+    if agent == "claude":
+        return "user"
     text = event.text
     # pasted heuristics: fenced/quoted blocks or very long single messages
-    if text.startswith(("```", "> ")) or len(text) > 1500:
+    if re.search(r"```|~~~|(?m:^\s*>\s?)", text) or len(text) > 1500:
         return "pasted"
     return "user"
+
+
+def _text_spans(event, agent: str) -> list[tuple[str, str]]:
+    if agent != "claude" or event.role != "user":
+        return [(event.text, _speaker(event, agent))]
+    spans, end = [], 0
+    for match in _CLAUDE_PASTE.finditer(event.text):
+        if match.start() > end:
+            spans.append((event.text[end:match.start()], "user"))
+        spans.append((match.group(2), "pasted"))
+        end = match.end()
+    if end < len(event.text):
+        spans.append((event.text[end:], "user"))
+    return spans
 
 
 def _truncate_excerpt(text: str) -> str:
@@ -61,9 +79,11 @@ def _truncate_excerpt(text: str) -> str:
 
 def _packet_dict(event, *, agent: str, session_id: str, part: int, note_path: str,
                  repo_head: str | None, origin_group: str, recorded_at: str,
-                 privacy: str, ordinal: int, excerpt: str | None = None) -> dict:
+                 privacy: str, ordinal: int, excerpt: str | None = None,
+                 original_sha: str | None = None, speaker: str | None = None) -> dict:
     original = event.text
     excerpt = redact(original) if excerpt is None else excerpt
+    truncated = len(excerpt.encode("utf-8")) > _EXCERPT_LIMIT
     excerpt = _truncate_excerpt(excerpt)
     cursor_kind = "messages" if agent == "opencode" else "bytes"
     locator = {
@@ -72,7 +92,7 @@ def _packet_dict(event, *, agent: str, session_id: str, part: int, note_path: st
         "event_ordinal": event.ordinal,
         "message_ids": [event.message_id] if event.message_id else [],
         "redactor_version": _REDACTOR_VERSION,
-        "truncated": False,
+        "truncated": truncated,
     }
     return {
         "agent": agent,
@@ -84,16 +104,16 @@ def _packet_dict(event, *, agent: str, session_id: str, part: int, note_path: st
         "end": event.cursor_end,
         "span_ordinal": ordinal,
         "locator_json": locator,
-        "original_range_sha": sha_text(original),
+        "original_range_sha": original_sha,
         "note_path": note_path,
         "content_sha": sha_text(excerpt),
         "recorded_at": recorded_at,
-        "occurred_at": event.ts,
+        "occurred_at": event.ts or None,
         "occurred_precision": "instant" if event.ts else "unknown",
         "excerpt": excerpt,
         "origin_group": origin_group,
         "privacy": privacy,
-        "speaker": _speaker(event),
+        "speaker": speaker or _speaker(event, agent),
         "repo_head": repo_head,
     }
 
@@ -121,7 +141,20 @@ def _prioritized_text_events(events) -> list:
     return result
 
 
-def build_receipt_packets(t: Transcript, repo_head: str | None = None) -> list[dict]:
+def _cap_packets(packets: list[dict]) -> list[dict]:
+    selected = []
+    for packet in packets:
+        if len(canonical(selected + [packet]).encode("utf-8")) > _PACKET_LIMIT:
+            if selected:
+                selected[-1]["locator_json"]["truncated"] = True
+            break
+        selected.append(packet)
+    return selected
+
+
+def build_receipt_packets(t: Transcript, repo_head: str | None = None, *, part: int = 1,
+                          note_path: str = "", origin_group: str = "", privacy: str = "model_allowed",
+                          original_messages: list | None = None) -> list[dict]:
     """Build capped redacted source packets for storage in a capture receipt.
 
     No raw transcript is persisted; only redacted excerpts and original-range
@@ -129,27 +162,35 @@ def build_receipt_packets(t: Transcript, repo_head: str | None = None) -> list[d
     """
     events = _prioritized_text_events(t.events)
     packets = []
-    total = 0
     recorded_at = _utc_now()
-    truncated = False
-    for ordinal, ev in enumerate(events):
-        excerpt = redact(ev.text)
-        excerpt_bytes = len(excerpt.encode("utf-8"))
-        if excerpt_bytes > _EXCERPT_LIMIT:
-            excerpt = _truncate_excerpt(excerpt)
-            excerpt_bytes = len(excerpt.encode("utf-8"))
-            truncated = True
-        if packets and total + excerpt_bytes > _PACKET_LIMIT:
-            truncated = True
-            break
-        total += excerpt_bytes
-        packets.append(_packet_dict(ev, agent=t.agent, session_id=t.session_id, part=1,
-                                    note_path="", repo_head=repo_head, origin_group="",
-                                    recorded_at=recorded_at, privacy="model_allowed",
-                                    ordinal=ordinal, excerpt=excerpt))
-    if packets and truncated:
-        packets[-1]["locator_json"]["truncated"] = True
-    return packets
+    original_bytes = None
+    if t.agent != "opencode" and Path(t.source).is_file():
+        original_bytes = Path(t.source).read_bytes()
+    spans = {}
+    ordinal = 0
+    for event in t.events:
+        spans[id(event)] = []
+        for text, speaker in _text_spans(event, t.agent):
+            spans[id(event)].append((ordinal, text, speaker))
+            ordinal += 1
+    for ev in events:
+        original_sha = None
+        if original_bytes is not None:
+            original_sha = hashlib.sha256(original_bytes[ev.cursor_start:ev.cursor_end]).hexdigest()
+        elif original_messages is not None:
+            original_sha = sha_text(canonical(original_messages[ev.cursor_start:ev.cursor_end]))
+        for ordinal, text, speaker in spans[id(ev)]:
+            packet = _packet_dict(ev, agent=t.agent, session_id=t.session_id, part=part,
+                                  note_path=note_path, repo_head=repo_head, origin_group=origin_group,
+                                  recorded_at=recorded_at, privacy=privacy,
+                                  ordinal=ordinal, excerpt=redact(text), original_sha=original_sha, speaker=speaker)
+            if t.agent == "opencode" and not ev.message_id:
+                packet["locator_json"]["format_version"] = "v1-missing-message-ids"
+            packets.append(packet)
+    selected = sorted(_cap_packets(packets), key=lambda packet: packet["span_ordinal"])
+    if selected and len(selected) < len(packets):
+        selected[-1]["locator_json"]["truncated"] = True
+    return selected
 
 
 def _legacy_source(note_text: str, note_path: str, agent: str, session_id: str, part: int,
@@ -195,7 +236,7 @@ def capture_identity_from_receipt(receipt: dict) -> CaptureIdentity:
 
 
 def capture_fingerprint_from_receipt(receipt: dict) -> str:
-    return receipt["digest_sha"]
+    return receipt["content_sha"]
 
 
 def _project_id_for(cfg: Config, project_name: str) -> str | None:
@@ -203,7 +244,8 @@ def _project_id_for(cfg: Config, project_name: str) -> str | None:
 
 
 def _privacy_for(cfg: Config, project_name: str) -> str | None:
-    return cfg.project_privacy.get(project_name)
+    pid = _project_id_for(cfg, project_name)
+    return cfg.project_privacy.get(pid, cfg.project_privacy.get(project_name))
 
 
 def _ensure_project(store: KnowledgeStore, cfg: Config, project_name: str) -> str | None:
@@ -232,6 +274,10 @@ def _ensure_project(store: KnowledgeStore, cfg: Config, project_name: str) -> st
 def _sources_from_receipt(receipt: dict, privacy: str) -> list[SourceInput]:
     packets = receipt.get("sources") or []
     recorded_at = receipt.get("when") or _utc_now()
+    recorded = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+    if recorded.tzinfo is None:
+        recorded = recorded.replace(tzinfo=timezone.utc)
+    recorded_at = recorded.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     if not packets:
         packets = [_legacy_source(
             receipt["text"], receipt["note_path"], receipt["agent"],
@@ -240,6 +286,7 @@ def _sources_from_receipt(receipt: dict, privacy: str) -> list[SourceInput]:
     out = []
     for p in packets:
         p = dict(p)
+        p["locator_json"] = dict(p["locator_json"])
         p["privacy"] = privacy
         if not p.get("note_path"):
             p["note_path"] = receipt["note_path"]
@@ -248,7 +295,7 @@ def _sources_from_receipt(receipt: dict, privacy: str) -> list[SourceInput]:
         if p.get("recorded_at") is None:
             p["recorded_at"] = recorded_at
         out.append(SourceInput(**p))
-    return out
+    return [SourceInput(**packet) for packet in _cap_packets([asdict(source) for source in out])]
 
 
 @dataclass(frozen=True)
@@ -264,6 +311,8 @@ def import_capture_for_receipt(cfg: Config, store: KnowledgeStore, receipt: dict
     project_name = receipt.get("project")
     if not project_name or project_name == "Unsorted":
         return ImportOutcome("skipped", reason="no_project")
+    if _privacy_for(cfg, project_name) == "excluded":
+        return ImportOutcome("skipped", project_id=_project_id_for(cfg, project_name), reason="project_excluded")
     pid = _ensure_project(store, cfg, project_name)
     if pid is None:
         return ImportOutcome("skipped", reason="not_enrolled")
@@ -309,10 +358,9 @@ def _load_receipt(cfg: Config, agent: str, session_id: str, part: int) -> dict |
     path = cfg.meta / "capture-receipts" / ("{}.json".format(_identity_key(agent, session_id, part)))
     if not path.exists():
         return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    from ..pipeline import _load_receipt as validated_receipt
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return validated_receipt(cfg, agent, session_id, part, raw["start"])
 
 
 def scan_unimported_captures(cfg: Config, man, store: KnowledgeStore | None = None) -> list[ImportOutcome]:
@@ -325,7 +373,26 @@ def scan_unimported_captures(cfg: Config, man, store: KnowledgeStore | None = No
     try:
         outcomes = []
         for row in man.query_captures(limit=1000):
-            receipt = _load_receipt(cfg, row["agent"], row["session_id"], row["part"])
+            if _privacy_for(cfg, row["project"]) == "excluded":
+                outcomes.append(ImportOutcome("skipped", reason="project_excluded"))
+                continue
+            try:
+                receipt = _load_receipt(cfg, row["agent"], row["session_id"], row["part"])
+                from ..pipeline import _validated_path
+                path = _validated_path(cfg, row["note_path"])
+                persisted = path.read_text(encoding="utf-8")
+                from ..pipeline import _validate_pending_identity
+                _validate_pending_identity(cfg, man, row, persisted, json.loads(row["summary_json"] or "{}"))
+                if receipt is not None:
+                    binding = (receipt["project"], receipt["note_path"], receipt["start"], receipt["end"], receipt["digest_sha"])
+                    expected = (row["project"], row["note_path"], row["start_offset"], row["end_offset"], row["digest_sha"])
+                    if binding != expected or sha_text(persisted) != receipt["content_sha"]:
+                        raise ValueError("capture_identity_conflict")
+            except (OSError, ValueError, KeyError, TypeError):
+                log(cfg, "knowledge-import-skip", agent=row["agent"], session=row["session_id"],
+                    part=row["part"], reason="invalid_receipt")
+                outcomes.append(ImportOutcome("skipped", reason="invalid_receipt"))
+                continue
             if receipt is None:
                 # legacy note without receipt: synthesize a minimal receipt
                 receipt = {
@@ -335,11 +402,14 @@ def scan_unimported_captures(cfg: Config, man, store: KnowledgeStore | None = No
                     "when": datetime.fromtimestamp(row["captured_at"] or 0, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
                     "repo_head": None,
                 }
-                try:
-                    receipt["text"] = (cfg.vault / row["note_path"]).read_text(encoding="utf-8")
-                except OSError:
-                    continue
-            outcome = import_capture_for_receipt(cfg, store, receipt)
+                receipt["text"] = persisted
+                receipt["content_sha"] = sha_text(persisted)
+            try:
+                outcome = import_capture_for_receipt(cfg, store, receipt)
+            except Exception:
+                log(cfg, "knowledge-import-skip", agent=row["agent"], session=row["session_id"],
+                    part=row["part"], reason="import_failed")
+                outcome = ImportOutcome("error", reason="import_failed")
             outcomes.append(outcome)
         return outcomes
     finally:
