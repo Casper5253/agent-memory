@@ -50,10 +50,10 @@ class ScriptedExtractor:
             slot = re.search(r"\b(api_mode|release|capacity|runtime_version)\s+is\s+([^.;]+)", statement)
             if storage and source["speaker"] != "pasted":
                 predicate, value, kind = "storage_backend", storage[1].casefold(), "decision"
-            elif slot:
-                predicate, value = slot[1], slot[2].strip()
             elif re.search(r"\bcurrent release\b|\brevision\b.*\brepo\b", statement):
                 predicate = "repo_state"
+            elif slot:
+                predicate, value = slot[1], slot[2].strip()
             ref = entities.setdefault(subject, "e" + str(len(entities)))
             metadata = self.source_metadata[source["source_id"]]
             effective = None if re.search(r"(?i)no effective date|undated|unknown effective", text) else metadata.get("occurred_at")

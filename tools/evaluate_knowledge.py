@@ -202,8 +202,11 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index,
     from agentmem.manifest import Manifest
     from agentmem import worker
 
-    knowledge_options = dict(knowledge_mode="shadow", knowledge_project_ids={p["name"]: pid for pid, p in project_roots.items()},
-        project_privacy={p["name"]: p["policy"] for p in project_roots.values()}) if knowledge else {}
+    knowledge_options = {}
+    if "project_privacy" in Config.__dataclass_fields__:
+        knowledge_options["project_privacy"] = {p["name"]: p["policy"] for p in project_roots.values()}
+    if knowledge:
+        knowledge_options.update(knowledge_mode="shadow", knowledge_project_ids={p["name"]: pid for pid, p in project_roots.items()})
     cfg = Config(
         vault=vault,
         summarizer="claude-haiku",

@@ -35,6 +35,9 @@ class ScriptedExtraction(unittest.TestCase):
         self.assertNotIn("status", proposal["claims"][0])
         self.assertNotIn("evidence_level", proposal["claims"][0])
         self.assertEqual(json.loads(extractor(serialize_model_input(data))), proposal)
+        data["sources"][0]["excerpt"] = "synthetic-component-01 current release is tag v1 at revision " + "a" * 40 + "."
+        repo_claim = json.loads(extractor(serialize_model_input(data)))["claims"][0]
+        self.assertEqual(repo_claim["predicate"], "repo_state")
 
 
 class ContextCase(unittest.TestCase):
