@@ -140,7 +140,7 @@ def render_session(*, agent, session_id, project, part, when, started, ended, so
 
 
 def append_session_continuation(text, *, when, source, start, end, source_hash, summarizer, summary, files,
-                                commands, gate_reason, email_allowlist=None) -> str:
+                                commands, gate_reason, capture_part, project, email_allowlist=None) -> str:
     fields = session_metadata(text)
     if fields.get("logical_session") != "true":
         raise ValueError("capture_identity_conflict: prior note is not a logical session note")
@@ -168,9 +168,22 @@ def append_session_continuation(text, *, when, source, start, end, source_hash, 
     add("Open questions and next steps", "\n".join(f"- {redact(v, email_allowlist=email_allowlist)}"
                    for v in summary.get("open_questions", []) + [f"Next: {v}" for v in summary.get("next_steps", [])]
                    if str(v).strip()))
-    receipt = f"- Transcript range: `{start}–{end}`\n- SHA-256: `{source_hash}`\n- Source: `{source}`\n- Captured by agentmem ({summarizer}); quality gate: {gate_reason}"
+    receipt = (f"- Capture part: {capture_part}\n- Project: {redact(project, email_allowlist=email_allowlist)}\n"
+               f"- Transcript range: `{start}–{end}`\n- SHA-256: `{source_hash}`\n- Source: `{source}`\n"
+               f"- Captured by agentmem ({summarizer}); quality gate: {gate_reason}")
     add("Receipt", receipt)
     return text.rstrip() + "\n" + "".join(chunks)
+
+
+def continuation_project(text, capture_part):
+    sections = re.split(r"(?m)^## Continued ", text)[1:]
+    for section in reversed(sections):
+        section = re.split(r"(?m)^## Continued ", section, maxsplit=1)[0]
+        part_match = re.search(r"(?m)^- Capture part: (\d+)$", section)
+        project_match = re.search(r"(?m)^- Project: (.+)$", section)
+        if part_match and int(part_match[1]) == capture_part and project_match:
+            return project_match[1]
+    return None
 
 
 # ---------------------------------------------------------------------------------- project notes

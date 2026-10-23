@@ -92,8 +92,13 @@ def _load_receipt(cfg, agent, sid, part, start):
         if (r["version"] != 1 or (r["agent"], r["session_id"], r["part"], r["start"]) != (agent, sid, part, start)
                 or r["receipt_sha"] != _receipt_hash(r) or _hash(r["text"]) != r["content_sha"]):
             raise ValueError("receipt identity or hash mismatch")
+        note_part = int(r.get("note_part", part))
+        if note_part == part and r.get("note_project", r.get("project")) != r.get("project"):
+            raise ValueError("capture_identity_conflict: initial capture project differs from note project")
+        if note_part < part and notes.continuation_project(r["text"], part) != r.get("project"):
+            raise ValueError("capture_identity_conflict: continuation project differs from note receipt")
         _validated_path(cfg, r["note_path"])
-        _validate_note(r["text"], agent, sid, r.get("note_part", part),
+        _validate_note(r["text"], agent, sid, note_part,
                        expected_project=r.get("note_project", r.get("project")))
         return r
     except (ValueError, KeyError, TypeError) as error:
@@ -236,7 +241,8 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
             if is_continuation:
                 text = notes.append_session_continuation(previous_text, when=when, source=t.source, start=t.start,
                         end=t.end, source_hash=source_hash, summarizer=kind, summary=summary, files=d.files,
-                        commands=d.commands, gate_reason=d.gate_reason, email_allowlist=cfg.privacy_email_allowlist)
+                        commands=d.commands, gate_reason=d.gate_reason, capture_part=part, project=project,
+                        email_allowlist=cfg.privacy_email_allowlist)
             else:
                 text = notes.render_session(agent=agent, session_id=sid, project=project, part=part, when=when,
                         started=t.started, ended=t.ended, source=t.source, start=t.start, end=t.end, summarizer=kind,

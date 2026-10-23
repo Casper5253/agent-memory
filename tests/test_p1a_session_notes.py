@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -65,6 +66,25 @@ class LogicalSessionNoteTests(unittest.TestCase):
         for heading in ("## What happened", "## Decisions and rationale", "## Confirmed facts",
                         "## Open questions and next steps"):
             self.assertNotIn(heading, text)
+
+    def test_continuation_receipt_binds_its_project(self):
+        sid = "project-receipt-1234"
+        path = self.root / f"{sid}.jsonl"
+        write_jsonl(path, claude_lines(sid, self.cwd, SUBSTANTIAL))
+        self.man.touch("claude", sid, source=str(path), cwd=self.cwd, end=True)
+        pipeline.finalize(self.cfg, self.man, self.man.get("claude", sid), fake_summarize, fake_consolidate)
+        write_jsonl(path, claude_lines(sid, self.cwd, SWITCH, 5), append=True)
+        self.man.touch("claude", sid, source=str(path), cwd=self.cwd, end=True)
+        with patch.object(self.man, "record_capture", side_effect=RuntimeError("crash after note")):
+            with self.assertRaisesRegex(RuntimeError, "crash after note"):
+                pipeline.finalize(self.cfg, self.man, self.man.get("claude", sid), fake_summarize, fake_consolidate)
+        receipt_path = pipeline._receipt_path(self.cfg, "claude", sid, 2)
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["project"] = "Other Tool"
+        receipt["receipt_sha"] = pipeline._receipt_hash(receipt)
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "capture_identity_conflict"):
+            pipeline.finalize(self.cfg, self.man, self.man.get("claude", sid), fake_summarize, fake_consolidate)
 
 
 if __name__ == "__main__":
