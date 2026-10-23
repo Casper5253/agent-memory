@@ -26,8 +26,8 @@ LABELS = {
     "command_attempt": r"\b(?:command attempt|command was attempted|command attempted)\b",
     "current_access_rejected": r"\b(?:current access rejected|current context rejected|current access denied)\b",
 }
-UNCERTAINTY = re.compile(r"\b(?:unresolved|uncertain|disputed|conflicting reports|disagree|no evidence|not recorded|unrecorded|missing evidence|no .{0,60} recorded)\b")
-RESOLUTION = re.compile(r"\b(?:no unresolved|not uncertain|no uncertainty|no contradiction|no disagreement|only current truth|only correct choice|resolved|accepted current|sole current|the only alternative|with certainty|winner)\b")
+UNCERTAINTY = re.compile(r"\b(?:unresolved|uncertain|disputed|conflicting reports|disagree|no evidence|not recorded|unrecorded|missing evidence|no .{0,60} recorded|no success output (?:was )?(?:captured|recorded)|success output (?:was )?(?:not|never) captured)\b")
+RESOLUTION = re.compile(r"\b(?:no unresolved|not uncertain|no uncertainty|no contradiction|no disagreement|only current truth|only correct choice|resolved|accepted current|sole current|the only alternative|with certainty|winner|all tests passed|tests? (?:passed|succeeded)|test run succeeded)\b")
 CURRENT_ASSERTION = r"\b(?:accepted.{0,35}(?:current|use now)|current (?:decision|choice|truth)|use .{0,60} now|now use)\b"
 QUERY_STOPWORDS = frozenset("a an and are as at be been by can could did do does for from had has have how i in is it its may me of on or our should that the their then these this those to was we were what when where which while who why will with would you your".split())
 K0_UNREVIEWED_CASES = frozenset({"T02", "T03", "T04"})

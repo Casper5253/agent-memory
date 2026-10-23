@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools import knowledge_grader
-from tools.knowledge_grader import grade_query, lifecycle_check
+from tools.knowledge_grader import grade_query, lifecycle_check, UNCERTAINTY, RESOLUTION
 from agentmem.manifest import Manifest
 
 
@@ -383,6 +383,23 @@ class KnowledgeGrader(unittest.TestCase):
         self.assertEqual(result["unmeasured"], ["fault_execution:T11"])
         self.assertIn("operational_evidence_not_measured", result["failures"])
         self.assertFalse(result["pass"])
+
+    def test_missing_success_output_after_command_attempt_counts_as_uncertainty(self):
+        self.gold["expected_uncertainty"] = True
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() +
+                        "A test command was attempted for test-runner; no success output was captured.\n")
+        result = self.grade()
+        self.assertTrue(result["pass"], result)
+
+    def test_command_attempt_and_unsupported_pass_claim_do_not_resolve_uncertainty(self):
+        self.gold["expected_uncertainty"] = True
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() +
+                        "A test command was attempted for test-runner. All tests passed.\n")
+        result = self.grade()
+        self.assertFalse(result["pass"])
+        self.assertIn("uncertainty_missing_or_denied", result["failures"])
 
     def test_budget_is_recomputed_from_the_emitted_package(self):
         self.query["budget"] = 20
