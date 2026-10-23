@@ -129,6 +129,17 @@ class Manifest:
             db.execute("UPDATE sessions SET status='error', attempts=?, next_try=?, last_error=?, updated=? WHERE agent=? AND session_id=?",
                        (attempts, now + backoff, error[:500], now, agent, session_id))
 
+    def health(self, max_attempts: int):
+        """Counts for the session-start hook: sessions not yet captured, retrying errors, exhausted errors, unended."""
+        rows = self.db.execute(
+            "SELECT"
+            " sum(status='pending') AS pending,"
+            " sum(status='error' AND attempts < ?) AS retrying,"
+            " sum(status='error' AND attempts >= ?) AS failed"
+            " FROM sessions", (max_attempts, max_attempts)).fetchone()
+        return {"pending": rows["pending"] or 0, "retrying": rows["retrying"] or 0, "failed": rows["failed"] or 0,
+                "unended": len(self.unended())}
+
     # ------------------------------------------------------------------ captures
     def capture(self, agent, session_id, part):
         return self.db.execute("SELECT * FROM captures WHERE agent=? AND session_id=? AND part=?",
