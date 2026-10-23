@@ -1,6 +1,7 @@
 """Set R package builder: refusal, blinding, shared budget, isolation. Synthetic vault and questions only."""
 import hashlib
 import json
+import random
 import shutil
 import sys
 import tempfile
@@ -14,6 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tools import evaluate_knowledge as ek
 from tools import evaluate_set_r as sr
+from agentmem.knowledge.proposals import _output_schema
+from agentmem.knowledge.store import KnowledgeStore
+from fixtures import SECRET_SAMPLES
+
+SEED = 7
 
 QUESTIONS = [
     dict(id="SYN-01", project="Demo App", **{"class": "decision_and_rationale"},
@@ -106,7 +112,7 @@ class RefusalAndInput(unittest.TestCase):
         out = self.tmp / "out"
         _, key_packages, arms = sr.run_packages(
             type("Args", (), dict(vault=str(vault), questions=str(questions), arms="k0,b1", store=None,
-                                  out=str(out), key=None))())
+                                  out=str(out), key=None, seed=None))())
         self.assertEqual(arms, ["b1"])
         self.assertEqual({entry["arm"] for entry in key_packages.values()}, {"b1"})
 
@@ -125,7 +131,7 @@ class BlindedPackages(unittest.TestCase):
         cls.questions = write_questions(cls.tmp / "R")
         cls.out = cls.tmp / "out"
         sr.main(["packages", "--vault", str(cls.vault), "--questions", str(cls.questions),
-                 "--arms", "b0,b1", "--out", str(cls.out)])
+                 "--arms", "b0,b1", "--out", str(cls.out), "--seed", str(SEED)])
         cls.lines = (cls.out / "packages.jsonl").read_text(encoding="utf-8").splitlines()
         cls.packages = [json.loads(line) for line in cls.lines]
         cls.key = json.loads((cls.out / "key.json").read_text(encoding="utf-8"))
@@ -145,11 +151,14 @@ class BlindedPackages(unittest.TestCase):
             self.assertNotIn(leak, text)
         self.assertEqual({p["package_id"] for p in self.packages}, set(self.key["packages"]))
 
-    def test_order_is_shuffled_away_from_question_then_arm(self):
+    def test_order_follows_the_recorded_seed(self):
+        self.assertEqual(self.key["shuffle_seed"], SEED)
+        expected = [(q["id"], arm) for q in QUESTIONS for arm in ("b0", "b1")]
+        random.Random(SEED).shuffle(expected)
         grouped = [(self.key["packages"][p["package_id"]]["question_id"], self.key["packages"][p["package_id"]]["arm"])
                    for p in self.packages]
-        ordered = [(q["id"], arm) for q in QUESTIONS for arm in ("b0", "b1")]
-        self.assertNotEqual(grouped, ordered)
+        self.assertEqual(grouped, expected)
+        self.assertNotEqual(grouped, [(q["id"], arm) for q in QUESTIONS for arm in ("b0", "b1")])
 
     def test_every_arm_stays_within_the_same_budget_and_tokenizer(self):
         self.assertEqual(self.key["budget_tokens"], sr.BUDGET_TOKENS)
@@ -171,7 +180,7 @@ class BlindedPackages(unittest.TestCase):
 
         with mock.patch.object(ek, "run_mem_command", side_effect=recording):
             sr.run_packages(type("Args", (), dict(vault=str(self.vault), questions=str(self.questions),
-                arms="b1", store=None, out=str(self.tmp / "isolated"), key=None))())
+                arms="b1", store=None, out=str(self.tmp / "isolated"), key=None, seed=None))())
         self.assertTrue(calls)
         for call in calls:
             self.assertNotEqual(Path(call["vault"]).resolve(), self.vault.resolve())
@@ -192,7 +201,7 @@ class KnowledgeArm(unittest.TestCase):
             question="What storage does the project use?")])
         out = self.tmp_root(fixture) / "out"
         _, key_packages, arms = sr.run_packages(type("Args", (), dict(vault=str(fixture.vault), questions=str(questions),
-            arms="k0", store=str(fixture.path), out=str(out), key=None))())
+            arms="k0", store=str(fixture.path), out=str(out), key=None, seed=None))())
         self.assertEqual(arms, ["k0"])
         entry = next(iter(key_packages.values()))
         self.assertEqual(entry["arm"], "k0")
@@ -204,6 +213,107 @@ class KnowledgeArm(unittest.TestCase):
 
     def tmp_root(self, fixture):
         return fixture.vault / "R-run"
+
+
+def session_key(name):
+    return "0-Sessions/2026/10/" + name
+
+
+def write_session(vault, name, agent, session_id, project, body):
+    folder = vault / "0-Sessions" / "2026" / "10"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_text(
+        f"---\ntype: session\nagent: {agent}\nsession_id: \"{session_id}\"\nproject: \"{project}\"\n"
+        f"date: 2026-10-01\nimmutable: true\n---\n\n# {name}\n\n{body}\n", encoding="utf-8")
+
+
+def valid_proposal(source_id):
+    return {"schema_version": 1,
+        "entities": [{"ref": "e1", "kind": "component", "canonical_key": "storage", "display_name": "Storage", "aliases": []}],
+        "claims": [{"ref": "c1", "subject_ref": "e1", "kind": "decision", "predicate": "storage_backend", "value": "sqlite",
+                    "statement": "Demo App uses SQLite for its cursor store.", "rationale": "Atomic cursor updates.",
+                    "valid_from": None, "valid_to": None, "valid_precision": "unknown", "valid_end_state": "unknown",
+                    "evidence": [{"source_id": source_id, "start": 0, "end": 10, "role": "supports"}]}],
+        "relations": []}
+
+
+class BatchesAndImport(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(dir=scratch_dir())
+        self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name)
+        self.vault = self.tmp / "vault"
+        (self.vault / "_meta").mkdir(parents=True)
+        (self.vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+            {"name": "Demo App", "roots": ["C:/nowhere/demo-app"], "status": "active"}]}), encoding="utf-8")
+        self.secret = SECRET_SAMPLES[0]
+        write_session(self.vault, "one.md", "claude", "sess-one", "Demo App",
+            f"The demo chose SQLite for its cursor store because cursor updates must be atomic. Key: {self.secret}")
+        write_session(self.vault, "two.md", "codex", "sess-two", "Demo App", "Demo App runs one cursor writer.")
+        write_session(self.vault, "three.md", "opencode", "sess-three", "Demo App", "Demo App keeps one batch cursor.")
+        write_session(self.vault, "other.md", "claude", "sess-other", "Other App", "Other App uses Postgres.")
+        write_session(self.vault, "redacted.md", "codex", "[REDACTED]", "Demo App", "Demo App has a redacted id.")
+        self.questions = write_questions(self.tmp / "R", rows=[QUESTIONS[0]])
+        self.batches = self.tmp / "batches"
+
+    def build_batches(self):
+        self.index, self.skipped = sr.run_batches(self.vault, self.questions, self.batches)
+        self.docs = {row["session"]: json.loads((self.batches / f"{row['batch']}.json").read_text(encoding="utf-8"))
+                     for row in self.index}
+
+    def test_one_batch_per_session_with_the_planted_key_redacted(self):
+        self.assertIn(self.secret, (self.vault / session_key("one.md")).read_text(encoding="utf-8"))
+        self.build_batches()
+        self.assertEqual(sorted(row["session"] for row in self.index),
+                         sorted(session_key(name) for name in ("one.md", "two.md", "three.md")))
+        self.assertEqual(len(list(self.batches.glob("*.json"))), 3)
+        self.assertEqual([(item["session"], item["reason"]) for item in self.skipped],
+                         [(session_key("redacted.md"), "invalid_capture_identity")])
+        everything = "".join(path.read_text(encoding="utf-8") for path in self.batches.glob("*"))
+        self.assertNotIn(self.secret, everything)
+        self.assertNotIn("sess-other", everything)
+        for row in self.index:
+            doc = self.docs[row["session"]]
+            self.assertEqual(len(doc["source_ids"]), 1)
+            self.assertIn("OUTPUT SCHEMA", doc["prompt"])
+            self.assertEqual(doc["output_schema"], _output_schema())
+            self.assertEqual(doc["tokens"], sr.tokens(doc["prompt"]))
+            self.assertEqual(row["tokens"], doc["tokens"])
+
+    def test_import_applies_a_valid_proposal_and_skips_or_rejects_the_rest(self):
+        self.build_batches()
+        proposals = self.tmp / "proposals"
+        proposals.mkdir()
+        one, two, three = (self.docs[session_key(name)] for name in ("one.md", "two.md", "three.md"))
+        (proposals / f"{one['batch']}.json").write_text(json.dumps(valid_proposal(one["source_ids"][0])), encoding="utf-8")
+        (proposals / f"{two['batch']}.json").write_text("{not json", encoding="utf-8")
+        (proposals / f"{three['batch']}.json").write_text(json.dumps({"schema_version": 1, "claims": "nope"}), encoding="utf-8")
+        store = self.tmp / "store" / "knowledge.sqlite"
+        counts = sr.run_import(self.vault, self.batches, proposals, store)
+        self.assertEqual((counts["batches"], counts["imported"], counts["created_claims"]), (3, 1, 1))
+        self.assertEqual([item["reason"] for item in counts["skipped"]], ["invalid_json"])
+        self.assertEqual([item["batch"] for item in counts["rejected"]], [three["batch"]])
+        with KnowledgeStore(store) as check:
+            evidence = check.db.execute("SELECT c.status, c.statement, e.source_id FROM claims c "
+                                        "JOIN evidence e ON e.claim_id = c.id").fetchall()
+            proposal = check.db.execute("SELECT extractor_version, source_id FROM proposals").fetchall()
+        self.assertEqual([(row["source_id"]) for row in evidence], [one["source_ids"][0]])
+        self.assertEqual([row["status"] for row in evidence], ["reported"])
+        self.assertEqual(tuple(proposal[0]), ("haiku-v1", one["source_ids"][0]))
+
+    def test_import_refuses_an_existing_store(self):
+        self.build_batches()
+        store = self.tmp / "store.sqlite"
+        store.write_bytes(b"")
+        with self.assertRaises(sr.SetupError):
+            sr.run_import(self.vault, self.batches, self.tmp, store)
+
+    def test_import_skips_a_batch_whose_note_changed_after_batching(self):
+        self.build_batches()
+        (self.vault / session_key("two.md")).write_text("edited after batching", encoding="utf-8")
+        counts = sr.run_import(self.vault, self.batches, self.tmp, self.tmp / "store.sqlite")
+        self.assertEqual(counts["imported"], 0)
+        self.assertIn("note_changed_since_batch", [item["reason"] for item in counts["skipped"]])
 
 
 if __name__ == "__main__":
