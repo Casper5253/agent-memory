@@ -33,6 +33,10 @@ class Event:
     paths: list = field(default_factory=list)
     ts: str = ""
     final: bool = False       # assistant message that ended a turn
+    ordinal: int = 0          # event index within the transcript slice
+    cursor_start: int = 0     # byte offset (claude/codex) or message index (opencode)
+    cursor_end: int = 0
+    message_id: str = ""      # opencode message id when available
 
 
 @dataclass
@@ -65,7 +69,7 @@ def _clean_prompt(text: str) -> str:
 
 
 def _read_lines(path: Path, start: int, end=None, warnings=None):
-    """Yield (record, end_offset) for complete newline-terminated JSON lines after `start`."""
+    """Yield (record, start_offset, end_offset) for complete newline-terminated JSON lines after `start`."""
     with open(path, "rb") as fh:
         size = os.fstat(fh.fileno()).st_size
         if start < 0 or start > size or (end is not None and (end < start or end > size)):
@@ -77,6 +81,7 @@ def _read_lines(path: Path, start: int, end=None, warnings=None):
         fh.seek(start)
         pos = start
         for raw in fh:
+            line_start = pos
             if end is not None and pos == end:
                 break
             if end is not None and pos + len(raw) > end:
@@ -90,9 +95,9 @@ def _read_lines(path: Path, start: int, end=None, warnings=None):
                     raise ValueError("JSONL record is not an object")
             except (ValueError, UnicodeError):
                 if warnings is not None:
-                    warnings.append({"kind": "malformed_jsonl", "start": pos - len(raw), "end": pos})
+                    warnings.append({"kind": "malformed_jsonl", "start": line_start, "end": pos})
                 record = None
-            yield record, pos
+            yield record, line_start, pos
         if end is not None and pos != end:
             raise ValueError("source truncated before recorded end")
 
@@ -101,7 +106,8 @@ def _read_lines(path: Path, start: int, end=None, warnings=None):
 def read_claude(path: str, start: int = 0, end=None) -> Transcript:
     p = Path(path)
     t = Transcript(agent="claude", session_id=p.stem, source=str(p), start=start, end=start)
-    for rec, pos in _read_lines(p, start, end, t.warnings):
+    ordinal = 0
+    for rec, line_start, pos in _read_lines(p, start, end, t.warnings):
         t.end = pos
         if not rec or rec.get("isSidechain"):
             continue
@@ -122,30 +128,42 @@ def read_claude(path: str, start: int = 0, end=None) -> Transcript:
             if isinstance(content, str):
                 text = _clean_prompt(content)
                 if text:
-                    t.events.append(Event("user", "text", text, ts=ts))
+                    ordinal += 1
+                    t.events.append(Event("user", "text", text, ts=ts, ordinal=ordinal,
+                                          cursor_start=line_start, cursor_end=pos))
             elif isinstance(content, list):
                 for b in content:
                     if b.get("type") == "text":
                         text = _clean_prompt(b.get("text", ""))
                         if text:
-                            t.events.append(Event("user", "text", text, ts=ts))
+                            ordinal += 1
+                            t.events.append(Event("user", "text", text, ts=ts, ordinal=ordinal,
+                                                  cursor_start=line_start, cursor_end=pos))
             continue
         blocks = content if isinstance(content, list) else []
         for b in blocks:
             bt = b.get("type")
             if bt == "text" and b.get("text", "").strip():
-                t.events.append(Event("assistant", "text", b["text"].strip(), ts=ts))
+                ordinal += 1
+                t.events.append(Event("assistant", "text", b["text"].strip(), ts=ts, ordinal=ordinal,
+                                      cursor_start=line_start, cursor_end=pos))
             elif bt == "tool_use":
                 name = b.get("name", "")
                 inp = b.get("input") or {}
                 low = name.lower()
                 if low in ("bash", "powershell"):
-                    t.events.append(Event("assistant", "command", inp.get("command", ""), tool=name, ts=ts))
+                    ordinal += 1
+                    t.events.append(Event("assistant", "command", inp.get("command", ""), tool=name, ts=ts,
+                                          ordinal=ordinal, cursor_start=line_start, cursor_end=pos))
                 elif low in WRITE_TOOLS:
                     fp = inp.get("file_path") or inp.get("notebook_path") or ""
-                    t.events.append(Event("assistant", "edit", tool=name, paths=[fp] if fp else [], ts=ts))
+                    ordinal += 1
+                    t.events.append(Event("assistant", "edit", tool=name, paths=[fp] if fp else [], ts=ts,
+                                          ordinal=ordinal, cursor_start=line_start, cursor_end=pos))
                 else:
-                    t.events.append(Event("assistant", "tool", tool=name, ts=ts))
+                    ordinal += 1
+                    t.events.append(Event("assistant", "tool", tool=name, ts=ts, ordinal=ordinal,
+                                          cursor_start=line_start, cursor_end=pos))
     _mark_finals(t)
     return t
 
@@ -160,7 +178,7 @@ def read_codex(path: str, start: int = 0, end=None) -> Transcript:
     sid = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", p.name)
     t = Transcript(agent="codex", session_id=sid.group(1) if sid else p.stem, source=str(p), start=start, end=start)
     if start > 0:  # session_meta (cwd, id) lives on line 1
-        for rec, _ in _read_lines(p, 0):
+        for rec, _, _ in _read_lines(p, 0):
             if rec is None:
                 continue
             if rec and rec.get("type") == "session_meta":
@@ -168,7 +186,8 @@ def read_codex(path: str, start: int = 0, end=None) -> Transcript:
                 t.session_id = meta.get("id") or meta.get("session_id") or t.session_id
                 t.cwd = meta.get("cwd", "")
             break
-    for rec, pos in _read_lines(p, start, end, t.warnings):
+    ordinal = 0
+    for rec, line_start, pos in _read_lines(p, start, end, t.warnings):
         t.end = pos
         if not rec:
             continue
@@ -197,22 +216,30 @@ def read_codex(path: str, start: int = 0, end=None) -> Transcript:
         if kind == "UserMessage":
             text = _clean_prompt(_codex_text(it.get("content")))
             if text:
-                t.events.append(Event("user", "text", text, ts=ts))
+                ordinal += 1
+                t.events.append(Event("user", "text", text, ts=ts, ordinal=ordinal,
+                                      cursor_start=line_start, cursor_end=pos))
         elif kind == "AgentMessage":
             text = _codex_text(it.get("content"))
             if text:
-                t.events.append(Event("assistant", "text", text, ts=ts, final=it.get("phase") == "final_answer"))
+                ordinal += 1
+                t.events.append(Event("assistant", "text", text, ts=ts, final=it.get("phase") == "final_answer",
+                                      ordinal=ordinal, cursor_start=line_start, cursor_end=pos))
         elif kind == "CommandExecution":
             cmd = it.get("command")
             if isinstance(cmd, list):
                 cmd = cmd[-1] if len(cmd) >= 2 and str(cmd[-2]).lower() in ("-command", "-c", "/c") else " ".join(map(str, cmd))
-            t.events.append(Event("assistant", "command", str(cmd or ""), tool="shell", ts=ts))
-            if not t.cwd and it.get("cwd", "").startswith("file:"):
-                t.cwd = unquote(urlparse(it["cwd"]).path).lstrip("/")
+            ordinal += 1
+            t.events.append(Event("assistant", "command", str(cmd or ""), tool="shell", ts=ts,
+                                  ordinal=ordinal, cursor_start=line_start, cursor_end=pos))
         elif kind == "FileChange":
-            t.events.append(Event("assistant", "edit", tool="apply_patch", paths=list((it.get("changes") or {}).keys()), ts=ts))
+            ordinal += 1
+            t.events.append(Event("assistant", "edit", tool="apply_patch", paths=list((it.get("changes") or {}).keys()), ts=ts,
+                                  ordinal=ordinal, cursor_start=line_start, cursor_end=pos))
         elif kind:
-            t.events.append(Event("assistant", "tool", tool=kind, ts=ts))
+            ordinal += 1
+            t.events.append(Event("assistant", "tool", tool=kind, ts=ts, ordinal=ordinal,
+                                  cursor_start=line_start, cursor_end=pos))
     _mark_finals(t)
     return t
 
@@ -241,12 +268,13 @@ def read_opencode(session_id: str, start: int = 0, data: "dict | None" = None, e
                    cwd=info.get("directory", ""), title=info.get("title", ""), start=start, end=stop,
                    prefix_sha=hashlib.sha256(json.dumps(msgs[:stop], sort_keys=True, ensure_ascii=False,
                                                        separators=(",", ":")).encode("utf-8")).hexdigest())
-    for m in msgs[start:stop]:
+    for idx, m in enumerate(msgs[start:stop], start=start):
         mi = m.get("info") or {}
         role = mi.get("role")
         ts = _iso((mi.get("time") or {}).get("created"))
         t.started = t.started or ts
         t.ended = ts or t.ended
+        message_id = str(mi.get("id") or "")
         for part in m.get("parts") or []:
             pt = part.get("type")
             if pt == "text" and part.get("text", "").strip() and not part.get("synthetic"):
@@ -254,19 +282,26 @@ def read_opencode(session_id: str, start: int = 0, data: "dict | None" = None, e
                 if role == "user":
                     text = _clean_prompt(text)
                     if text:
-                        t.events.append(Event("user", "text", text, ts=ts))
+                        t.events.append(Event("user", "text", text, ts=ts, ordinal=len(t.events) + 1,
+                                              cursor_start=idx, cursor_end=idx + 1, message_id=message_id))
                 else:
-                    t.events.append(Event("assistant", "text", text, ts=ts))
+                    t.events.append(Event("assistant", "text", text, ts=ts, ordinal=len(t.events) + 1,
+                                          cursor_start=idx, cursor_end=idx + 1, message_id=message_id))
             elif pt == "tool" and role == "assistant":
                 tool = part.get("tool", "")
                 inp = (part.get("state") or {}).get("input") or {}
                 if tool == "bash":
-                    t.events.append(Event("assistant", "command", inp.get("command", ""), tool=tool, ts=ts))
+                    t.events.append(Event("assistant", "command", inp.get("command", ""), tool=tool, ts=ts,
+                                          ordinal=len(t.events) + 1, cursor_start=idx, cursor_end=idx + 1,
+                                          message_id=message_id))
                 elif tool in WRITE_TOOLS:
                     fp = inp.get("filePath") or ""
-                    t.events.append(Event("assistant", "edit", tool=tool, paths=[fp] if fp else [], ts=ts))
+                    t.events.append(Event("assistant", "edit", tool=tool, paths=[fp] if fp else [], ts=ts,
+                                          ordinal=len(t.events) + 1, cursor_start=idx, cursor_end=idx + 1,
+                                          message_id=message_id))
                 else:
-                    t.events.append(Event("assistant", "tool", tool=tool, ts=ts))
+                    t.events.append(Event("assistant", "tool", tool=tool, ts=ts, ordinal=len(t.events) + 1,
+                                          cursor_start=idx, cursor_end=idx + 1, message_id=message_id))
     _mark_finals(t)
     return t
 

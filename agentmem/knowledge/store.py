@@ -274,6 +274,17 @@ class KnowledgeStore:
             self._write("INSERT INTO projects VALUES (?,?,?,?,0,?,0)", (project_id, name, encoded, mode, privacy))
         return dict(self.db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
 
+    def update_project_privacy(self, project_id, privacy):
+        """Update project privacy when config changes it. Increments project revision."""
+        p.uuid_id(project_id)
+        p.enum(privacy, ("excluded", "local_only", "model_allowed"))
+        with self._tx():
+            row = self._project(project_id)
+            if row["privacy"] == privacy:
+                return dict(row)
+            self._write("UPDATE projects SET privacy=?,revision=revision+1 WHERE id=?", (privacy, project_id))
+        return dict(self.db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
+
     def get_project(self, project_id):
         return dict(self._project(project_id))
 
