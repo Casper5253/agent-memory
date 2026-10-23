@@ -1356,6 +1356,8 @@ def apply_plan(vault: Path, plan: dict, only_auto: bool = False, dry_run: bool =
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="vault_sweep")
     sub = ap.add_subparsers(dest="command")
     pl = sub.add_parser("plan", help="Dry-run vault hygiene plan")
