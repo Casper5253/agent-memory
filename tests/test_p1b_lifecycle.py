@@ -81,6 +81,50 @@ class HookEventTests(unittest.TestCase):
         self.assertEqual([r['session_id'] for r in self.man.unended()], ['again-eeee-5555'])
 
 
+class RetryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / '.audit')
+        self.addCleanup(self.tmp.cleanup)
+        self.man = Manifest(Path(self.tmp.name) / 'manifest.sqlite')
+        self.addCleanup(self.man.close)
+        self.man.touch('codex', 'missing-tx-0001', end=True, now=0)
+
+    def fail_times(self, times, error='FileNotFoundError: no transcript for codex:missing-tx-0001', now=0):
+        for _ in range(times):
+            self.man.fail('codex', 'missing-tx-0001', error, now=now)
+            now += 10_000  # beyond the largest backoff, so the next fail is not gated
+        return now
+
+    def test_session_past_five_attempts_is_still_retried(self):
+        self.fail_times(5)
+        ready = [r['session_id'] for r in self.man.ready(0, 5, now=10_000_000)]
+        self.assertEqual(ready, ['missing-tx-0001'])
+
+    def test_backoff_still_gates_the_next_try(self):
+        self.man.fail('codex', 'missing-tx-0001', 'FileNotFoundError: x', now=100)
+        self.assertEqual(self.man.ready(0, 5, now=130), [])
+        self.assertEqual([r['session_id'] for r in self.man.ready(0, 5, now=161)], ['missing-tx-0001'])
+
+    def test_backoff_is_capped_at_one_hour(self):
+        self.fail_times(20, now=0)
+        self.man.fail('codex', 'missing-tx-0001', 'FileNotFoundError: x', now=1_000)
+        self.assertEqual(self.man.get('codex', 'missing-tx-0001')['next_try'], 1_000 + 3600)
+
+    def test_missing_transcript_is_never_marked_skipped(self):
+        self.fail_times(5)
+        row = self.man.get('codex', 'missing-tx-0001')
+        self.assertEqual(row['status'], 'error')
+        self.assertIsNone(row['skip_reason'])
+
+    def test_failed_listing_names_each_session_with_its_reason(self):
+        self.fail_times(4)
+        self.assertEqual(self.man.failed(5), [])
+        self.fail_times(1, now=50_000)
+        failed = self.man.failed(5)
+        self.assertEqual([(r['session_id'], r['attempts']) for r in failed], [('missing-tx-0001', 5)])
+        self.assertEqual(failed[0]['last_error'], 'FileNotFoundError: no transcript for codex:missing-tx-0001')
+
+
 class MigrationTests(unittest.TestCase):
     def test_v0_manifest_keeps_every_row(self):
         tmp = Path(tempfile.mkdtemp(dir=Path(__file__).resolve().parents[1] / '.audit'))
