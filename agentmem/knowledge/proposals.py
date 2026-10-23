@@ -50,10 +50,10 @@ def _check_lease(store, lease):
 class _LeasedStore(KnowledgeStore):
     """Check ownership inside the store's save/apply transactions, before commit."""
 
-    def __init__(self, path, lease):
+    def __init__(self, path, lease, email_allowlist=None):
         self.lease = lease
         self.completed = None
-        super().__init__(path, writable=True)
+        super().__init__(path, writable=True, email_allowlist=email_allowlist)
 
     @contextmanager
     def _tx(self):
@@ -288,7 +288,7 @@ def extract_and_apply(store_path: str, source_id: str, model_callable, *,
                     raise KnowledgeError("evidence_scope")
                 if span.end > len(allowed[span.source_id]):
                     raise ValidationError("evidence_range")
-        with _LeasedStore(path, lease) as writer:
+        with _LeasedStore(path, lease, cfg.privacy_email_allowlist) as writer:
             base_revision = input_dict["base_revision"]
             proposal_id = writer.save_proposal(project_id, source_id, raw_output, base_revision,
                                                extractor_version=extractor_version, prompt_version=prompt_version,

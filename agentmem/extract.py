@@ -55,23 +55,23 @@ def _norm_path(p: str, cwd: str) -> str:
     return p.replace("\\", "/")
 
 
-def build(t: Transcript, min_prompts: int, min_chars: int, cap: int) -> Digest:
+def build(t: Transcript, min_prompts: int, min_chars: int, cap: int, *, email_allowlist=None) -> Digest:
     d = Digest()
     seen_files = set()
     for ev in t.events:
         if ev.role == "user" and ev.kind == "text":
-            d.prompts.append(redact(ev.text))
+            d.prompts.append(redact(ev.text, email_allowlist=email_allowlist))
         elif ev.kind == "text":
             d.assistant_chars += len(ev.text)
             if ev.final:
-                d.answers.append(redact(ev.text))
-            d.recent = (d.recent + [redact(ev.text)])[-15:]
+                d.answers.append(redact(ev.text, email_allowlist=email_allowlist))
+            d.recent = (d.recent + [redact(ev.text, email_allowlist=email_allowlist)])[-15:]
             for sent in _SENTENCE.split(ev.text):
                 if _DECISION.search(sent) and 20 <= len(sent) <= 400:
-                    d.decision_lines.append(redact(sent.strip()))
+                    d.decision_lines.append(redact(sent.strip(), email_allowlist=email_allowlist))
         elif ev.kind == "command":
             d.tool_calls += 1
-            cmd = redact(_short(ev.text, 240)) if ev.text and not is_sensitive_path(ev.text) else ""
+            cmd = redact(_short(ev.text, 240), email_allowlist=email_allowlist) if ev.text and not is_sensitive_path(ev.text) else ""
             if cmd and cmd not in d.commands:
                 d.commands.append(cmd)
         elif ev.kind == "edit":

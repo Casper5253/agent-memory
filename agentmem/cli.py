@@ -253,7 +253,8 @@ def cmd_retry(args):
 
 def cmd_pause(args):
     cfg = _cfg(args)
-    cfg.pause_file.write_text(f"paused {time.strftime('%Y-%m-%d %H:%M')}\n", encoding="utf-8")
+    from .fsutil import atomic_write
+    atomic_write(cfg.pause_file, f"paused {time.strftime('%Y-%m-%d %H:%M')}\n")
     print(f"capture PAUSED ({cfg.pause_file}). Hooks record nothing until `mem resume`.")
     return 0
 

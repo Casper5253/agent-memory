@@ -83,7 +83,7 @@ def summary_from_session(text):
 
 def render_session(*, agent, session_id, project, part, when, started, ended, source, start, end, summarizer,
                    summary, files, commands, gate_reason, prev_link=None, project_note=None,
-                   repo_head=None, attribution=None) -> str:
+                   repo_head=None, attribution=None, email_allowlist=None) -> str:
     tags = ["session", f"agent/{agent}", f"project/{slug(project, 8)}"]
     fm = [
         "---", "type: session", f"agent: {agent}", f"session_id: {_yaml_str(session_id)}",
@@ -98,16 +98,17 @@ def render_session(*, agent, session_id, project, part, when, started, ended, so
     ]
 
     def bullets(items, empty="- none recorded"):
-        return "\n".join(f"- {redact(x)}" for x in items) if items else empty
+        return "\n".join(f"- {redact(x, email_allowlist=email_allowlist)}" for x in items) if items else empty
 
-    decisions = "\n".join(f"- **{redact(d['decision'])}**" + (f" — {redact(d['rationale'])}" if d.get("rationale") else "")
+    decisions = "\n".join(f"- **{redact(d['decision'], email_allowlist=email_allowlist)}**" +
+                          (f" — {redact(d['rationale'], email_allowlist=email_allowlist)}" if d.get("rationale") else "")
                           for d in summary.get("decisions", [])) or "- none recorded"
     plink = (f"[[{project_note}|{project}]]" if project_note else project_link(project)) if project != "Unsorted" else "Unsorted (no project note)"
     body = [
-        f"# {redact(summary.get('title') or 'Session')}", "",
+        f"# {redact(summary.get('title') or 'Session', email_allowlist=email_allowlist)}", "",
         f"> Historical record of a {agent} session on {when:%Y-%m-%d}. It may be outdated: the current state lives in {plink}.",
         *( [f"> Continues [[{prev_link}]]."] if prev_link else [] ), "",
-        "## Executive summary", "", redact(summary.get("summary", "")), "",
+        "## Executive summary", "", redact(summary.get("summary", ""), email_allowlist=email_allowlist), "",
         "## What happened", "", bullets(summary.get("what_happened", [])), "",
         "## Decisions and rationale", "", decisions, "",
         "## Confirmed facts", "", bullets(summary.get("facts", [])), "",
@@ -166,7 +167,7 @@ def touch_updated(text: str, today: str) -> str:
 
 
 def update_project_note(path: Path, project: str, today: str, *, state=None, pending_add=None, pending_clear=None,
-                        session_link=None, session_line=None) -> None:
+                        session_link=None, session_line=None, email_allowlist=None) -> None:
     """Caller holds the project lock. Re-reads the note, edits only managed blocks, writes atomically."""
     text = path.read_text(encoding="utf-8") if path.exists() else new_project_note(project, today)
     text = ensure_blocks(text)
@@ -181,4 +182,5 @@ def update_project_note(path: Path, project: str, today: str, *, state=None, pen
     if session_line:
         lines = [l for l in get_block(text, SESS_BEGIN, SESS_END).splitlines() if l.strip() and session_link not in l]
         text = set_block(text, SESS_BEGIN, SESS_END, "\n".join(([session_line] + lines)[:15]))
+    text = redact(text, email_allowlist=email_allowlist)
     atomic_write(path, touch_updated(text, today))

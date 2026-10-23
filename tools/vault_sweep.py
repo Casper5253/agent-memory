@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agentmem.fsutil import atomic_write
+from agentmem.redact import findings as sensitive_findings
 
 PARA_PREFIXES = ("0-", "1-", "2-", "3-", "4-")
 PARA_KNOWN = {
@@ -650,6 +651,25 @@ def build_plan(vault: Path) -> dict:
         "unsorted_sessions": _scan_unsorted(vault),
         "re_attribution": _scan_re_attribution(vault),
     }
+
+
+def privacy_scan(vault: Path) -> dict:
+    categories = ("secret", "iban", "payment_card", "bsn", "phone", "email")
+    totals = {category: 0 for category in categories}
+    matches = []
+    for note in sorted(_iter_md(vault)):
+        try:
+            text = note.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for finding in sensitive_findings(text):
+            totals[finding.category] += 1
+            matches.append({
+                "category": finding.category,
+                "path": _rel(note, vault),
+                "line": text.count("\n", 0, finding.start) + 1,
+            })
+    return {"findings": matches, "totals_by_category": totals}
 
 
 def _archive_dest(base: Path, name: str) -> Path:
@@ -1378,7 +1398,19 @@ def main():
     restore = sub.add_parser("restore", help="Restore paths from a verified sweep backup")
     restore.add_argument("--backup", required=True)
     restore.add_argument("--vault", required=True)
+    privacy = sub.add_parser("privacy", help="Read-only privacy scan of vault Markdown files")
+    privacy.add_argument("--vault", required=True)
+    privacy.add_argument("--out", required=True)
     args = ap.parse_args()
+    if args.command == "privacy":
+        vault = Path(args.vault).resolve()
+        out = Path(args.out).resolve()
+        if out.is_relative_to(vault):
+            ap.error("--out must be outside the vault")
+        report = privacy_scan(vault)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return 0
     if args.command == "plan":
         vault = Path(args.vault).resolve()
         out = Path(args.out).resolve()

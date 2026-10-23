@@ -189,6 +189,18 @@ class StoreCase(unittest.TestCase):
         source_id = p.identity([self.pid, "codex", "session-a", 1, "bytes", 0, 100, 0, p.sha_text("Use SQLite for storage.")])
         self.assertEqual(result.source_ids, (source_id,))
 
+    def test_import_and_model_output_are_redacted_before_database_writes(self):
+        email = "private.person@example.com"
+        imported = self.imported("private-data", excerpt=f"Use SQLite. BSN 111222333 Contact {email}.")
+        source = self.store.get_source(self.pid, imported.source_ids[0])
+        self.assertNotIn("111222333", source["excerpt"])
+        self.assertNotIn(email, source["excerpt"])
+        payload = self.payload(imported.source_ids[0], statement=f"Contact {email} for SQLite.")
+        proposal_id = self.store.save_proposal(self.pid, imported.source_ids[0], payload, 1)
+        stored = self.store.db.execute("SELECT payload_json FROM proposals WHERE id=?", (proposal_id,)).fetchone()[0]
+        self.assertNotIn(email, stored)
+        self.assertIn("[REDACTED]", stored)
+
     def test_empty_and_local_only_imports(self):
         empty = self.store.import_capture(self.pid, CaptureIdentity("codex", "empty", 1), p.sha_text("empty"), [])
         self.assertTrue(empty.empty)
