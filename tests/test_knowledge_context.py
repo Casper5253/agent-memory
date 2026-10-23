@@ -243,6 +243,18 @@ class ContextCase(unittest.TestCase):
         self.assertIn("unresolved_alternatives_omitted", result["warnings"])
         self.assertLessEqual(result["used"], 1024)
 
+    def test_soft_allocation_keeps_room_for_reported_bundles(self):
+        for n in range(6):
+            cid = self.claim(statement="storage accepted " + str(n) + " " + "x" * 80,
+                rationale="r" * 350, subject="accepted" + str(n), predicate="statement", value=str(n))
+            self.review(cid)
+        reported = self.claim(statement="storage user report " + "x" * 80,
+            rationale="r" * 350, subject="reported", predicate="statement")
+        result = self.context()
+        self.assertIn(reported, {cid for item in result["items"] for cid in item["claim_ids"]})
+        self.assertEqual(result["items"][-1]["status"], "reported")
+        self.assertLessEqual(result["used"], 2400)
+
     def test_unicode_identifiers_and_fixed_fusion(self):
         cid = self.claim(subject="a_b-c/d.e", statement="λ storage.")
         self.assertEqual(self.context(query="a b c d e λ")["items"][0]["claim_ids"], [cid])
@@ -299,6 +311,21 @@ class ContextCase(unittest.TestCase):
         result = build_context(self.store, self.request, Client()).to_dict()
         self.assertEqual(len(calls), 2)
         self.assertEqual(result["status"], "busy")
+
+    def test_revision_retry_does_not_reset_total_backend_deadline(self):
+        self.claim()
+        calls = []
+        ticks = iter([0, 0, 1.4, 1.6])
+        case = self
+        class Client:
+            def search(self, *args, **kwargs):
+                calls.append(kwargs["timeout"])
+                case.store.db.execute("UPDATE projects SET revision=revision+1 WHERE id=?", (case.pid,))
+                return []
+        result = build_context(self.store, self.request, Client(), clock=lambda: next(ticks)).to_dict()
+        self.assertEqual(calls, [1.5])
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["degraded"])
 
     def test_qmd_pages_require_project_revision_hash_and_safe_path(self):
         cid = self.claim(statement="Unrelated fact.", subject="unrelated")

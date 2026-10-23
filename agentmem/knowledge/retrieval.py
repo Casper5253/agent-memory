@@ -339,22 +339,22 @@ def build_context(store, request, qmd_client=None, tokenizer=None, clock=time.mo
         except KnowledgeError:
             return error_response("invalid_as_of")
     try:
+        backend_deadline = clock() + 1.5 if qmd_client is not None else None
         for attempt in range(2):
             project, claims, relations, projections, warnings, invalid, partial = _snapshot(store, request)
             lexical = lexical_ranks(request.query, claims)
             lists = [lexical]
             degraded = False
             if qmd_client is not None:
-                deadline = clock() + 1.5
                 for semantic in ([False, True] if request.semantic else [False]):
-                    remaining = deadline - clock()
+                    remaining = backend_deadline - clock()
                     if remaining <= 0:
                         degraded = True
                         warnings.add("qmd_timeout")
                         break
                     try:
                         hits = qmd_client.search(request.query, semantic=semantic, timeout=remaining)
-                        if clock() > deadline:
+                        if clock() > backend_deadline:
                             raise TimeoutError
                         lists.append(qmd_ranks(store, project, claims, projections, hits))
                     except (OSError, ValueError, TypeError, TimeoutError, subprocess.TimeoutExpired):
@@ -373,13 +373,32 @@ def build_context(store, request, qmd_client=None, tokenizer=None, clock=time.mo
                 budget_unit="tokens:" + tokenizer.id + ":" + tokenizer.version if tokenizer else "tokens_est_3b")
             response.omitted["invalid_evidence"] = invalid
             response.warnings = sorted(warnings)
-            for bundle in _bundles(fuse_ranks(*lists), claims, relations, head):
+            bundles = _bundles(fuse_ranks(*lists), claims, relations, head)
+            deferred, spent = [], dict(accepted=0, reported=0)
+            quotas = dict(accepted=request.budget * .60, reported=request.budget * .25)
+
+            def pack(bundle, reserve=False):
+                before = measure(response, tokenizer)
                 response.items.append(bundle)
-                if measure(response, tokenizer) > request.budget:
+                after = measure(response, tokenizer)
+                group = "accepted" if bundle["status"] == "accepted" and bundle["freshness"] != "repo_moved" else "reported"
+                if reserve and bundle["status"] != "unresolved" and spent[group] + after - before > quotas[group]:
+                    response.items.pop()
+                    deferred.append(bundle)
+                elif after > request.budget:
                     response.items.pop()
                     response.omitted["budget"] += len(bundle["claim_ids"])
                     if bundle["status"] == "unresolved":
                         response.warnings = sorted(set(response.warnings) | {"unresolved_alternatives_omitted"})
+                elif reserve and bundle["status"] != "unresolved":
+                    spent[group] += after - before
+
+            for bundle in bundles:
+                pack(bundle, reserve=True)
+            for bundle in deferred:
+                pack(bundle)
+            ordering = {bundle["claim_ids"][0]: rank for rank, bundle in enumerate(bundles)}
+            response.items.sort(key=lambda bundle: ordering[bundle["claim_ids"][0]])
             if not response.items:
                 response.warnings = sorted(set(response.warnings) | {"No eligible supported claim matched; missing_evidence."})
             while measure(response, tokenizer) > request.budget and response.items:
