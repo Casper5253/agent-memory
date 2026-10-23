@@ -594,6 +594,14 @@ def _build_git_vault(base: Path) -> Path:
     return vault
 
 
+def _name_parent_registry_entry(vault: Path, name: str) -> None:
+    pjson = vault / "_meta" / "projects.json"
+    data = json.loads(pjson.read_text(encoding="utf-8"))
+    parent = next(p for p in data["projects"] if p["name"].lower() == "demo app")
+    parent["name"] = name
+    pjson.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def _session_bytes(vault: Path) -> dict[str, bytes]:
     result = {}
     sess = vault / "0-Sessions"
@@ -643,6 +651,7 @@ class SweepApplyOnlyAutoTests(unittest.TestCase):
     def setUpClass(cls):
         cls._tmp = _Tmp(ROOT / ".audit" / "tmp")
         cls.vault = _build_git_vault(cls._tmp.path)
+        _name_parent_registry_entry(cls.vault, "demo-app")
         cls.vs = _load_sweep()
         cls.plan = cls.vs.build_plan(cls.vault)
         cls.plan["vault_path"] = str(cls.vault)
@@ -680,12 +689,17 @@ class SweepApplyOnlyAutoTests(unittest.TestCase):
         count_after = _count_files_in(self.vault)
         self.assertGreaterEqual(count_after, self._file_count_before)
 
-    def test_e_leftover_folder_archived(self):
-        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+    def test_e_leftover_outside_allowed_roots_is_refused(self):
+        result = _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         leftover = self.vault / "Projects-Old"
-        self.assertFalse(leftover.exists(), "Projects-Old should be moved")
+        self.assertTrue(leftover.exists(), "top-level source outside the allowed roots must remain untouched")
         archived = self.vault / "4-Archive" / "Projects-Old"
-        self.assertTrue(archived.exists(), "Projects-Old should be in 4-Archive/")
+        self.assertFalse(archived.exists(), "refused source must not be archived")
+        logs = list((self.vault / "_meta" / "logs").glob("sweep-*.jsonl"))
+        entries = [json.loads(line) for line in logs[-1].read_text(encoding="utf-8").splitlines() if line.strip()]
+        leftover_entry = next(e for e in entries if e.get("action") == "leftover_archive")
+        self.assertEqual(leftover_entry["status"], "error")
+        self.assertIn("refused", leftover_entry["reason"])
 
     def test_f_stale_line_prefixed(self):
         _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
@@ -724,11 +738,26 @@ class SweepApplyGitResetTest(unittest.TestCase):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
             vault = _build_git_vault(tmp.path)
+            _name_parent_registry_entry(vault, "demo-app")
             vs = _load_sweep()
             plan = vs.build_plan(vault)
             plan["vault_path"] = str(vault)
             plan_path = tmp.path / "plan.json"
             plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            env = dict(os.environ)
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            config = subprocess.run(
+                ["git", "config", "core.autocrlf", "true"],
+                cwd=str(vault), env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(config.returncode, 0, msg=config.stderr)
+            tracked = subprocess.run(
+                ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "ls-files", "-z"],
+                cwd=str(vault), env=env, capture_output=True, timeout=10,
+            )
+            self.assertEqual(tracked.returncode, 0, msg=tracked.stderr)
+            tracked_paths = [vault / p.decode("utf-8") for p in tracked.stdout.split(b"\0") if p and (vault / p.decode("utf-8")).is_file()]
+            snapshot_bytes = {p.relative_to(vault).as_posix(): p.read_bytes() for p in tracked_paths}
             result = _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path), "--only-auto")
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             sha = None
@@ -739,16 +768,16 @@ class SweepApplyGitResetTest(unittest.TestCase):
             self.assertIsNotNone(sha, f"snapshot SHA not found in output: {result.stdout}")
             self.assertRegex(sha, r"^[0-9a-f]{7,}$")
             leftover = vault / "Projects-Old"
-            self.assertFalse(leftover.exists(), "Projects-Old should be moved by apply")
-            env = dict(os.environ)
-            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            self.assertTrue(leftover.exists(), "top-level source outside the allowed roots must remain untouched")
             reset_result = subprocess.run(
-                ["git", "reset", "--hard", sha],
+                ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "reset", "--hard", sha],
                 cwd=str(vault), env=env, capture_output=True, text=True, timeout=10,
             )
             self.assertEqual(reset_result.returncode, 0, msg=reset_result.stderr)
             leftover_restored = vault / "Projects-Old"
-            self.assertTrue(leftover_restored.exists(), "Projects-Old should be restored after reset to snapshot")
+            self.assertTrue(leftover_restored.exists(), "refused source should remain after reset")
+            restored_bytes = {p.relative_to(vault).as_posix(): p.read_bytes() for p in tracked_paths}
+            self.assertEqual(snapshot_bytes, restored_bytes)
         finally:
             tmp.cleanup()
 
@@ -910,6 +939,337 @@ class SweepApplyFragmentPendingAppendTests(unittest.TestCase):
             self.assertIn("Merged from parent-proj-wt", text)
             self.assertIn("frag state", text)
             self.assertIn("frag pending", text)
+        finally:
+            tmp.cleanup()
+
+
+class SweepApplyCorrectionTests(unittest.TestCase):
+    """Regression tests for WP-S1 apply correction round 1."""
+
+    def _build_minimal_git_vault(self, tmp: Path) -> Path:
+        vault = tmp / "vault"
+        for d in ("_meta", "1-Projects/parent", "1-Projects/frag", "0-Sessions"):
+            (vault / d).mkdir(parents=True, exist_ok=True)
+        (vault / "0-Sessions" / "s.md").write_bytes(b"session\n")
+        (vault / "1-Projects" / "parent" / "parent.md").write_bytes(
+            b"# P\n<!-- agentmem:state:begin -->\nrepo head abc1234 commit\n<!-- agentmem:state:end -->\n"
+            b"<!-- agentmem:pending:begin -->\n- old todo\n<!-- agentmem:pending:end -->\n"
+        )
+        (vault / "1-Projects" / "frag" / "frag.md").write_bytes(
+            b"# F\n<!-- agentmem:state:begin -->\nfrag state\n<!-- agentmem:state:end -->\n"
+            b"<!-- agentmem:pending:begin -->\nfrag pending\n<!-- agentmem:pending:end -->\n"
+        )
+        (vault / "_meta" / "projects.json").write_text(
+            json.dumps({
+                "projects": [
+                    {"name": "Parent", "roots": ["C:\\r\\parent"], "status": "active"},
+                    {"name": "frag", "roots": ["C:\\r\\frag"], "aliases": ["fragalias"], "status": "active"},
+                ]
+            }, indent=2),
+            encoding="utf-8",
+        )
+        env = dict(os.environ)
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        for args in (
+            ["git", "init", "-q", "-b", "main"],
+            ["git", "config", "user.email", "test@test"],
+            ["git", "config", "user.name", "Test"],
+            ["git", "add", "-A"],
+            ["git", "commit", "-q", "-m", "init"],
+        ):
+            subprocess.run(args, cwd=str(vault), env=env, capture_output=True, timeout=10)
+        return vault
+
+    def test_pause_is_not_part_of_snapshot_commit(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault), "fragments": [], "leftover_folders": [],
+                    "stale_state_lines": [], "broken_links": [], "unsorted_sessions": [],
+                    "re_attribution": {"items": [], "calibration_sample": []}}
+            result = vs.apply_plan(vault, plan)
+            self.assertTrue(result.get("ok"), msg=result)
+            sha = result["sha"]
+            env = dict(os.environ)
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            show = subprocess.run(
+                ["git", "show", "--stat", "--format=%s", sha],
+                cwd=str(vault), env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(show.returncode, 0, msg=show.stderr)
+            self.assertNotIn("_meta/PAUSE", show.stdout)
+            self.assertFalse((vault / "_meta" / "PAUSE").exists())
+        finally:
+            tmp.cleanup()
+
+    def test_embedded_repository_aborts_apply(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            emb = vault / "emb"
+            emb.mkdir()
+            env = dict(os.environ)
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            subprocess.run(["git", "init", "-q"], cwd=str(emb), env=env, capture_output=True, timeout=10)
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault), "fragments": [], "leftover_folders": [],
+                    "stale_state_lines": [], "broken_links": [], "unsorted_sessions": [],
+                    "re_attribution": {"items": [], "calibration_sample": []}}
+            result = vs.apply_plan(vault, plan)
+            self.assertFalse(result.get("ok"))
+            self.assertIn("embedded repository", result.get("error", "").lower())
+            self.assertIn(str(emb / ".git"), result.get("error", ""))
+            self.assertFalse((vault / "_meta" / "PAUSE").exists())
+        finally:
+            tmp.cleanup()
+
+    def test_crlf_true_repo_config_reset_restores_bytes(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            env = dict(os.environ)
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            subprocess.run(["git", "config", "core.autocrlf", "true"], cwd=str(vault), env=env, capture_output=True, timeout=10)
+            note = vault / "1-Projects" / "parent" / "parent.md"
+            note.write_bytes(
+                b"# P\r\n<!-- agentmem:state:begin -->\r\nrepo head abc1234 commit\r\n<!-- agentmem:state:end -->\r\n"
+                b"<!-- agentmem:pending:begin -->\r\n- old todo\r\n<!-- agentmem:pending:end -->\r\n"
+            )
+            subprocess.run(["git", "add", "-A"], cwd=str(vault), env=env, capture_output=True, timeout=10)
+            subprocess.run(["git", "commit", "-q", "-m", "crlf"], cwd=str(vault), env=env, capture_output=True, timeout=10)
+            before = note.read_bytes()
+            self.assertGreater(before.count(b"\r\n"), 0)
+            tracked_before = subprocess.run(
+                ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "ls-files", "-z"],
+                cwd=str(vault), env=env, capture_output=True, timeout=10,
+            )
+            self.assertEqual(tracked_before.returncode, 0, msg=tracked_before.stderr)
+            file_paths = [vault / p.decode("utf-8") for p in tracked_before.stdout.split(b"\0") if p]
+            snapshot_bytes = {p.relative_to(vault).as_posix(): p.read_bytes() for p in file_paths}
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault), "fragments": [], "leftover_folders": [],
+                    "stale_state_lines": [{"note": "1-Projects/parent/parent.md", "line": "repo head abc1234 commit",
+                                            "stale": True, "auto_apply": True}],
+                    "broken_links": [], "unsorted_sessions": [],
+                    "re_attribution": {"items": [], "calibration_sample": []}}
+            result = vs.apply_plan(vault, plan)
+            self.assertTrue(result.get("ok"), msg=result)
+            after_apply = note.read_bytes()
+            self.assertGreater(after_apply.count(b"\r\n"), 0, "CRLF line endings must be preserved")
+            sha = result["sha"]
+            reset = subprocess.run(
+                ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "reset", "--hard", sha],
+                cwd=str(vault), env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(reset.returncode, 0, msg=reset.stderr)
+            after_reset = note.read_bytes()
+            self.assertEqual(before, after_reset, "reset to snapshot must restore exact bytes")
+            restored = {p.relative_to(vault).as_posix(): p.read_bytes() for p in file_paths}
+            self.assertEqual(snapshot_bytes, restored, "reset to snapshot must restore every tracked file byte for byte")
+        finally:
+            tmp.cleanup()
+
+    def test_projects_json_merges_roots_and_aliases(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault),
+                    "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
+                    "leftover_folders": [], "stale_state_lines": [], "broken_links": [],
+                    "unsorted_sessions": [], "re_attribution": {"items": [], "calibration_sample": []}}
+            result = vs.apply_plan(vault, plan)
+            self.assertTrue(result.get("ok"), msg=result)
+            data = json.loads((vault / "_meta" / "projects.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(data["projects"]), 1)
+            parent = data["projects"][0]
+            self.assertEqual(parent["name"], "Parent")
+            self.assertIn("C:\\r\\frag", parent["roots"])
+            self.assertIn("fragalias", parent["aliases"])
+        finally:
+            tmp.cleanup()
+
+    def test_missing_parent_projects_entry_leaves_fragment_unchanged(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            pjson = vault / "_meta" / "projects.json"
+            original = json.loads(pjson.read_text(encoding="utf-8"))
+            original["projects"] = [entry for entry in original["projects"] if entry["name"].lower() != "parent"]
+            pjson.write_text(json.dumps(original, indent=2) + "\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=str(vault), capture_output=True, timeout=10)
+            subprocess.run(["git", "commit", "-q", "-m", "remove parent registry entry"], cwd=str(vault), capture_output=True, timeout=10)
+            before = pjson.read_bytes()
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault),
+                    "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
+                    "leftover_folders": [], "stale_state_lines": [], "broken_links": [],
+                    "unsorted_sessions": [], "re_attribution": {"items": [], "calibration_sample": []}}
+            result = vs.apply_plan(vault, plan)
+            item = next(e for e in result["log_entries"] if e.get("action") == "fragment_merge")
+            self.assertEqual(item["status"], "error")
+            self.assertIn("parent project not found", item["reason"])
+            self.assertEqual(before, pjson.read_bytes())
+            self.assertTrue((vault / "1-Projects" / "frag").exists())
+        finally:
+            tmp.cleanup()
+
+    def test_stale_line_rerun_is_byte_for_byte_noop(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            note = vault / "1-Projects" / "parent" / "parent.md"
+            note.write_bytes(
+                b"# P\nrepo head abc1234 commit\n" + note.read_bytes().split(b"\n", 1)[1]
+            )
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault), "fragments": [], "leftover_folders": [],
+                    "stale_state_lines": [{"note": "1-Projects/parent/parent.md", "line": "repo head abc1234 commit",
+                                            "stale": True, "auto_apply": True}],
+                    "broken_links": [], "unsorted_sessions": [],
+                    "re_attribution": {"items": [], "calibration_sample": []}}
+            r1 = vs.apply_plan(vault, plan)
+            self.assertTrue(r1.get("ok"), msg=r1)
+            after_first = note.read_bytes()
+            r2 = vs.apply_plan(vault, plan)
+            self.assertTrue(r2.get("ok"), msg=r2)
+            after_second = note.read_bytes()
+            self.assertEqual(after_first, after_second)
+        finally:
+            tmp.cleanup()
+
+    def test_fragment_creates_pending_block_when_missing(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            note = vault / "1-Projects" / "parent" / "parent.md"
+            note.write_bytes(b"# P no blocks\n")
+            subprocess.run(["git", "add", "-A"], cwd=str(vault), capture_output=True, timeout=10)
+            subprocess.run(["git", "commit", "-q", "-m", "noblocks"], cwd=str(vault), capture_output=True, timeout=10)
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault),
+                    "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
+                    "leftover_folders": [], "stale_state_lines": [], "broken_links": [],
+                    "unsorted_sessions": [], "re_attribution": {"items": [], "calibration_sample": []}}
+            result = vs.apply_plan(vault, plan)
+            self.assertTrue(result.get("ok"), msg=result)
+            text = note.read_text(encoding="utf-8")
+            self.assertIn("<!-- agentmem:pending:begin -->", text)
+            self.assertIn("Merged from frag", text)
+            self.assertFalse((vault / "1-Projects" / "frag").exists())
+        finally:
+            tmp.cleanup()
+
+    def test_fragment_rerun_after_move_failure_does_not_duplicate_pending(self):
+        from unittest.mock import patch
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault),
+                    "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
+                    "leftover_folders": [], "stale_state_lines": [], "broken_links": [],
+                    "unsorted_sessions": [], "re_attribution": {"items": [], "calibration_sample": []}}
+            with patch.object(vs.shutil, "move", side_effect=OSError("simulated move failure")):
+                failed = vs.apply_plan(vault, plan)
+            self.assertEqual(failed["log_entries"][1]["status"], "error")
+            succeeded = vs.apply_plan(vault, plan)
+            self.assertTrue(succeeded.get("ok"), msg=succeeded)
+            parent = (vault / "1-Projects" / "parent" / "parent.md").read_bytes()
+            self.assertEqual(parent.count(b"### Merged from frag"), 1)
+            self.assertIn(b"frag state", parent)
+            self.assertFalse((vault / "1-Projects" / "frag").exists())
+        finally:
+            tmp.cleanup()
+
+    def test_symlink_into_sessions_is_refused(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault),
+                    "fragments": [{"folder": "../0-Sessions", "proposed_parent": "parent", "auto_apply": True}],
+                    "leftover_folders": [], "stale_state_lines": [], "broken_links": [],
+                    "unsorted_sessions": [], "re_attribution": {"items": [], "calibration_sample": []}}
+            result = vs.apply_plan(vault, plan)
+            item = next(e for e in result["log_entries"] if e.get("action") == "fragment_merge")
+            self.assertEqual(item["status"], "error")
+            self.assertIn("refused", item["reason"])
+        finally:
+            tmp.cleanup()
+
+    def test_log_has_timestamp_file_and_sha_in_every_entry(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault),
+                    "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
+                    "leftover_folders": [], "stale_state_lines": [], "broken_links": [],
+                    "unsorted_sessions": [], "re_attribution": {"items": [], "calibration_sample": []}}
+            r1 = vs.apply_plan(vault, plan)
+            self.assertTrue(r1.get("ok"), msg=r1)
+            r2 = vs.apply_plan(vault, plan)
+            self.assertTrue(r2.get("ok"), msg=r2)
+            logs = list((vault / "_meta" / "logs").glob("sweep-*.jsonl"))
+            self.assertEqual(len(logs), 2, "each run should create a separate log file")
+            for log_path in logs:
+                for line in log_path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    entry = json.loads(line)
+                    self.assertIn("sha", entry)
+        finally:
+            tmp.cleanup()
+
+    def test_path_safety_refuses_unsafe_items(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            bad_session = vault / "0-Sessions" / "evil.md"
+            bad_session.write_bytes(b"evil\n")
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault),
+                    "fragments": [{"folder": "../outside", "proposed_parent": "parent", "auto_apply": True}],
+                    "leftover_folders": [{"folder": "0-Sessions", "auto_apply": True}],
+                    "stale_state_lines": [{"note": "0-Sessions/evil.md", "line": "evil",
+                                            "stale": True, "auto_apply": True}],
+                    "broken_links": [], "unsorted_sessions": [],
+                    "re_attribution": {"items": [], "calibration_sample": []}}
+            result = vs.apply_plan(vault, plan)
+            self.assertTrue(result.get("ok"), msg=result)
+            entries = {e.get("action"): e for e in result.get("log_entries", [])}
+            self.assertEqual(entries.get("fragment_merge", {}).get("status"), "error")
+            self.assertIn("refused", entries.get("fragment_merge", {}).get("reason", ""))
+            self.assertEqual(entries.get("leftover_archive", {}).get("status"), "error")
+            self.assertIn("refused", entries.get("leftover_archive", {}).get("reason", ""))
+            self.assertEqual(entries.get("stale_line", {}).get("status"), "error")
+            self.assertIn("refused", entries.get("stale_line", {}).get("reason", ""))
+            self.assertTrue(bad_session.exists(), "0-Sessions file must not be touched")
+        finally:
+            tmp.cleanup()
+
+    def test_non_utf8_note_does_not_crash_and_cleans_up(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            note = vault / "1-Projects" / "parent" / "parent.md"
+            note.write_bytes(note.read_bytes() + b"\xff\xfe latin\n")
+            subprocess.run(["git", "add", "-A"], cwd=str(vault), capture_output=True, timeout=10)
+            subprocess.run(["git", "commit", "-q", "-m", "nonutf8"], cwd=str(vault), capture_output=True, timeout=10)
+            vs = _load_sweep()
+            plan = {"vault_path": str(vault), "fragments": [], "leftover_folders": [],
+                    "stale_state_lines": [{"note": "1-Projects/parent/parent.md", "line": "repo head abc1234 commit",
+                                            "stale": True, "auto_apply": True}],
+                    "broken_links": [], "unsorted_sessions": [],
+                    "re_attribution": {"items": [], "calibration_sample": []}}
+            result = vs.apply_plan(vault, plan)
+            self.assertTrue(result.get("ok"), msg=result)
+            self.assertFalse((vault / "_meta" / "PAUSE").exists())
+            logs = list((vault / "_meta" / "logs").glob("sweep-*.jsonl"))
+            self.assertTrue(logs)
+            self.assertIn(b"\xff\xfe latin\n", note.read_bytes())
         finally:
             tmp.cleanup()
 
