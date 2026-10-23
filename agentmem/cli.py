@@ -317,6 +317,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="mem", description="Agent memory: search and maintain the shared Obsidian vault.")
     p.add_argument("--vault", help="override OBSIDIAN_VAULT_PATH")
     sub = p.add_subparsers(dest="cmd", required=True)
+    from .knowledge.cli import register
+    register(sub)
 
     s = sub.add_parser("search", help="ranked full-text search with excerpts and source paths")
     s.add_argument("terms", nargs="+")

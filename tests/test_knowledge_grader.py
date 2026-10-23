@@ -1,5 +1,6 @@
 """Regression cases for content, provenance, uncertainty and capture identity."""
 import json
+import copy
 import sqlite3
 import sys
 import tempfile
@@ -11,6 +12,173 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools.knowledge_grader import grade_query, lifecycle_check
 from agentmem.manifest import Manifest
+
+
+class StructuredKnowledgeGrader(unittest.TestCase):
+    def setUp(self):
+        from test_knowledge_context import ContextCase
+        self.fixture = ContextCase("test_decision_rationale_labels_citation_and_no_writes")
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.cid = self.fixture.claim()
+        self.vault = self.fixture.vault
+        manifest = Manifest(self.vault / "_meta/manifest.sqlite")
+        manifest.close()
+        self.query = dict(query_id="structured", project=self.fixture.pid, mode="current", as_of=None, budget=2400)
+        self.gold = dict(required_claims=[self.cid], required_sources=[], forbidden_current_claims=[], forbidden_strings=["CANARY"],
+            required_rationale="Atomic cursor writes.", expected_labels=["reported", "user_stated"], expected_uncertainty=False)
+
+    def corpus(self):
+        store = self.fixture.store
+        sources = [dict(row) for row in store.db.execute("SELECT * FROM sources")]
+        claims = [dict(row) for row in store.db.execute("SELECT * FROM claims")]
+        for source in sources:
+            source["text"] = source["excerpt"]
+        for claim in claims:
+            claim["source_ids"] = [row[0] for row in store.db.execute("SELECT source_id FROM evidence WHERE claim_id=?", (claim["id"],))]
+        return dict(projects=[dict(id=self.fixture.pid, name="Alpha", policy="model_allowed")], sources=sources, claims=claims)
+
+    def seal(self, context):
+        from agentmem.knowledge.retrieval import count_payload
+        for _ in range(20):
+            used = count_payload(context)
+            if used == context["used"]:
+                return context
+            context["used"] = used
+        self.fail("unstable count")
+
+    def grade(self, context=None, corpus=None):
+        if context is None:
+            context = self.fixture.context()
+        return grade_query(self.query, self.gold, self.seal(context), corpus=corpus or self.corpus(), vault=self.vault)
+
+    def test_intact_supported_content_and_any_match_sources_pass(self):
+        result = self.grade()
+        self.assertTrue(result["pass"], result)
+        self.fixture.claim()
+        source_ids = self.corpus()["claims"][0]["source_ids"]
+        context = self.fixture.context()
+        selected = context["items"][0]["citations"][0]["source_id"]
+        self.gold["required_sources"] = [next(s for s in source_ids if s != selected)]
+        result = self.grade(context)
+        self.assertTrue(result["pass"], result)
+
+    def test_wrong_forged_missing_and_foreign_ids_fail(self):
+        original = self.fixture.context()
+        cases = []
+        wrong = copy.deepcopy(original)
+        wrong["items"][0]["statement"] = "Use MongoDB storage."
+        cases.append(wrong)
+        for key in ("claim_ids", "citations", "user_stated"):
+            missing = copy.deepcopy(original)
+            del missing["items"][0][key]
+            cases.append(missing)
+        for field, value in (("claim_ids", ["00000000-0000-0000-0000-000000000000"]), ("user_stated", False)):
+            forged = copy.deepcopy(original)
+            forged["items"][0][field] = value
+            cases.append(forged)
+        for field, value in (("source_id", "forged"), ("quote", "forged"), ("quote_sha", "0" * 64)):
+            forged = copy.deepcopy(original)
+            forged["items"][0]["citations"][0][field] = value
+            cases.append(forged)
+        foreign = copy.deepcopy(original)
+        foreign["project_id"] = "other"
+        cases.append(foreign)
+        empty = copy.deepcopy(original)
+        empty["items"] = []
+        cases.append(empty)
+        oversized = copy.deepcopy(original)
+        oversized["warnings"] = ["z" * 10000]
+        cases.append(oversized)
+        for number, case in enumerate(cases):
+            with self.subTest(number=number):
+                self.assertFalse(self.grade(case)["pass"])
+
+    def test_disputed_claim_labeled_accepted_fails(self):
+        self.fixture.claim(statement="Use JSON storage.", value="json")
+        context = self.fixture.context()
+        context["items"][0]["alternatives"][0]["status"] = "accepted"
+        self.assertFalse(self.grade(context)["pass"])
+
+    def test_real_wrong_and_foreign_claims_cannot_borrow_the_requested_identity(self):
+        import uuid
+        wrong = self.fixture.claim(statement="A different supported fact.", subject="different", predicate="statement")
+        context = self.fixture.context(query="different")
+        self.assertEqual(context["items"][0]["claim_ids"], [wrong])
+        result = self.grade(context)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("missing_supported_claim" in failure for failure in result["failures"]), result)
+        foreign = str(uuid.uuid4())
+        self.fixture.store.register_project(foreign, "Foreign", [str(self.vault / "foreign")], privacy="model_allowed")
+        original = self.fixture.pid
+        self.fixture.pid = foreign
+        try:
+            self.fixture.claim(statement="Foreign supported fact.", subject="foreign", predicate="statement")
+            foreign_context = self.fixture.context(project=foreign, query="foreign")
+        finally:
+            self.fixture.pid = original
+        context = self.fixture.context()
+        context["items"].extend(foreign_context["items"])
+        result = self.grade(context)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("foreign" in failure for failure in result["failures"]), result)
+
+    def test_superseded_claim_returned_as_current_fails(self):
+        successor = self.fixture.claim(statement="Use JSON storage.", value="json", valid_from="2026-10-05T00:00:00Z")
+        self.fixture.review(self.cid, "supersede", successor)
+        context = self.fixture.context(mode="history")
+        context["mode"] = "current"
+        self.assertFalse(self.grade(context)["pass"])
+
+    def test_missing_repo_moved_label_and_corrupt_evidence_fail(self):
+        from unittest.mock import patch
+        self.fixture.store.db.execute("UPDATE claims SET predicate='repo_state'")
+        self.fixture.store.db.execute("UPDATE sources SET repo_head=?", ("a" * 40,))
+        corpus = self.corpus()
+        corpus["projects"][0]["repo"] = dict(head="b" * 40)
+        with patch("agentmem.knowledge.retrieval.repo_head", return_value="b" * 40):
+            context = self.fixture.context()
+        self.assertTrue(self.grade(copy.deepcopy(context), corpus)["pass"])
+        context["items"][0]["freshness"] = "current"
+        del context["items"][0]["freshness_warning"]
+        self.assertFalse(self.grade(context, corpus)["pass"])
+        self.fixture.store.db.execute("UPDATE sources SET excerpt='tampered'")
+        self.assertFalse(self.grade(context, corpus)["pass"])
+
+    def test_pasted_label_is_visible_and_must_match_the_cited_source(self):
+        self.fixture.store.db.execute("UPDATE sources SET speaker='pasted'")
+        self.gold["expected_labels"] = ["reported", "pasted"]
+        result = self.grade()
+        self.assertTrue(result["pass"], result)
+        context = self.fixture.context()
+        del context["items"][0]["citations"][0]["speaker"]
+        self.assertFalse(self.grade(context)["pass"])
+        context = self.fixture.context()
+        context["items"][0]["citations"][0]["speaker"] = "user"
+        self.assertFalse(self.grade(context)["pass"])
+
+    def test_temporal_warning_credit_requires_display_and_db_proof(self):
+        self.fixture.claim(statement="An undated fact.", subject="undated", predicate="statement", valid_from=None)
+        self.query.update(mode="as_of", as_of="2026-10-03T00:00:00Z")
+        self.gold["expected_labels"] = ["reported", "unknown_time_excluded"]
+        context = self.fixture.context(as_of=self.query["as_of"])
+        result = self.grade(copy.deepcopy(context))
+        self.assertTrue(result["pass"], result)
+        context["warnings"] = []
+        self.assertFalse(self.grade(context)["pass"])
+        self.fixture.store.db.execute("UPDATE claims SET status='quarantined' WHERE valid_from IS NULL")
+        context = self.fixture.context(as_of=self.query["as_of"])
+        context["warnings"].append("unknown_time_excluded")
+        self.assertFalse(self.grade(context)["pass"])
+
+    def test_omitted_alternatives_count_is_proven_not_asserted(self):
+        self.fixture.claim(statement="Use JSON storage.", value="json", valid_from="2026-10-05T00:00:00Z")
+        self.query.update(mode="as_of", as_of="2026-10-03T00:00:00Z")
+        context = self.fixture.context(as_of=self.query["as_of"])
+        result = self.grade(copy.deepcopy(context))
+        self.assertTrue(result["pass"], result)
+        context["items"][0]["omitted_alternatives"] = 0
+        self.assertFalse(self.grade(context)["pass"])
 
 
 class KnowledgeGrader(unittest.TestCase):

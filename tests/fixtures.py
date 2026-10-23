@@ -21,6 +21,7 @@ def make_vault(tmp: Path, **overrides) -> Config:
     for d in ("_meta/queue", "_meta/locks", "_meta/logs", "0-Sessions", "1-Projects", "2-Areas", "3-Resources", "4-Archive"):
         (vault / d).mkdir(parents=True, exist_ok=True)
     work = tmp / "work"
+    (work / ".git").mkdir(parents=True, exist_ok=True)
     (work / "demo-app").mkdir(parents=True, exist_ok=True)
     (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
         {"name": "Demo App", "roots": [str(work / "demo-app")], "status": "active"}]}), encoding="utf-8")

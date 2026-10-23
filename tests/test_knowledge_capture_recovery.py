@@ -24,7 +24,10 @@ class CaptureBase(unittest.TestCase):
         self.man = Manifest(self.cfg.manifest_path)
         self.addCleanup(self.man.close)
         self.cwd = str(self.root / 'work' / 'demo-app')
-        (self.root / 'work' / '.git').write_text('gitdir: nonexistent', encoding='utf-8')
+        marker = self.root / 'work' / '.git'
+        if marker.is_dir() and not any(marker.iterdir()):  # an empty boundary dir lets git walk up; a dangling gitdir file stops it
+            marker.rmdir()
+        marker.write_text('gitdir: nonexistent', encoding='utf-8')
 
     def source(self, sid='synthetic-a-12345678', agent='claude', turns=SUBSTANTIAL):
         path = self.root / (sid + '.jsonl')
