@@ -58,6 +58,7 @@ class KnowledgeHooks(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=scratch) as folder:
             base = Path(folder)
             vault, work, home = base / "vault", base / "work", base / "home"
+            (work / ".git").mkdir(parents=True)
             for directory in (vault / "_meta/queue", vault / "_meta/locks", vault / "_meta/logs", vault / "0-Sessions",
                               vault / "1-Projects", work / "alpha", home):
                 directory.mkdir(parents=True, exist_ok=True)
@@ -66,7 +67,8 @@ class KnowledgeHooks(unittest.TestCase):
             (home / "config.json").write_text(json.dumps({"summarizer": "none", "auto_index": False}))
             if spec.get("pause"):
                 (vault / "_meta/PAUSE").write_text("paused")
-            environment = dict(os.environ, OBSIDIAN_VAULT_PATH=str(vault), AGENTMEM_HOME=str(home))
+            environment = dict(os.environ, OBSIDIAN_VAULT_PATH=str(vault), AGENTMEM_HOME=str(home),
+                               GIT_CEILING_DIRECTORIES=str(work))
             environment.pop("AGENTMEM_CAPTURE", None)
             environment.update(spec.get("env", {}))
             raw = spec.get("input_raw")

@@ -370,6 +370,9 @@ class EvaluatorIsolation(unittest.TestCase):
             self.assertIn(str(tmp), env["AGENTMEM_HOME"])
             self.assertNotIn("AGENTMEM_CAPTURE", env)
             self.assertEqual(env.get("XDG_CACHE_HOME"), str(tmp / "cache"))
+            self.assertEqual(env.get("GIT_CEILING_DIRECTORIES"), str(tmp / "work"))
+            from agentmem.projects import repository_root
+            self.assertEqual(Path(repository_root(work)), work)
 
 
 class EvaluatorExitCodes(unittest.TestCase):
@@ -394,6 +397,9 @@ class EvaluatorExitCodes(unittest.TestCase):
             self.assertIn(result["verdict"], ("pass", "fail", "inconclusive"))
             self.assertIn("correctness_pass", result)
             self.assertIn("adoption_pass", result)
+            self.assertTrue(result["arm_source_commit"].startswith("03764f8"))
+            self.assertNotEqual(result["arm_source_commit"], result["commit"])
+            self.assertFalse(Path(result["arm_source_path"]).exists())
 
 
 class EvaluatorQmdStatus(unittest.TestCase):

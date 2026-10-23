@@ -7,6 +7,7 @@ Exit codes: 0 pass, 1 failed adoption gate, 2 invalid setup, 3 inconclusive.
 Stdlib only. Never touches the real vault. Never calls a model or the network.
 """
 import argparse
+import copy
 import csv
 import hashlib
 import json
@@ -18,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from contextlib import closing
+from contextlib import closing, contextmanager, ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -102,6 +103,7 @@ def make_temp_vault(base_tmp, corpus, qmd_index=""):
               "2-Areas", "3-Resources", "4-Archive"):
         (vault / d).mkdir(parents=True, exist_ok=True)
     work = base_tmp / "work"
+    (work / ".git").mkdir(parents=True, exist_ok=True)
     vault_path = vault
     project_roots = {}
     for proj in corpus.get("projects", []):
@@ -188,8 +190,11 @@ def _noop_consolidator(state, summary, link, date, timeout=0):
     return state or "", 0.0
 
 
-def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index, *, knowledge=False):
-    sys.path.insert(0, str(ROOT))
+def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index, *, knowledge=False, source_root=None):
+    sys.path.insert(0, str(source_root or ROOT))
+    import agentmem
+    if not Path(agentmem.__file__).resolve().is_relative_to(Path(source_root or ROOT).resolve()):
+        raise SetupError("capture imported agentmem from the wrong arm")
     from agentmem.adapters import read as adapter_read, read_opencode
     from agentmem.config import Config
     from agentmem.extract import build as extract_build
@@ -197,6 +202,8 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index,
     from agentmem.manifest import Manifest
     from agentmem import worker
 
+    knowledge_options = dict(knowledge_mode="shadow", knowledge_project_ids={p["name"]: pid for pid, p in project_roots.items()},
+        project_privacy={p["name"]: p["policy"] for p in project_roots.values()}) if knowledge else {}
     cfg = Config(
         vault=vault,
         summarizer="claude-haiku",
@@ -204,9 +211,7 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index,
         auto_index=False,
         embeddings=False,
         qmd_index=str(qmd_index) if qmd_index else "",
-        knowledge_mode="shadow" if knowledge else "off",
-        knowledge_project_ids={p["name"]: pid for pid, p in project_roots.items()} if knowledge else {},
-        project_privacy={p["name"]: p["policy"] for p in project_roots.values()} if knowledge else {},
+        **knowledge_options,
     )
 
     transcripts_dir = Path(corpus.get("_transcripts_dir", ""))
@@ -306,8 +311,17 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index,
                     finally:
                         man.close()
                     worker.enqueue(cfg, agent, sid, event="end", source=source, cwd=cwd)
-                worker.run(cfg, budget_s=120, summarizer=llm.summarize,
-                           consolidator=_noop_consolidator, index=False)
+                for _ in range(len(sessions) + 1):
+                    batch = worker.run(cfg, budget_s=120, summarizer=llm.summarize,
+                                       consolidator=_noop_consolidator, index=False)
+                    with closing(sqlite3.connect(cfg.manifest_path)) as pending_db:
+                        pending = pending_db.execute("SELECT COUNT(*) FROM sessions WHERE status='pending'").fetchone()[0]
+                    if not pending:
+                        break
+                    if not batch.get("results"):
+                        raise SetupError("capture phase left pending sessions without progress")
+                else:
+                    raise SetupError("capture phase did not converge")
         finally:
             llm.summarize = original_summarize
     finally:
@@ -361,14 +375,16 @@ def isolated_environment(vault, home, cache_dir=None):
     for key in ("AGENTMEM_CAPTURE", "NODE_OPTIONS", "QMD_WRAPPER_CAPTURE"):
         env.pop(key, None)
     env.update(OBSIDIAN_VAULT_PATH=str(vault), AGENTMEM_HOME=str(home),
-               INDEX_PATH=str(cache / "qmd/index.sqlite"), NO_COLOR="1")
+               INDEX_PATH=str(cache / "qmd/index.sqlite"), NO_COLOR="1",
+               GIT_CEILING_DIRECTORIES=str(base / "work"))
     (cache / "qmd").mkdir(exist_ok=True)
     return env
 
 
-def run_mem_command(vault, home, args, timeout=30, cwd=None, cache_dir=None):
+def run_mem_command(vault, home, args, timeout=30, cwd=None, cache_dir=None, source_root=None):
     env = isolated_environment(vault, home, cache_dir)
-    command = [sys.executable, "-B", "-X", "utf8", "-I", str(ROOT / "run.py")] + args
+    source_root = Path(source_root or ROOT)
+    command = [sys.executable, "-B", "-X", "utf8", "-I", str(source_root / "run.py")] + args
     if args and args[0] == "search":
         observer = '''import json,runpy,sys
 sys.path.insert(0,sys.argv[1])
@@ -386,7 +402,7 @@ search._qmd=observed
 runner=sys.argv[1]+"/run.py"
 sys.argv=[runner]+sys.argv[2:]
 runpy.run_path(runner,run_name="__main__")'''
-        command = [sys.executable, "-B", "-X", "utf8", "-I", "-c", observer, str(ROOT)] + args
+        command = [sys.executable, "-B", "-X", "utf8", "-I", "-c", observer, str(source_root)] + args
     try:
         r = subprocess.run(
             command,
@@ -399,12 +415,12 @@ runpy.run_path(runner,run_name="__main__")'''
         return -1, "", str(e)
 
 
-def package_baseline_context(vault, home, query, qmd_available=True, cwd=None, cache_dir=None, max_bytes=None):
+def package_baseline_context(vault, home, query, qmd_available=True, cwd=None, cache_dir=None, max_bytes=None, source_root=None):
     budget = query.get("budget", 2400)
     limit = max_bytes if max_bytes is not None else budget
     terms = query["query"]
     rc, stdout, stderr = run_mem_command(vault, home, ["search", terms, "--json", "-n", "8"],
-                                         cwd=cwd, cache_dir=cache_dir)
+                                         cwd=cwd, cache_dir=cache_dir, **({"source_root": source_root} if source_root else {}))
     hits = []
     error = ""
     if rc != 0:
@@ -429,7 +445,8 @@ def package_baseline_context(vault, home, query, qmd_available=True, cwd=None, c
         path = candidate.resolve() if candidate.is_absolute() else (Path(vault) / candidate).resolve()
         if not path.is_relative_to(Path(vault).resolve()):
             raise SetupError("search returned a path outside the isolated vault")
-        note_rc, note_out, _ = run_mem_command(vault, home, ["note", str(path)], cwd=cwd, cache_dir=cache_dir)
+        note_rc, note_out, _ = run_mem_command(vault, home, ["note", str(path)], cwd=cwd, cache_dir=cache_dir,
+            **({"source_root": source_root} if source_root else {}))
         if note_rc != 0:
             continue
         normalized = note_out.replace("\r\n", "\n")
@@ -501,6 +518,64 @@ def get_commit():
         return "unknown"
 
 
+@contextmanager
+def arm_source(tmp, arm):
+    if arm != "baseline":
+        yield ROOT, get_commit()
+        return
+    checkout = (tmp / "b0-source").resolve()
+    result = subprocess.run(["git", "worktree", "add", "--detach", str(checkout), "03764f8"],
+        cwd=ROOT, capture_output=True, timeout=30)
+    if result.returncode:
+        raise SetupError("B0 checkout failed at 03764f8: " + result.stderr.decode("utf-8", "replace")[:300])
+    try:
+        revision = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"], capture_output=True, check=True, timeout=5)
+        yield checkout, revision.stdout.decode("ascii").strip()
+    finally:
+        removed = subprocess.run(["git", "worktree", "remove", str(checkout)], cwd=ROOT, capture_output=True, timeout=30)
+        if removed.returncode:
+            raise SetupError("B0 temporary checkout removal failed")
+
+
+def run_historical_capture(source_root, vault, work, home, corpus, roots, cache):
+    payload = vault.parent / "capture-input.json"
+    payload.write_text(json.dumps(dict(corpus=corpus, roots=roots)), encoding="utf-8")
+    script = '''import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from tools.evaluate_knowledge import run_pipeline_for_corpus
+data=json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
+base=Path(sys.argv[3]).parent
+run_pipeline_for_corpus(base/"vault",base/"work",base/"home",data["corpus"],data["roots"],"index",source_root=Path(sys.argv[2]))
+'''
+    result = subprocess.run([sys.executable, "-B", "-X", "utf8", "-I", "-c", script, str(ROOT), str(source_root), str(payload)],
+        capture_output=True, env=isolated_environment(vault, home, cache), cwd=vault.parent, timeout=600)
+    if result.returncode:
+        raise SetupError("B0 capture cannot run under shared harness: " + result.stderr.decode("utf-8", "replace")[-1200:])
+
+
+def candidate_negative_controls(query, gold, context, *, corpus, vault):
+    from agentmem.knowledge.retrieval import count_payload
+    controls = {}
+    for name in ("wrong_fact", "empty"):
+        forged = copy.deepcopy(context)
+        if "items" not in forged:
+            forged["items"] = []
+        if name == "empty":
+            forged["items"] = []
+        elif forged["items"]:
+            first = forged["items"][0]
+            first = first["alternatives"][0] if "alternatives" in first else first
+            first["statement"] = "MongoDB is the only accepted current truth and Python 2.7 is verified everywhere."
+        for _ in range(20):
+            used = count_payload(forged)
+            if used == forged.get("used"):
+                break
+            forged["used"] = used
+        controls[name] = grade_query(query, gold, forged, corpus=corpus, vault=vault)["pass"]
+    return controls
+
+
 def run_baseline(fixtures_dir, output_dir, arm="baseline"):
     loaded = load_fixtures(fixtures_dir)
     if loaded[5] is not None:
@@ -512,14 +587,19 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
     if mismatch:
         write_outputs(output_dir, {"verdict": "setup_error", "errors": mismatch}, [], corpus)
         return EXIT_SETUP
-    with tempfile.TemporaryDirectory(prefix="agentmem-eval-", dir=str(repo_tmp())) as directory:
+    with tempfile.TemporaryDirectory(prefix="agentmem-eval-", dir=str(repo_tmp())) as directory, ExitStack() as stack:
         tmp = Path(directory)
         corpus["_transcripts_dir"] = str(Path(fixtures_dir).resolve())
         cache = tmp / "cache"
         vault, work, home, roots = make_temp_vault(tmp, corpus, qmd_index="index")
         try:
+            source_root, source_commit = stack.enter_context(arm_source(tmp, arm))
             candidate = arm in ("candidate", "candidate-noreview")
-            cfg = run_pipeline_for_corpus(vault, work, home, corpus, roots, qmd_index="index", knowledge=candidate)
+            if arm == "baseline":
+                run_historical_capture(source_root, vault, work, home, corpus, roots, cache)
+                cfg = None
+            else:
+                cfg = run_pipeline_for_corpus(vault, work, home, corpus, roots, qmd_index="index", knowledge=candidate)
             extraction, approvals = None, []
             if candidate:
                 from tools.knowledge_scripted import extract_seeded_captures, apply_seeded_approvals, seed_repository_heads
@@ -527,7 +607,7 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
                 extraction = extract_seeded_captures(cfg)
                 if arm == "candidate":
                     approvals = apply_seeded_approvals(cfg, corpus["acceptances"], corpus["sources"])
-            rc, stdout, stderr = run_mem_command(vault, home, ["index", "--no-embed"], timeout=120, cwd=tmp, cache_dir=cache)
+            rc, stdout, stderr = run_mem_command(vault, home, ["index", "--no-embed"], timeout=120, cwd=tmp, cache_dir=cache, source_root=source_root)
             index_result = {"returncode": rc, "stdout": stdout.strip(), "stderr": stderr[:500]}
             qmd_status, qmd_version = detect_qmd(env=isolated_environment(vault, home, cache), cwd=tmp)
             database = cache / "qmd/index.sqlite"
@@ -536,13 +616,14 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
                 with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
                     index_result["active_documents"] = connection.execute("SELECT COUNT(*) FROM documents WHERE active=1").fetchone()[0]
             outcomes = []
+            controls = dict(queries_checked=0, adversarial_passes=0, empty_passes=0, positive_controls=0)
             for query in queries:
                 primary = dict(query, query=formulate_query(query["query"]))
                 contexts = {}
                 grades = {}
                 for name, request in (("primary", primary), ("raw", query)):
                     package = (package_candidate_context(cfg, request) if candidate else
-                        package_baseline_context(vault, home, request, qmd_available=qmd_status == "ok", cwd=tmp, cache_dir=cache))
+                        package_baseline_context(vault, home, request, qmd_available=qmd_status == "ok", cwd=tmp, cache_dir=cache, source_root=source_root))
                     grade = grade_query(query, expected[query["query_id"]], package, corpus=corpus, vault=vault)
                     grade.update(backend=package.get("backend", "local"), qmd_used=package.get("qmd_used", False), fallback=package.get("fallback", False),
                                  hit_count=package.get("hit_count", len(package.get("items", []))), search_terms=request["query"], search_error=package.get("search_error", ""))
@@ -553,9 +634,15 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
                 row = dict(grades["primary"], case=query["case"], partition=query["partition"], raw=grades["raw"])
                 row["quality_measured"] = not bool(row["unmeasured"])
                 outcomes.append(row)
+                if candidate:
+                    negative = candidate_negative_controls(query, expected[query["query_id"]], contexts["primary"], corpus=corpus, vault=vault)
+                    controls["queries_checked"] += 1
+                    controls["adversarial_passes"] += int(negative["wrong_fact"])
+                    controls["empty_passes"] += int(negative["empty"])
+                    controls["positive_controls"] += int(row["pass"])
             diagnostics = []
             for terms in (() if candidate else ("historical", "storage")):
-                package = package_baseline_context(vault, home, {"query": terms, "budget": 2400}, cwd=tmp, cache_dir=cache)
+                package = package_baseline_context(vault, home, {"query": terms, "budget": 2400}, cwd=tmp, cache_dir=cache, source_root=source_root)
                 diagnostics.append({"terms": terms, "backend": package["backend"], "hit_count": package["hit_count"],
                                     "snippet_count": len(package["snippets"]), "search_error": package["search_error"]})
             lifecycle = lifecycle_check(vault, corpus)
@@ -578,7 +665,8 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
                           "raw": summarize([r["raw"] for r in outcomes if r["case"] == case])} for case in sorted({q["case"] for q in queries})}
         correctness = bool(outcomes) and all(row["pass"] for row in outcomes) and lifecycle["passed"]
         exit_code = EXIT_FAIL if counters["quality_failed"] or not lifecycle["passed"] else EXIT_INCONCLUSIVE
-        result = {"arm": arm, "commit": get_commit(), "evaluator_sha256": sha256_file(Path(__file__)),
+        result = {"arm": arm, "commit": get_commit(), "arm_source_commit": source_commit,
+                  "arm_source_path": str(source_root), "evaluator_sha256": sha256_file(Path(__file__)),
                   "python_version": sys.version.split()[0], "sqlite_version": sqlite3.sqlite_version,
                   "temp_dir": str(tmp), "qmd_index_path": str(database), "qmd_config_dir": str(tmp / "config/qmd"),
                   "qmd_status": qmd_status, "qmd_version": qmd_version, "index": index_result,
@@ -596,6 +684,7 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
                                   "The 800-character snippet cap and conservative byte packaging are frozen for both query forms."]}
         if candidate:
             result.update(extraction="scripted", extraction_run=extraction, seeded_approvals=approvals,
+                adversarial_controls=controls,
                 blocked_cases={"T01": {"blocked_on": "WP-06", "reason": "operator-reviewed documentary registration unavailable"}})
             result["limitations"] = ["Scripted extraction measures the context slice, never real-model extraction quality.",
                 "T01 is a measured failure blocked on WP-06 documentary registration. Gold is unchanged.",
