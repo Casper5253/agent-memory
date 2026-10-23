@@ -78,7 +78,7 @@ def _label(path: str) -> str:
 
 
 def _to_disk(cfg: Config, file_field: str) -> str:
-    m = re.match(r"qmd://([^/]+)/(.*)", file_field or "")
+    m = re.match(r"qmd://([^/]+)/([^?]*)", file_field or "")
     if m and m.group(1) in COLLECTIONS:
         return str(cfg.vault / COLLECTIONS[m.group(1)][0] / m.group(2))
     return file_field
@@ -114,30 +114,107 @@ def _located_label(path, label, snippet, line=None):
         return label
 
 
-def search(cfg: Config, terms: str, n: int = 8, layers=None, semantic: bool = False) -> list:
-    collections = [c for c, (_, label, _) in COLLECTIONS.items() if not layers or label in layers]
+def _build_hit(cfg, it):
+    path = _to_disk(cfg, it.get("file") or it.get("path") or "")
+    snippet = re.sub(r"^@@[^@]*@@\s*(\([^)]*\))?\s*", "", " ".join(str(it.get("snippet") or "").split()))[:400]
+    label = _label(os.path.relpath(path, cfg.vault) if os.path.isabs(path) else path)
+    return {
+        "label": _located_label(path, label, snippet, it.get("line")),
+        "path": path, "title": it.get("title", ""), "score": it.get("score"),
+        "line": it.get("line"), "docid": it.get("docid", ""),
+        "snippet": snippet,
+    }
+
+
+def _qmd_search(cfg, terms, n, collections, semantic):
     args = ["vsearch" if semantic else "search", terms, "--format", "json", "-n", str(n)]
     for c in collections:
         args += ["-c", c]
+    r = _qmd(args, timeout=180, index=cfg.qmd_index)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode("utf-8", "replace")[:300])
+    raw = r.stdout.decode("utf-8", "replace")
+    return json.loads(raw[raw.index("["):]) if "[" in raw else []
+
+
+def _split_terms(terms, max_terms=6):
+    seen = set()
+    words = []
+    for w in terms.split():
+        key = w.lower()
+        if key and key not in seen:
+            seen.add(key)
+            words.append(w)
+        if len(words) >= max_terms:
+            break
+    return words
+
+
+def _majority_merge(per_term_hits, num_terms, n):
+    path_data = {}
+    for term_idx, hits in enumerate(per_term_hits):
+        for it in hits:
+            path = it["_disk_path"]
+            if path not in path_data:
+                path_data[path] = {"term_indices": set(), "best_score": None, "best_it": None}
+            entry = path_data[path]
+            entry["term_indices"].add(term_idx)
+            score = it.get("score")
+            if score is not None and (entry["best_score"] is None or score > entry["best_score"]):
+                entry["best_score"] = score
+                entry["best_it"] = it
+    threshold = num_terms / 2
+    kept = [(p, d) for p, d in path_data.items() if len(d["term_indices"]) > threshold]
+    kept.sort(key=lambda x: (-len(x[1]["term_indices"]), -(x[1]["best_score"] or 0), x[0]))
+    return [d["best_it"] for _, d in kept[:n]]
+
+
+def search(cfg: Config, terms: str, n: int = 8, layers=None, semantic: bool = False) -> list:
+    collections = [c for c, (_, label, _) in COLLECTIONS.items() if not layers or label in layers]
+    words = _split_terms(terms)
+    if len(words) <= 1:
+        try:
+            items = _qmd_search(cfg, terms, n, collections, semantic)
+        except Exception as e:  # noqa: BLE001 - QMD down: degrade to a bounded scan, say so
+            return fallback_search(cfg, terms, n, layers, reason=str(e))
+        return [_build_hit(cfg, it) for it in items]
     try:
-        r = _qmd(args, timeout=180, index=cfg.qmd_index)
-        if r.returncode != 0:
-            raise RuntimeError(r.stderr.decode("utf-8", "replace")[:300])
-        raw = r.stdout.decode("utf-8", "replace")
-        items = json.loads(raw[raw.index("["):]) if "[" in raw else []
-    except Exception as e:  # noqa: BLE001 - QMD down: degrade to a bounded scan, say so
+        superset_items = _qmd_search(cfg, terms, n, collections, semantic)
+    except FileNotFoundError:
+        return fallback_search(cfg, terms, n, layers, reason="qmd not installed")
+    except Exception as e:  # noqa: BLE001
         return fallback_search(cfg, terms, n, layers, reason=str(e))
-    hits = []
-    for it in items:
-        path = _to_disk(cfg, it.get("file") or it.get("path") or "")
-        snippet = re.sub(r"^@@[^@]*@@\s*(\([^)]*\))?\s*", "", " ".join(str(it.get("snippet") or "").split()))[:400]
-        label = _label(os.path.relpath(path, cfg.vault) if os.path.isabs(path) else path)
-        hits.append({
-            "label": _located_label(path, label, snippet, it.get("line")),
-            "path": path, "title": it.get("title", ""), "score": it.get("score"),
-            "line": it.get("line"), "docid": it.get("docid", ""),
-            "snippet": snippet,
-        })
+    superset_paths = set()
+    for it in superset_items:
+        it["_disk_path"] = _to_disk(cfg, it.get("file") or it.get("path") or "")
+        superset_paths.add(it["_disk_path"])
+    per_term_limit = max(25 * n, 200)
+    per_term_hits = []
+    for word in words:
+        try:
+            items = _qmd_search(cfg, word, per_term_limit, collections, semantic)
+        except FileNotFoundError:
+            return fallback_search(cfg, terms, n, layers, reason="qmd not installed")
+        except Exception as e:  # noqa: BLE001
+            return fallback_search(cfg, terms, n, layers, reason=str(e))
+        for it in items:
+            it["_disk_path"] = _to_disk(cfg, it.get("file") or it.get("path") or "")
+        per_term_hits.append(items)
+    merged = _majority_merge(per_term_hits, len(words), n)
+    hits = [_build_hit(cfg, it) for it in superset_items]
+    seen_paths = set(superset_paths)
+    remaining = n - len(hits)
+    for it in merged:
+        if remaining <= 0:
+            break
+        if it["_disk_path"] not in seen_paths:
+            hits.append(_build_hit(cfg, it))
+            seen_paths.add(it["_disk_path"])
+            remaining -= 1
+    for it in superset_items:
+        it.pop("_disk_path", None)
+    for it in merged:
+        it.pop("_disk_path", None)
     return hits
 
 
@@ -153,13 +230,17 @@ def fallback_search(cfg: Config, terms: str, n: int, layers=None, reason: str = 
             except OSError:
                 continue
             low = text.lower()
+            matched = [w for w in words if w in low]
+            if not matched or len(matched) <= len(words) / 2:
+                continue
             score = sum(low.count(w) for w in words)
-            if score and all(w in low for w in words[:3]):
-                i = min((low.find(w) for w in words if w in low), default=0)
-                located_line = low[:i].count("\n") + 1
-                snippet = " ".join(text[max(0, i - 120): i + 280].split())
-                scored.append({"label": _located_label(p, label, snippet, located_line), "path": str(p), "title": p.stem, "score": score, "line": located_line,
-                               "docid": "", "snippet": " ".join(text[max(0, i - 120): i + 280].split())})
+            if not score:
+                continue
+            i = min((low.find(w) for w in matched), default=0)
+            located_line = low[:i].count("\n") + 1
+            snippet = " ".join(text[max(0, i - 120): i + 280].split())
+            scored.append({"label": _located_label(p, label, snippet, located_line), "path": str(p), "title": p.stem, "score": score, "line": located_line,
+                           "docid": "", "snippet": " ".join(text[max(0, i - 120): i + 280].split())})
     scored.sort(key=lambda h: -h["score"])
     for h in scored:
         h["fallback"] = reason[:120] or "qmd unavailable"
