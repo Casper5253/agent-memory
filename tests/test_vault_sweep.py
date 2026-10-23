@@ -154,7 +154,7 @@ def _build_vault(base: Path) -> Path:
         FIXTURES / "0-Sessions" / "2026" / "01" / "session-unsorted.md",
         vault / "0-Sessions" / "2026" / "01" / "session-unsorted.md",
     )
-    for name in ("session-reattr-misfiled.md", "session-reattr-nosignal.md"):
+    for name in ("session-reattr-misfiled.md", "session-reattr-nosignal.md", "session-reattr-relative.md"):
         content = (FIXTURES / "0-Sessions" / "2026" / "01" / name).read_text(encoding="utf-8")
         (vault / "0-Sessions" / "2026" / "01" / name).write_text(
             content.replace("REPLACE_WORK", work_json), encoding="utf-8",
@@ -298,6 +298,10 @@ class SweepTests(unittest.TestCase):
         ra = plan["re_attribution"]
         nosignal = [i for i in ra["items"] if "reattr-nosignal" in i["note"]]
         self.assertEqual(nosignal, [])
+
+    def test_f_relative_project_files_outweigh_one_foreign_path(self):
+        ra = self._plan()["re_attribution"]
+        self.assertEqual([i for i in ra["items"] if "reattr-relative" in i["note"]], [])
 
     def test_f_auto_apply_false_on_every_item(self):
         plan = self._plan()

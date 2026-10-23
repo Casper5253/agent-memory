@@ -479,10 +479,13 @@ def _scan_re_attribution(vault: Path) -> dict:
         filed = fm.get("project", "").strip()
         if not filed:
             continue
-        files = _extract_artifact_paths(text)
+        # Legacy notes list files inside the session folder relative to it, and that folder was the filed project's root.
+        filed_root = _repo_root(vault, filed) or _first_root(vault, filed)
+        files = [f if os.path.isabs(f) or not filed_root else str(filed_root / f) for f in _extract_artifact_paths(text)]
         note_text = _extract_note_text(text)
         try:
-            result = attribute(cwd="", map_path=map_path, files=files, text=note_text, create=False)
+            result = attribute(cwd=str(filed_root) if filed_root else "", map_path=map_path, files=files,
+                               text=note_text, create=False)
         except Exception:
             continue
         if result.method != "content":
@@ -520,6 +523,17 @@ def _repo_root(vault: Path, project: str) -> Path | None:
             for root in entry.get("roots", []):
                 if (Path(root) / ".git").exists():
                     return Path(root)
+    return None
+
+
+def _first_root(vault: Path, project: str) -> Path | None:
+    try:
+        mapping = json.loads((vault / "_meta" / "projects.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for entry in mapping.get("projects", []):
+        if entry.get("name") == project and entry.get("roots"):
+            return Path(entry["roots"][0])
     return None
 
 
