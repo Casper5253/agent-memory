@@ -1,4 +1,4 @@
-"""WP-S1 vault sweep dry-run plan, tested on a synthetic vault only."""
+"""WP-S1 vault sweep dry-run plan and apply, tested on a synthetic vault only."""
 import importlib.util
 import json
 import os
@@ -59,6 +59,10 @@ def _build_vault(base: Path) -> Path:
     for d in ("_meta", "1-Projects/demo-app", "1-Projects/my-lib",
               "0-Sessions/2026/01", "Projects-Old"):
         (vault / d).mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        FIXTURES / "Projects-Old" / "readme.txt",
+        vault / "Projects-Old" / "readme.txt",
+    )
     shutil.copy2(FIXTURES / "_meta" / "projects.json", vault / "_meta" / "projects.json")
     proj_text = (vault / "_meta" / "projects.json").read_text(encoding="utf-8")
     work_json = str(work).replace("\\", "/")
@@ -564,6 +568,348 @@ class SweepTests(unittest.TestCase):
                 frag_item = frags["Main-copy"]
                 self.assertEqual(frag_item["evidence"], "guess")
                 self.assertFalse(frag_item["auto_apply"])
+        finally:
+            tmp.cleanup()
+
+
+def _count_files_in(path: Path) -> int:
+    n = 0
+    for _, _, files in os.walk(path):
+        n += len(files)
+    return n
+
+
+def _build_git_vault(base: Path) -> Path:
+    vault = _build_vault(base)
+    env = dict(os.environ)
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    for args in [
+        ["git", "init", "-q", "-b", "main"],
+        ["git", "config", "user.email", "test@test"],
+        ["git", "config", "user.name", "Test"],
+        ["git", "add", "-A"],
+        ["git", "commit", "-q", "-m", "initial"],
+    ]:
+        subprocess.run(args, cwd=str(vault), env=env, capture_output=True, timeout=10)
+    return vault
+
+
+def _session_bytes(vault: Path) -> dict[str, bytes]:
+    result = {}
+    sess = vault / "0-Sessions"
+    if sess.is_dir():
+        for dirpath, _, filenames in os.walk(sess):
+            for fn in filenames:
+                p = Path(dirpath) / fn
+                result[str(p.resolve())] = p.read_bytes()
+    return result
+
+
+def _run_sweep(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    return subprocess.run(
+        [sys.executable, str(TOOLS / "vault_sweep.py")] + list(args),
+        cwd=str(cwd) if cwd else None,
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+
+
+def _snapshot_no_git(vault: Path) -> dict[str, bytes]:
+    snap = {}
+    for dirpath, dirnames, filenames in os.walk(vault):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for fn in filenames:
+            p = Path(dirpath) / fn
+            snap[str(p.resolve())] = p.read_bytes()
+    return snap
+
+
+def _snapshot_content(vault: Path) -> dict[str, bytes]:
+    snap = {}
+    for dirpath, dirnames, filenames in os.walk(vault):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for fn in filenames:
+            p = Path(dirpath) / fn
+            rel = p.resolve().relative_to(vault.resolve())
+            if str(rel).startswith("_meta"):
+                continue
+            snap[str(p.resolve())] = p.read_bytes()
+    return snap
+
+
+class SweepApplyOnlyAutoTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = _Tmp(ROOT / ".audit" / "tmp")
+        cls.vault = _build_git_vault(cls._tmp.path)
+        cls.vs = _load_sweep()
+        cls.plan = cls.vs.build_plan(cls.vault)
+        cls.plan["vault_path"] = str(cls.vault)
+        cls.plan_path = cls._tmp.path / "plan.json"
+        cls.plan_path.write_text(
+            json.dumps(cls.plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8",
+        )
+        cls._session_bytes_before = _session_bytes(cls.vault)
+        cls._file_count_before = _count_files_in(cls.vault)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def test_a_only_auto_applies_worktree_fragment(self):
+        result = _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        frag_dir = self.vault / "1-Projects" / "frag-a"
+        self.assertFalse(frag_dir.exists(), "frag-a should have been moved to archive")
+        archive = self.vault / "4-Archive" / "merged" / "frag-a"
+        self.assertTrue(archive.exists(), "frag-a should be in 4-Archive/merged/")
+
+    def test_b_only_auto_does_not_apply_guess_fragments(self):
+        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        look = self.vault / "1-Projects" / "look-alike-demo"
+        self.assertTrue(look.exists(), "look-alike-demo (guess) should not be moved by --only-auto")
+
+    def test_c_session_note_bytes_unchanged(self):
+        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        session_after = _session_bytes(self.vault)
+        self.assertEqual(self._session_bytes_before, session_after)
+
+    def test_d_file_count_never_drops(self):
+        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        count_after = _count_files_in(self.vault)
+        self.assertGreaterEqual(count_after, self._file_count_before)
+
+    def test_e_leftover_folder_archived(self):
+        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        leftover = self.vault / "Projects-Old"
+        self.assertFalse(leftover.exists(), "Projects-Old should be moved")
+        archived = self.vault / "4-Archive" / "Projects-Old"
+        self.assertTrue(archived.exists(), "Projects-Old should be in 4-Archive/")
+
+    def test_f_stale_line_prefixed(self):
+        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        demo_note = self.vault / "1-Projects" / "demo-app" / "demo-app.md"
+        text = demo_note.read_text(encoding="utf-8")
+        self.assertIn("(as of unknown commit)", text)
+        self.assertIn("abc1234", text)
+
+    def test_g_pause_removed_when_not_preexisting(self):
+        pause = self.vault / "_meta" / "PAUSE"
+        if pause.exists():
+            pause.unlink()
+        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        self.assertFalse(pause.exists(), "PAUSE should be removed after apply if it didn't exist before")
+
+    def test_h_log_written(self):
+        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        logs = list((self.vault / "_meta" / "logs").glob("sweep-*.jsonl"))
+        self.assertTrue(len(logs) >= 1, "apply log should be written")
+        entries = [json.loads(line) for line in logs[0].read_text(encoding="utf-8").splitlines() if line.strip()]
+        snapshot_entries = [e for e in entries if e.get("action") == "snapshot"]
+        self.assertTrue(len(snapshot_entries) >= 1)
+        self.assertEqual(snapshot_entries[-1]["status"], "ok")
+        self.assertIn("sha", snapshot_entries[-1])
+
+    def test_i_rerun_is_noop(self):
+        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        snap_after_first = _snapshot_content(self.vault)
+        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        snap_after_second = _snapshot_content(self.vault)
+        self.assertEqual(snap_after_first, snap_after_second)
+
+
+class SweepApplyGitResetTest(unittest.TestCase):
+    def test_git_reset_to_snapshot_restores_files(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = _build_git_vault(tmp.path)
+            vs = _load_sweep()
+            plan = vs.build_plan(vault)
+            plan["vault_path"] = str(vault)
+            plan_path = tmp.path / "plan.json"
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            result = _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path), "--only-auto")
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            sha = None
+            for line in result.stdout.splitlines():
+                if line.startswith("sweep snapshot"):
+                    sha = line.split()[-1]
+                    break
+            self.assertIsNotNone(sha, f"snapshot SHA not found in output: {result.stdout}")
+            self.assertRegex(sha, r"^[0-9a-f]{7,}$")
+            leftover = vault / "Projects-Old"
+            self.assertFalse(leftover.exists(), "Projects-Old should be moved by apply")
+            env = dict(os.environ)
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            reset_result = subprocess.run(
+                ["git", "reset", "--hard", sha],
+                cwd=str(vault), env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(reset_result.returncode, 0, msg=reset_result.stderr)
+            leftover_restored = vault / "Projects-Old"
+            self.assertTrue(leftover_restored.exists(), "Projects-Old should be restored after reset to snapshot")
+        finally:
+            tmp.cleanup()
+
+
+class SweepApplyVaultMismatchTests(unittest.TestCase):
+    def test_plan_from_another_vault_is_refused(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = _build_git_vault(tmp.path)
+            plan = {"vault_path": "/nonexistent/other/vault", "fragments": [], "leftover_folders": [],
+                    "stale_state_lines": [], "broken_links": [], "unsorted_sessions": [],
+                    "re_attribution": {"items": [], "calibration_sample": []}}
+            plan_path = tmp.path / "bad-plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            result = _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("different vault", result.stderr)
+        finally:
+            tmp.cleanup()
+
+    def test_plan_inside_vault_is_refused(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = _build_git_vault(tmp.path)
+            plan_path = vault / "plan.json"
+            plan_path.write_text("{}", encoding="utf-8")
+            result = _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path))
+            self.assertNotEqual(result.returncode, 0)
+        finally:
+            tmp.cleanup()
+
+    def test_non_git_vault_is_refused(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = tmp.path / "no-git-vault"
+            vault.mkdir(parents=True)
+            (vault / "_meta").mkdir()
+            plan = {"vault_path": str(vault), "fragments": [], "leftover_folders": [],
+                    "stale_state_lines": [], "broken_links": [], "unsorted_sessions": [],
+                    "re_attribution": {"items": [], "calibration_sample": []}}
+            plan_path = tmp.path / "plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            result = _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("not a git", result.stderr.lower())
+        finally:
+            tmp.cleanup()
+
+
+class SweepApplyPauseTests(unittest.TestCase):
+    def test_pause_preexisting_is_preserved(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = _build_git_vault(tmp.path)
+            pause = vault / "_meta" / "PAUSE"
+            pause.parent.mkdir(parents=True, exist_ok=True)
+            pause.write_text("pre-existing", encoding="utf-8")
+            vs = _load_sweep()
+            plan = vs.build_plan(vault)
+            plan["vault_path"] = str(vault)
+            plan_path = tmp.path / "plan.json"
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path), "--only-auto")
+            self.assertTrue(pause.exists(), "pre-existing PAUSE should still exist after apply")
+            self.assertEqual(pause.read_text(encoding="utf-8"), "pre-existing")
+        finally:
+            tmp.cleanup()
+
+    def test_pause_created_then_removed(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = _build_git_vault(tmp.path)
+            pause = vault / "_meta" / "PAUSE"
+            if pause.exists():
+                pause.unlink()
+            vs = _load_sweep()
+            plan = vs.build_plan(vault)
+            plan["vault_path"] = str(vault)
+            plan_path = tmp.path / "plan.json"
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path), "--only-auto")
+            self.assertFalse(pause.exists(), "PAUSE should be removed after apply when it was not pre-existing")
+        finally:
+            tmp.cleanup()
+
+
+class SweepApplyDryRunTests(unittest.TestCase):
+    def test_dry_run_writes_nothing(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = _build_git_vault(tmp.path)
+            snap_before = _snapshot(vault)
+            vs = _load_sweep()
+            plan = vs.build_plan(vault)
+            plan["vault_path"] = str(vault)
+            plan_path = tmp.path / "plan.json"
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            result = _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path), "--dry-run")
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertIn("Dry run", result.stdout)
+            snap_after = _snapshot(vault)
+            self.assertEqual(snap_before, snap_after)
+        finally:
+            tmp.cleanup()
+
+
+class SweepApplyFragmentPendingAppendTests(unittest.TestCase):
+    def test_fragment_state_appended_to_parent_pending(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = tmp.path / "vault"
+            work = tmp.path / "work"
+            for d in ("_meta", "1-Projects/parent-proj", "1-Projects/parent-proj-wt"):
+                (vault / d).mkdir(parents=True)
+            repo = work / "parent-repo"
+            repo.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=repo)
+            _git("config", "user.email", "t@t", cwd=repo)
+            _git("config", "user.name", "T", cwd=repo)
+            (repo / "f.txt").write_text("p", encoding="utf-8")
+            _git("add", ".", cwd=repo)
+            _git("commit", "-q", "-m", "init", cwd=repo)
+            _git("worktree", "add", "-q", str(vault / "1-Projects" / "parent-proj-wt"), "HEAD", cwd=repo)
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "parent-proj", "roots": [str(repo)], "status": "active"},
+                {"name": "parent-proj-wt", "roots": [str(vault / "1-Projects" / "parent-proj-wt")], "status": "active"}
+            ]}), encoding="utf-8")
+            parent_note = vault / "1-Projects" / "parent-proj" / "parent-proj.md"
+            parent_note.write_text(
+                "---\ntype: project\n---\n# Parent\n\n"
+                "## Current state (maintained by agentmem)\n\n"
+                "<!-- agentmem:state:begin -->\n- state\n<!-- agentmem:state:end -->\n\n"
+                "## Pending\n\n"
+                "<!-- agentmem:pending:begin -->\n<!-- agentmem:pending:end -->\n",
+                encoding="utf-8",
+            )
+            frag_note = vault / "1-Projects" / "parent-proj-wt" / "parent-proj-wt.md"
+            frag_note.write_text(
+                "---\ntype: project\n---\n# WT\n\n"
+                "<!-- agentmem:state:begin -->\n- frag state\n<!-- agentmem:state:end -->\n\n"
+                "<!-- agentmem:pending:begin -->\n- frag pending\n<!-- agentmem:pending:end -->\n",
+                encoding="utf-8",
+            )
+            _git("init", "-q", "-b", "main", cwd=vault)
+            _git("config", "user.email", "t@t", cwd=vault)
+            _git("config", "user.name", "T", cwd=vault)
+            _git("add", "-A", cwd=vault)
+            _git("commit", "-q", "-m", "init", cwd=vault)
+            vs = _load_sweep()
+            plan = vs.build_plan(vault)
+            plan["vault_path"] = str(vault)
+            frags = {f["folder"]: f for f in plan["fragments"]}
+            self.assertIn("parent-proj-wt", frags)
+            self.assertTrue(frags["parent-proj-wt"]["auto_apply"])
+            plan_path = tmp.path / "plan.json"
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path), "--only-auto")
+            text = parent_note.read_text(encoding="utf-8")
+            self.assertIn("Merged from parent-proj-wt", text)
+            self.assertIn("frag state", text)
+            self.assertIn("frag pending", text)
         finally:
             tmp.cleanup()
 

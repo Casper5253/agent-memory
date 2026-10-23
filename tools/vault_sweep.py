@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Vault hygiene sweep, dry-run plan (WP-S1). Stdlib only; reads a vault, writes a plan."""
+"""Vault hygiene sweep, dry-run plan and apply (WP-S1). Stdlib only."""
 import argparse
+import datetime
 import json
+import shutil
 import subprocess
 import os
 import random
@@ -19,6 +21,9 @@ PARA_KNOWN = {
 }
 STATE_BEGIN = "<!-- agentmem:state:begin -->"
 STATE_END = "<!-- agentmem:state:end -->"
+PENDING_BEGIN = "<!-- agentmem:pending:begin -->"
+PENDING_END = "<!-- agentmem:pending:end -->"
+STALE_PREFIX = "(as of unknown commit) "
 HEX7 = re.compile(r"\b[0-9a-fA-F]{7,}\b")
 REPO_KW = ("repo", "repository", "head", "commit")
 FRAG_SUFFIXES = ("-worktree", "-wt", "-copy", "-tmp", "-dev", "-feature")
@@ -276,7 +281,7 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
 
 def _git(args: list, cwd: Path) -> "str | None":
     try:
-        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout if out.returncode == 0 else None
@@ -541,24 +546,333 @@ def build_plan(vault: Path) -> dict:
     }
 
 
+def _archive_dest(base: Path, name: str) -> Path:
+    target = base / name
+    if not target.exists():
+        return target
+    i = 2
+    while True:
+        candidate = base / f"{name}-{i}"
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
+def _block_text(text: str, begin: str, end: str) -> str:
+    i, j = text.find(begin), text.find(end)
+    if i < 0 or j < i:
+        return ""
+    return text[i + len(begin):j].strip()
+
+
+def _append_to_pending(note: Path, heading: str, content: str) -> None:
+    text = note.read_text(encoding="utf-8")
+    i = text.find(PENDING_BEGIN)
+    j = text.find(PENDING_END)
+    if i < 0 or j < i:
+        raise ValueError(f"no pending block in {note}")
+    existing = text[i + len(PENDING_BEGIN):j]
+    insertion = f"\n{heading}\n\n{content}\n"
+    if existing.strip():
+        new_text = text[:i + len(PENDING_BEGIN)] + existing.rstrip("\n") + "\n" + insertion + text[j:]
+    else:
+        new_text = text[:i + len(PENDING_BEGIN)] + insertion + text[j:]
+    note.write_text(new_text, encoding="utf-8")
+
+
+def _find_project_entry(data: dict, name: str, folder_path: Path | None = None) -> dict | None:
+    for entry in data.get("projects", []):
+        if entry.get("name") == name:
+            return entry
+    if folder_path is not None:
+        folder_norm = os.path.normcase(str(folder_path.resolve()))
+        for entry in data.get("projects", []):
+            for root in entry.get("roots", []):
+                if os.path.normcase(str(Path(root).resolve())) == folder_norm:
+                    return entry
+    return None
+
+
+def _update_projects_json(vault: Path, frag_folder: str, parent_folder: str) -> None:
+    pjson = vault / "_meta" / "projects.json"
+    if not pjson.exists():
+        return
+    data = json.loads(pjson.read_text(encoding="utf-8"))
+    frag_dir = vault / "1-Projects" / frag_folder
+    parent_dir = vault / "1-Projects" / parent_folder
+    frag_entry = _find_project_entry(data, frag_folder, frag_dir)
+    parent_entry = _find_project_entry(data, parent_folder, parent_dir)
+    if frag_entry and parent_entry:
+        frag_roots = frag_entry.get("roots", [])
+        parent_roots = parent_entry.setdefault("roots", [])
+        for r in frag_roots:
+            if r not in parent_roots:
+                parent_roots.append(r)
+        data["projects"] = [e for e in data["projects"] if e is not frag_entry]
+    elif frag_entry and not parent_entry:
+        data["projects"] = [e for e in data["projects"] if e is not frag_entry]
+    pjson.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _apply_fragment(vault: Path, item: dict, date_str: str) -> dict:
+    folder = item["folder"]
+    parent = item["proposed_parent"]
+    entry = {"action": "fragment_merge", "fragment": folder, "parent": parent}
+    frag_dir = vault / "1-Projects" / folder
+    if not frag_dir.exists():
+        entry["status"] = "skip"
+        entry["reason"] = "already merged"
+        return entry
+    parent_dir = vault / "1-Projects" / parent
+    if not parent_dir.exists():
+        entry["status"] = "error"
+        entry["reason"] = "parent folder not found"
+        return entry
+    state_content = ""
+    pending_content = ""
+    frag_note = frag_dir / f"{folder}.md"
+    if frag_note.is_file():
+        try:
+            frag_text = frag_note.read_text(encoding="utf-8")
+            state_content = _block_text(frag_text, STATE_BEGIN, STATE_END)
+            pending_content = _block_text(frag_text, PENDING_BEGIN, PENDING_END)
+        except OSError as e:
+            entry["status"] = "error"
+            entry["reason"] = str(e)
+            return entry
+    dest = _archive_dest(vault / "4-Archive" / "merged", folder)
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(frag_dir), str(dest))
+    except OSError as e:
+        entry["status"] = "error"
+        entry["reason"] = f"move failed: {e}"
+        return entry
+    parent_note = parent_dir / f"{parent}.md"
+    if parent_note.is_file() and (state_content or pending_content):
+        heading = f"### Merged from {folder} ({date_str})"
+        parts = [p for p in (state_content, pending_content) if p]
+        try:
+            _append_to_pending(parent_note, heading, "\n\n".join(parts))
+        except (OSError, ValueError) as e:
+            entry["status"] = "error"
+            entry["reason"] = f"pending append failed: {e}"
+            return entry
+    try:
+        _update_projects_json(vault, folder, parent)
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        entry["status"] = "error"
+        entry["reason"] = f"projects.json update failed: {e}"
+        return entry
+    entry["status"] = "ok"
+    entry["dest"] = _rel(dest, vault)
+    return entry
+
+
+def _apply_leftover(vault: Path, item: dict) -> dict:
+    folder = item["folder"]
+    entry = {"action": "leftover_archive", "folder": folder}
+    src = vault / folder
+    if not src.exists():
+        entry["status"] = "skip"
+        entry["reason"] = "already archived"
+        return entry
+    dest = _archive_dest(vault / "4-Archive", folder)
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+    except OSError as e:
+        entry["status"] = "error"
+        entry["reason"] = str(e)
+        return entry
+    entry["status"] = "ok"
+    entry["dest"] = _rel(dest, vault)
+    return entry
+
+
+def _apply_stale_line(vault: Path, item: dict) -> dict:
+    note_rel = item["note"]
+    target_line = item["line"]
+    entry = {"action": "stale_line", "note": note_rel, "line": target_line}
+    note_path = vault / note_rel.replace("/", os.sep)
+    if not note_path.is_file():
+        entry["status"] = "skip"
+        entry["reason"] = "file not found"
+        return entry
+    try:
+        text = note_path.read_text(encoding="utf-8")
+    except OSError as e:
+        entry["status"] = "error"
+        entry["reason"] = str(e)
+        return entry
+    lines = text.splitlines(keepends=True)
+    found = False
+    for idx, raw in enumerate(lines):
+        if raw.strip() == target_line:
+            if raw.lstrip().startswith(STALE_PREFIX):
+                entry["status"] = "skip"
+                entry["reason"] = "already prefixed"
+                return entry
+            indent = raw[: len(raw) - len(raw.lstrip())]
+            new_line = indent + STALE_PREFIX + raw.lstrip()
+            if not new_line.endswith("\n"):
+                if raw.endswith("\n"):
+                    new_line += "\n"
+            lines[idx] = new_line
+            found = True
+            break
+    if not found:
+        entry["status"] = "skip"
+        entry["reason"] = "line not found"
+        return entry
+    try:
+        note_path.write_text("".join(lines), encoding="utf-8")
+    except OSError as e:
+        entry["status"] = "error"
+        entry["reason"] = str(e)
+        return entry
+    entry["status"] = "ok"
+    return entry
+
+
+def _now_iso() -> str:
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _today_str() -> str:
+    return datetime.date.today().isoformat()
+
+
+def _count_files(path: Path) -> int:
+    n = 0
+    for _, _, files in os.walk(path):
+        n += len(files)
+    return n
+
+
+def apply_plan(vault: Path, plan: dict, only_auto: bool = False, dry_run: bool = False) -> dict:
+    vault = vault.resolve()
+    if not (vault / ".git").exists():
+        return {"error": "vault is not a git repository", "ok": False}
+    pause_path = vault / "_meta" / "PAUSE"
+    pause_existed = pause_path.exists()
+    date_str = _today_str()
+    actions = []
+    for item in plan.get("fragments", []):
+        if only_auto and not item.get("auto_apply"):
+            continue
+        actions.append(("fragment", item))
+    for item in plan.get("leftover_folders", []):
+        if only_auto and not item.get("auto_apply"):
+            continue
+        actions.append(("leftover", item))
+    for item in plan.get("stale_state_lines", []):
+        if only_auto and not item.get("auto_apply"):
+            continue
+        if not item.get("stale", False):
+            continue
+        actions.append(("stale", item))
+    if dry_run:
+        print("Dry run — no changes written.")
+        if not pause_existed:
+            print(f"  Would write {pause_path}")
+        print(f"  Would commit snapshot (sweep snapshot {date_str})")
+        for kind, item in actions:
+            if kind == "fragment":
+                print(f"  Would merge fragment {item['folder']} -> {item['proposed_parent']}")
+            elif kind == "leftover":
+                print(f"  Would archive leftover folder {item['folder']}")
+            elif kind == "stale":
+                print(f"  Would prefix stale line in {item['note']}: {item['line']}")
+        log_path = vault / "_meta" / "logs" / f"sweep-{date_str}.jsonl"
+        print(f"  Would write apply log {log_path}")
+        if not pause_existed:
+            print(f"  Would remove {pause_path}")
+        return {"ok": True, "actions": len(actions), "dry_run": True}
+    if not pause_existed:
+        pause_path.parent.mkdir(parents=True, exist_ok=True)
+        pause_path.write_text("", encoding="utf-8")
+    _git(["add", "-A"], vault)
+    commit_result = _git(["commit", "-q", "--allow-empty", "-m", f"sweep snapshot {date_str}"], vault)
+    if commit_result is None:
+        if not pause_existed and pause_path.exists():
+            pause_path.unlink(missing_ok=True)
+        return {"error": "snapshot commit failed", "ok": False}
+    sha = _git(["rev-parse", "HEAD"], vault)
+    if sha is None:
+        return {"error": "could not read snapshot SHA", "ok": False}
+    sha = sha.strip()
+    print(f"sweep snapshot {date_str}: {sha}")
+    log_entries = [{"ts": _now_iso(), "action": "snapshot", "sha": sha, "status": "ok"}]
+    for kind, item in actions:
+        if kind == "fragment":
+            result = _apply_fragment(vault, item, date_str)
+        elif kind == "leftover":
+            result = _apply_leftover(vault, item)
+        elif kind == "stale":
+            result = _apply_stale_line(vault, item)
+        else:
+            continue
+        result["ts"] = _now_iso()
+        log_entries.append(result)
+    log_path = vault / "_meta" / "logs" / f"sweep-{date_str}.jsonl"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "w", encoding="utf-8") as f:
+            for entry in log_entries:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"warning: could not write apply log: {e}", file=sys.stderr)
+    if not pause_existed:
+        pause_path.unlink(missing_ok=True)
+    return {"ok": True, "sha": sha, "actions": len(actions), "log_entries": log_entries}
+
+
 def main():
     ap = argparse.ArgumentParser(prog="vault_sweep")
     sub = ap.add_subparsers(dest="command")
     pl = sub.add_parser("plan", help="Dry-run vault hygiene plan")
     pl.add_argument("--vault", required=True)
     pl.add_argument("--out", required=True)
+    aply = sub.add_parser("apply", help="Apply an approved sweep plan")
+    aply.add_argument("--vault", required=True)
+    aply.add_argument("--plan", required=True)
+    aply.add_argument("--only-auto", action="store_true")
+    aply.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    if args.command != "plan":
-        ap.print_help()
-        return 1
-    vault = Path(args.vault).resolve()
-    out = Path(args.out).resolve()
-    if out.is_relative_to(vault):
-        ap.error(f"--out must be outside the vault, got {out}")
-    plan = build_plan(vault)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return 0
+    if args.command == "plan":
+        vault = Path(args.vault).resolve()
+        out = Path(args.out).resolve()
+        if out.is_relative_to(vault):
+            ap.error(f"--out must be outside the vault, got {out}")
+        plan = build_plan(vault)
+        plan["vault_path"] = str(vault)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(plan, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return 0
+    if args.command == "apply":
+        vault = Path(args.vault).resolve()
+        plan_path = Path(args.plan).resolve()
+        if plan_path.is_relative_to(vault):
+            ap.error(f"--plan must be outside the vault, got {plan_path}")
+        if not plan_path.is_file():
+            ap.error(f"plan file not found: {plan_path}")
+        try:
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            ap.error(f"cannot read plan: {e}")
+        plan_vault = plan.get("vault_path", "")
+        if not plan_vault:
+            ap.error("plan has no vault_path; regenerate with 'vault_sweep plan'")
+        if os.path.normcase(str(Path(plan_vault).resolve())) != os.path.normcase(str(vault)):
+            ap.error(f"plan was produced for a different vault: {plan_vault}")
+        result = apply_plan(vault, plan, only_auto=args.only_auto, dry_run=args.dry_run)
+        if not result.get("ok"):
+            print(f"error: {result.get('error', 'unknown')}", file=sys.stderr)
+            return 1
+        return 0
+    ap.print_help()
+    return 1
 
 
 if __name__ == "__main__":
