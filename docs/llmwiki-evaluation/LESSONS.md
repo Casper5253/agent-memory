@@ -74,3 +74,7 @@ The data contract left the proposal payload, restore semantics, import identity 
 - Writing every fix as a test that fails before the fix, then checking that by temporarily restoring the old code.
 - Rulings recorded in documents and the decision log, not only in chat, so later agents follow them.
 - Subtracting a fragile rule when two patch rounds on it failed, instead of patching a third time.
+
+## Accepted limitations
+
+- Capture receipts carry an unkeyed self-hash. A process with write access to the vault can rewrite a receipt's source excerpts and recompute the hash, and the import will accept the rewritten text. This is outside the single-user local threat model in 04: such a process could equally edit the knowledge database. A keyed or external approval channel is listed in 04 as the required step if hostile local agents ever come into scope.
