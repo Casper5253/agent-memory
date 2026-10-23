@@ -96,12 +96,23 @@ class Manifest:
     def get(self, agent, session_id):
         return self.db.execute("SELECT * FROM sessions WHERE agent=? AND session_id=?", (agent, session_id)).fetchone()
 
-    def ready(self, settle_s: float, max_attempts: int, now=None):
-        """Sessions to capture now: ended or idle past the settle window, and not in retry backoff."""
+    def ready(self, settle_s: float, _max_attempts=None, now=None):
+        """Sessions to capture now: ended or idle past the settle window, and not in retry backoff.
+
+        Errors are retried indefinitely under the capped backoff (see fail). The old attempt cap is gone: a
+        transient failure, such as a transcript that is not written yet, must not be given up on. Use failed()
+        to list the sessions that have exhausted a given number of attempts.
+        """
         now = now or time.time()
         return self.db.execute(
-            "SELECT * FROM sessions WHERE status IN ('pending','error') AND attempts < ? AND COALESCE(next_try,0) <= ?"
-            " AND (end_seen = 1 OR last_activity <= ?) ORDER BY last_activity", (max_attempts, now, now - settle_s)).fetchall()
+            "SELECT * FROM sessions WHERE status IN ('pending','error') AND COALESCE(next_try,0) <= ?"
+            " AND (end_seen = 1 OR last_activity <= ?) ORDER BY last_activity", (now, now - settle_s)).fetchall()
+
+    def failed(self, max_attempts: int):
+        """Sessions in error after at least max_attempts failures, with the reason from the latest failure."""
+        return self.db.execute(
+            "SELECT agent, session_id, attempts, last_error, next_try, updated FROM sessions"
+            " WHERE status='error' AND attempts >= ? ORDER BY updated DESC", (max_attempts,)).fetchall()
 
     def mark(self, agent, session_id, **fields):
         fields["updated"] = time.time()
