@@ -2,6 +2,7 @@
 """Vault hygiene sweep, dry-run plan (WP-S1). Stdlib only; reads a vault, writes a plan."""
 import argparse
 import json
+import subprocess
 import os
 import random
 import re
@@ -235,7 +236,8 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
                     parent_root = _resolved(proj_folders[parent])
                     if frag_root == parent_root:
                         evidence = "guess"
-                    elif _resolved(parent_gd) == _resolved(proj_folders[parent] / ".git"):
+                    elif (_resolved(parent_gd) == _resolved(proj_folders[parent] / ".git")
+                          and frag_root in _registered_worktrees(proj_folders[parent])):
                         evidence = "worktree"
                     else:
                         evidence = "guess"
@@ -270,6 +272,19 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
             auto = evidence == "worktree"
             items.append({"folder": name, "proposed_parent": parent, "evidence": evidence, "auto_apply": auto})
     return items
+
+
+def _registered_worktrees(repo_root: Path) -> set[str]:
+    """Worktrees git itself has registered for this repository; empty when git cannot say."""
+    try:
+        out = subprocess.run(["git", "-C", str(repo_root), "worktree", "list", "--porcelain"],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if out.returncode != 0:
+        return set()
+    return {_resolved(Path(line[len("worktree "):])) for line in out.stdout.splitlines()
+            if line.startswith("worktree ")}
 
 
 def _resolved(p: Path) -> str:

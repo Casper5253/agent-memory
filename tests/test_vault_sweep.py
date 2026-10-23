@@ -440,6 +440,34 @@ class SweepTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_hand_made_worktree_files_are_not_registration(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault, work = tmp.path / "vault", tmp.path / "work"
+            for d in ("_meta", "1-Projects/Parent", "1-Projects/Parent Fake"):
+                (vault / d).mkdir(parents=True)
+            parent = work / "parent"
+            parent.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=parent)
+            _git("config", "user.email", "test@test", cwd=parent)
+            _git("config", "user.name", "Test", cwd=parent)
+            (parent / "f.txt").write_text("p", encoding="utf-8")
+            _git("add", ".", cwd=parent)
+            _git("commit", "-q", "-m", "init", cwd=parent)
+            frag, admin = work / "parent-fake", work / "unregistered-admin"
+            frag.mkdir()
+            admin.mkdir()
+            (frag / ".git").write_text(f"gitdir: {admin}\n", encoding="utf-8")
+            (admin / "gitdir").write_text(f"{frag / '.git'}\n", encoding="utf-8")
+            (admin / "commondir").write_text(f"{parent / '.git'}\n", encoding="utf-8")
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "Parent", "roots": [str(parent)], "status": "active"},
+                {"name": "Parent Fake", "roots": [str(frag)], "status": "active"}]}), encoding="utf-8")
+            frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
+            self.assertFalse(frags.get("Parent Fake", {"auto_apply": False})["auto_apply"])
+        finally:
+            tmp.cleanup()
+
     def test_ambiguous_root_marked_guess(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
