@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "project": "Synthetic Lifecycle",
+  "initial": {"storage": "json", "reason": "readable fixtures", "next": "choose transactional storage", "open": []},
+  "steps": [
+    {"id": "01-start", "kind": "read", "agent": 0},
+    {"id": "02-decision", "kind": "work", "agent": 1, "storage": "sqlite", "reason": "atomic updates", "next": "add malformed-input coverage", "commit": true},
+    {"id": "03-end", "kind": "end", "session": "02-decision"},
+    {"id": "04-inherit", "kind": "read", "agent": 0},
+    {"id": "05-reverse", "kind": "work", "agent": 1, "storage": "json", "reason": "portable review", "next": "add malformed-input coverage", "commit": true},
+    {"id": "06-unfinished", "kind": "work", "agent": 0, "open": ["malformed-input coverage remains unfinished"], "next": "finish malformed-input coverage", "commit": false, "delivery": "no_end"},
+    {"id": "07-before-stop", "kind": "kill", "agent": 1, "open": ["malformed-input coverage remains unfinished", "interrupted test-plan work remains unfinished"], "next": "recover interrupted work"},
+    {"id": "08-unaged-drain", "kind": "drain", "session": "06-unfinished"}
+  ]
+}
