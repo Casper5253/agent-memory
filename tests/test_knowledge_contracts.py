@@ -528,6 +528,44 @@ class BaselineSearchContract(unittest.TestCase):
         import evaluate_knowledge
         return evaluate_knowledge
 
+    def test_current_capture_isolates_git_and_replays_recorded_head(self):
+        ev = self.evaluator()
+        from agentmem import projects, worker
+        fixtures = ROOT / "tests/fixtures/knowledge"
+        corpus = json.loads((fixtures / "corpus.json").read_text(encoding="utf-8"))
+        session = next(s for s in corpus["sessions"] if s["agent"] == "claude" and "T27" in s["case_ids"])
+        corpus["sessions"] = [session]
+        corpus["projects"] = [p for p in corpus["projects"] if p["id"] == session["project_id"]]
+        corpus["_transcripts_dir"] = str(fixtures)
+        original_head = projects.repo_head
+        original_run = worker.run
+        ceilings = []
+        with tempfile.TemporaryDirectory(dir=str(_repo_tmp())) as directory:
+            base = Path(directory)
+            vault, work, home, roots = ev.make_temp_vault(base, corpus)
+            expected_ceiling = ev.isolated_environment(vault, home)["GIT_CEILING_DIRECTORIES"]
+
+            def capture(*args, **kwargs):
+                ceilings.append(os.environ.get("GIT_CEILING_DIRECTORIES"))
+                return original_run(*args, **kwargs)
+
+            with mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": "caller-ceiling"}):
+                with mock.patch.object(worker, "run", side_effect=capture):
+                    cfg = ev.run_pipeline_for_corpus(vault, work, home, corpus, roots, "", knowledge=False)
+                self.assertEqual(os.environ["GIT_CEILING_DIRECTORIES"], "caller-ceiling")
+            self.assertIs(projects.repo_head, original_head)
+            with self.subTest("isolated capture Git ceiling"):
+                self.assertEqual(ceilings, [expected_ceiling])
+            manifest = Manifest(cfg.manifest_path)
+            try:
+                note = manifest.capture("claude", session["session_id"], session["part"])
+            finally:
+                manifest.close()
+            self.assertIsNotNone(note)
+            text = (vault / note["note_path"]).read_text(encoding="utf-8")
+            with self.subTest("recorded source head survives capture"):
+                self.assertIn("repo_head: " + json.dumps(session["repo_head"]), text)
+
     def test_frozen_formulation_uses_no_entity_or_gold_lookup(self):
         ev = self.evaluator()
         self.assertEqual(ev.formulate_query("Which ALPHA backend should we use for storage now?"), "alpha backend use storage")

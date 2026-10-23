@@ -253,8 +253,8 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index,
     # Replay opencode exports from the copied local JSON files instead of calling CLI.
     original_export_opencode = None
     original_repo_head = None
-    if knowledge:
-        from agentmem import projects as projects_module
+    from agentmem import projects as projects_module
+    if hasattr(projects_module, "repo_head"):
         original_repo_head = projects_module.repo_head
         recorded_heads = {_replace_placeholders(session.get("cwd", ""), work, vault): session.get("repo_head")
                           for session in corpus["sessions"]}
@@ -271,6 +271,8 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index,
 
         adapters_mod.export_opencode = _replay_export_opencode
 
+    previous_git_ceiling = os.environ.get("GIT_CEILING_DIRECTORIES")
+    os.environ["GIT_CEILING_DIRECTORIES"] = isolated_environment(vault, home)["GIT_CEILING_DIRECTORIES"]
     try:
         # Pre-compute digest -> summary_response so the replay summarizer can identify
         # the exact session and part from the digest the pipeline will build.
@@ -328,6 +330,10 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index,
         finally:
             llm.summarize = original_summarize
     finally:
+        if previous_git_ceiling is None:
+            os.environ.pop("GIT_CEILING_DIRECTORIES", None)
+        else:
+            os.environ["GIT_CEILING_DIRECTORIES"] = previous_git_ceiling
         if original_repo_head is not None:
             projects_module.repo_head = original_repo_head
         if original_export_opencode is not None:
