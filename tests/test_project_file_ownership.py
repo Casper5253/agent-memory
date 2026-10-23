@@ -87,6 +87,29 @@ class FileOwnership(unittest.TestCase):
         self.assertEqual(result.signals["Agent Environment"]["files"], 0)
         self.assertEqual(result.method, "cwd-fallback")
 
+    def test_unmapped_repository_credits_most_specific_project_inside_it(self):
+        repository = self.root / "unmapped-repository"
+        nested = repository / "workspace" / "nested-project"
+        nested.mkdir(parents=True)
+        self.git(repository, "init", "-q")
+        self.data["projects"].extend([
+            {"name": "Workspace", "roots": [str(nested.parent)]},
+            {"name": "Nested Project", "roots": [str(nested)]},
+        ])
+        self.save()
+        before = self.map_path.read_bytes()
+        path = str(nested / "code.py")
+        for create in (False, True):
+            with self.subTest(create=create):
+                result = projects.attribute(str(self.parent), self.map_path,
+                    files=[path], text="Inspect " + path, create=create)
+                self.assertEqual((result.project, result.method), ("Nested Project", "content"))
+                self.assertEqual(result.signals["Nested Project"]["files"], 1)
+                self.assertEqual(result.signals["Nested Project"]["paths"], 1)
+                self.assertEqual(result.signals["Workspace"]["files"], 0)
+                self.assertNotIn("Unmapped Repository", result.signals)
+                self.assertEqual(self.map_path.read_bytes(), before)
+
     def test_nested_repository_is_not_hidden_by_cached_outer_repository(self):
         self.git(self.parent, "init", "-q")
         nested = self.parent / "nested"
