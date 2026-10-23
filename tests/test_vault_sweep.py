@@ -1327,6 +1327,31 @@ class SweepApplyCorrectionTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_restore_keeps_changes_made_after_the_sweep(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            plan = {"vault_path": str(vault),
+                    "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
+                    "leftover_folders": [], "stale_state_lines": [], "broken_links": [], "unsorted_sessions": [],
+                    "re_attribution": {"items": [], "calibration_sample": []}}
+            vs = _load_sweep()
+            from unittest.mock import patch
+            with patch("sys.stdout", io.StringIO()):
+                result = vs.apply_plan(vault, plan)
+            self.assertTrue(result.get("ok"), msg=result)
+            backup = Path(result["backup_dir"])
+            parent_note = vault / "1-Projects" / "parent" / "parent.md"
+            later = parent_note.read_bytes() + b"\n- captured after the sweep\n"
+            parent_note.write_bytes(later)
+            restore = _run_sweep("restore", "--backup", str(backup), "--vault", str(vault))
+            self.assertEqual(restore.returncode, 0, msg=restore.stderr)
+            kept = list(backup.parent.glob(f"{backup.name}-pre-restore-*/1-Projects/parent/parent.md"))
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(kept[0].read_bytes(), later)
+        finally:
+            tmp.cleanup()
+
     def test_r2_backup_verification_failure_aborts_before_vault_changes(self):
         from unittest.mock import patch
         tmp = _Tmp(ROOT / ".audit" / "tmp")

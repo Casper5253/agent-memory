@@ -1102,6 +1102,12 @@ def _restore_backup(backup: Path, vault: Path) -> dict:
     if files != manifest.get("files") or dirs != manifest.get("directories"):
         raise ValueError("backup verification failed: payload does not match manifest hashes")
 
+    # Changes made after the sweep (for example new captures) would otherwise be lost, so keep the current state first.
+    pre_restore = backup.parent / f"{backup.name}-pre-restore-{_utc_stamp()}"
+    for item in allowed:
+        current = vault / Path(item["path"])
+        if current.exists() or current.is_symlink():
+            _copy_path(current, pre_restore / Path(item["path"]))
     for item in sorted(allowed, key=lambda entry: len(Path(entry["path"]).parts), reverse=True):
         target = vault / Path(item["path"])
         _remove_path(target)
