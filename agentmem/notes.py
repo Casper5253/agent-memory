@@ -236,19 +236,24 @@ def project_history_path(path: Path) -> Path:
 def state_order(text: str) -> tuple:
     header = text.split("\n---\n", 1)[0] if text.startswith("---\n") else ""
     match = re.search(r"(?m)^agentmem_state_order: (\d+):(\d+)$", header)
+    if not match:
+        match = re.search(r"(?m)^<!-- agentmem:state-order:(\d+):(\d+) -->$", text)
     return (int(match[1]), int(match[2])) if match else (0, 0)
 
 
 def touch_state_order(text: str, order: tuple) -> str:
-    if not text.startswith("---\n") or "\n---\n" not in text[4:]:
-        return text
-    header, body = text[4:].split("\n---\n", 1)
     value = f"{order[0]}:{order[1]}"
-    if re.search(r"(?m)^agentmem_state_order: \d+:\d+$", header):
-        header = re.sub(r"(?m)^agentmem_state_order: \d+:\d+$", f"agentmem_state_order: {value}", header, count=1)
-    else:
-        header += f"\nagentmem_state_order: {value}"
-    return "---\n" + header + "\n---\n" + body
+    if text.startswith("---\n") and "\n---\n" in text[4:]:
+        header, body = text[4:].split("\n---\n", 1)
+        if re.search(r"(?m)^agentmem_state_order: \d+:\d+$", header):
+            header = re.sub(r"(?m)^agentmem_state_order: \d+:\d+$", f"agentmem_state_order: {value}", header, count=1)
+        else:
+            header += f"\nagentmem_state_order: {value}"
+        text = "---\n" + header + "\n---\n" + body
+    marker = f"<!-- agentmem:state-order:{value} -->"
+    if re.search(r"(?m)^<!-- agentmem:state-order:\d+:\d+ -->$", text):
+        return re.sub(r"(?m)^<!-- agentmem:state-order:\d+:\d+ -->$", marker, text, count=1)
+    return text.rstrip("\n") + "\n\n" + marker + "\n"
 
 
 def append_project_history(path: Path, project: str, date: str, session_link: str, items, reason: str,

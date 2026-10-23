@@ -419,7 +419,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         if (session_marker in notes.get_block(text, notes.SESS_BEGIN, notes.SESS_END)
                 and f"[[{link}]]" not in notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)):
             return 0.0, True
-        if notes.state_order(text) > order:
+        if notes.state_order(text) >= order and notes.state_order(text) != (0, 0):
             items = _pending_lines(summary, link, date)
             notes.append_project_history(notes.project_history_path(note_path), project, date, link, items,
                                          "Superseded pending update", email_allowlist=cfg.privacy_email_allowlist)
