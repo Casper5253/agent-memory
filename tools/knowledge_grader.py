@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 
-OPERATIONAL_CASES = frozenset({"T12", "T13", "T14", "T16", "T17", "T18", "T19", "T20", "T24"})
+OPERATIONAL_CASES = frozenset({"T11", "T12", "T13", "T14", "T16", "T17", "T18", "T19", "T20", "T24"})
 LABELS = {
     "reported": r"\b(?:reported|historical record|according to|source says)\b",
     "user_stated": r"\b(?:user stated|stated by the user|user explicitly chose|user directly stated)\b",

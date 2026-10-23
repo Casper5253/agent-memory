@@ -377,6 +377,13 @@ class KnowledgeGrader(unittest.TestCase):
         path.write_text(path.read_text() + "revision_conflict\n")
         self.assertFalse(self.grade()["pass"])
 
+    def test_t11_fault_plan_without_execution_is_unmeasured(self):
+        self.query["case"] = "T11"
+        result = self.grade()
+        self.assertEqual(result["unmeasured"], ["fault_execution:T11"])
+        self.assertIn("operational_evidence_not_measured", result["failures"])
+        self.assertFalse(result["pass"])
+
     def test_budget_is_recomputed_from_the_emitted_package(self):
         self.query["budget"] = 20
         self.assertFalse(self.grade()["pass"])
