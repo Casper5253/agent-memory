@@ -53,6 +53,11 @@ def _space(text):
     return " ".join(text.split())
 
 
+def _has_explicit_label(text, field, value):
+    return bool(re.search(r"(?:^|\n)\s*" + re.escape(field) + r"(?:\s+level)?\s*:\s*"
+                          + re.escape(value) + r"\b", text, re.IGNORECASE))
+
+
 def _plain(text):
     return re.sub(r"[^\w]+", " ", text.casefold().replace("_", " ")).strip()
 
@@ -138,6 +143,8 @@ class Citation:
     path: str
     text: str
     source_ids: frozenset
+    status: str = ""
+    evidence_level: str = ""
 
 
 class EvidenceIndex:
@@ -293,10 +300,12 @@ def _grade_query(query, gold, context, *, corpus, vault, proven_citations=None):
                 moved = index.moved_heads(citation, claim, query["project"])
                 if moved and not _freshness_warning(citation, moved):
                     failures.append("unqualified_moved_repository_fact:" + claim["id"])
-            if _positive(citation.text, r"\baccepted\b") and not any(
+            acceptance_asserted = citation.status == "accepted" or _has_explicit_label(citation.text, "status", "accepted")
+            verification_asserted = citation.evidence_level == "verified" or _has_explicit_label(citation.text, "evidence", "verified")
+            if acceptance_asserted and not any(
                     claim["id"] in accepted or claim.get("status") in ("accepted", "superseded") for claim in matching_claims):
                 failures.append("unsupported_acceptance")
-            if _positive(citation.text, r"\bverified\b") and not any(
+            if verification_asserted and not any(
                     claim.get("evidence_level") == "verified" for claim in matching_claims):
                 failures.append("unsupported_verification")
             if query.get("case") == "T15" and (not matching_claims or any(
@@ -492,11 +501,12 @@ def _structured_citations(query, context, corpus, vault):
                             "SELECT 1 FROM relations WHERE project_id=? AND from_id=? AND kind=? AND to_id=?",
                             (query["project"], relation["from_id"], relation["kind"], relation["to_id"])).fetchone():
                             raise ValueError("forged_relation")
-                    citations.append(Citation(item["citations"][0]["note_path"], text, frozenset(fixture_ids)))
+                    citations.append(Citation(item["citations"][0]["note_path"], text, frozenset(fixture_ids),
+                                              item["status"], item["evidence_level"]))
             proven = _proven_warnings(store, query) & set(context.get("warnings") or [])
             if proven:
                 note = "\nWarnings: " + "; ".join(sorted(w.replace("_", " ") for w in proven))
-                citations = [Citation(c.path, c.text + note, c.source_ids) for c in citations]
+                citations = [Citation(c.path, c.text + note, c.source_ids, c.status, c.evidence_level) for c in citations]
         finally:
             store.db.execute("ROLLBACK")
     return citations
@@ -533,8 +543,9 @@ def _grade_structured(query, gold, context, *, corpus, vault):
         result = _grade_query(dict(query, budget=max(query.get("budget", 2400), 8000)), gold, adapter,
                               corpus=corpus, vault=vault, proven_citations=citations)
         for forbidden in gold.get("forbidden_strings", []):
-            if forbidden in encoded.decode("utf-8"):
-                result["failures"].append("forbidden_string_present:" + forbidden)
+            failure = "forbidden_string_present:" + forbidden
+            if forbidden in encoded.decode("utf-8") and failure not in result["failures"]:
+                result["failures"].append(failure)
         result.update(packed_bytes=len(encoded), used=used, budget_unit="tokens_est_3b")
         result["pass"] = not result["failures"]
         return result

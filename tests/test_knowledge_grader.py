@@ -64,6 +64,12 @@ class StructuredKnowledgeGrader(unittest.TestCase):
         result = self.grade(context)
         self.assertTrue(result["pass"], result)
 
+    def test_structured_forbidden_string_is_reported_once(self):
+        self.gold["forbidden_strings"] = ["Atomic cursor writes."]
+        result = self.grade()
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["failures"].count("forbidden_string_present:Atomic cursor writes."), 1)
+
     def test_wrong_forged_missing_and_foreign_ids_fail(self):
         original = self.fixture.context()
         cases = []
@@ -340,8 +346,14 @@ class KnowledgeGrader(unittest.TestCase):
 
     def test_reported_or_disputed_labels_cannot_hide_automatic_acceptance(self):
         path = self.vault / "0-Sessions/session-current.md"
-        path.write_text(path.read_text() + "This is accepted.\n")
+        path.write_text(path.read_text() + "Status: accepted.\n")
         self.assertFalse(self.grade()["pass"])
+
+    def test_source_mentions_of_acceptance_and_verification_are_not_authority_labels(self):
+        path = self.vault / "0-Sessions/session-current.md"
+        path.write_text(path.read_text() + "The source discussion mentions accepted and verified as words.\n")
+        result = self.grade()
+        self.assertTrue(result["pass"], result)
 
     def test_superseded_label_cannot_hide_a_current_recommendation(self):
         old = self.add_note("old", "Use JSON for synthetic storage.", "old-copy", "old-source",
