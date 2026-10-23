@@ -56,6 +56,9 @@ def _build_vault(base: Path) -> Path:
     tmp = _Tmp(base)
     vault = tmp.path / "vault"
     work = tmp.path / "work"
+    work.mkdir(parents=True)
+    # Synthetic non-repository paths must not inherit the checkout's containing repository.
+    (work / ".git").write_text("gitdir: unavailable", encoding="utf-8")
     for d in ("_meta", "1-Projects/demo-app", "1-Projects/my-lib",
               "0-Sessions/2026/01", "Projects-Old"):
         (vault / d).mkdir(parents=True, exist_ok=True)
