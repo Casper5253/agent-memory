@@ -28,6 +28,7 @@ class Config:
     knowledge_db: str = "_meta/knowledge.sqlite"
     knowledge_project_ids: dict = field(default_factory=dict)
     project_privacy: dict = field(default_factory=dict)
+    privacy_email_allowlist: list[str] = field(default_factory=list)
     knowledge_input_units: int = 12000
     knowledge_output_tokens: int = 2000
     knowledge_run_captures: int = 10
@@ -53,6 +54,9 @@ class Config:
                 raise ValueError("invalid_knowledge_path")
         if not isinstance(self.knowledge_project_ids, dict) or not isinstance(self.project_privacy, dict):
             raise ValueError("invalid_knowledge_mapping")
+        if not isinstance(self.privacy_email_allowlist, list) or any(
+                not isinstance(address, str) or not address.strip() for address in self.privacy_email_allowlist):
+            raise ValueError("invalid_privacy_email_allowlist")
         for project_id in self.knowledge_project_ids.values():
             uuid_id(project_id)
         for privacy in self.project_privacy.values():

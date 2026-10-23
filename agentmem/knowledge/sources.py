@@ -80,9 +80,9 @@ def _truncate_excerpt(text: str) -> str:
 def _packet_dict(event, *, agent: str, session_id: str, part: int, note_path: str,
                  repo_head: str | None, origin_group: str, recorded_at: str,
                  privacy: str, ordinal: int, excerpt: str | None = None,
-                 original_sha: str | None = None, speaker: str | None = None) -> dict:
+                 original_sha: str | None = None, speaker: str | None = None, email_allowlist=None) -> dict:
     original = event.text
-    excerpt = redact(original) if excerpt is None else excerpt
+    excerpt = redact(original, email_allowlist=email_allowlist) if excerpt is None else redact(excerpt, email_allowlist=email_allowlist)
     truncated = len(excerpt.encode("utf-8")) > _EXCERPT_LIMIT
     excerpt = _truncate_excerpt(excerpt)
     cursor_kind = "messages" if agent == "opencode" else "bytes"
@@ -154,7 +154,7 @@ def _cap_packets(packets: list[dict]) -> list[dict]:
 
 def build_receipt_packets(t: Transcript, repo_head: str | None = None, *, part: int = 1,
                           note_path: str = "", origin_group: str = "", privacy: str = "model_allowed",
-                          original_messages: list | None = None) -> list[dict]:
+                          original_messages: list | None = None, email_allowlist=None) -> list[dict]:
     """Build capped redacted source packets for storage in a capture receipt.
 
     No raw transcript is persisted; only redacted excerpts and original-range
@@ -183,7 +183,8 @@ def build_receipt_packets(t: Transcript, repo_head: str | None = None, *, part: 
             packet = _packet_dict(ev, agent=t.agent, session_id=t.session_id, part=part,
                                   note_path=note_path, repo_head=repo_head, origin_group=origin_group,
                                   recorded_at=recorded_at, privacy=privacy,
-                                  ordinal=ordinal, excerpt=redact(text), original_sha=original_sha, speaker=speaker)
+                                  ordinal=ordinal, excerpt=redact(text, email_allowlist=email_allowlist),
+                                  original_sha=original_sha, speaker=speaker, email_allowlist=email_allowlist)
             if t.agent == "opencode" and not ev.message_id:
                 packet["locator_json"]["format_version"] = "v1-missing-message-ids"
             packets.append(packet)
@@ -195,8 +196,8 @@ def build_receipt_packets(t: Transcript, repo_head: str | None = None, *, part: 
 
 def _legacy_source(note_text: str, note_path: str, agent: str, session_id: str, part: int,
                    repo_head: str | None, origin_group: str, recorded_at: str,
-                   privacy: str) -> dict:
-    excerpt = redact(note_text)
+                   privacy: str, email_allowlist=None) -> dict:
+    excerpt = redact(note_text, email_allowlist=email_allowlist)
     excerpt = _truncate_excerpt(excerpt)
     lines = note_text.count("\n") + 1
     locator = {
@@ -277,7 +278,7 @@ def _ensure_project(store: KnowledgeStore, cfg: Config, project_name: str) -> st
     return pid
 
 
-def _sources_from_receipt(receipt: dict, privacy: str) -> list[SourceInput]:
+def _sources_from_receipt(receipt: dict, privacy: str, email_allowlist=None) -> list[SourceInput]:
     packets = receipt.get("sources") or []
     recorded_at = receipt.get("when") or _utc_now()
     recorded = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
@@ -288,7 +289,7 @@ def _sources_from_receipt(receipt: dict, privacy: str) -> list[SourceInput]:
         packets = [_legacy_source(
             receipt["text"], receipt["note_path"], receipt["agent"],
             receipt["session_id"], receipt["part"], receipt.get("repo_head"),
-            receipt["digest_sha"], recorded_at, privacy)]
+            receipt["digest_sha"], recorded_at, privacy, email_allowlist)]
     out = []
     for p in packets:
         p = dict(p)
@@ -327,10 +328,11 @@ def import_capture_for_receipt(cfg: Config, store: KnowledgeStore, receipt: dict
         return ImportOutcome("skipped", reason="privacy_not_set")
     if privacy == "excluded":
         return ImportOutcome("skipped", project_id=pid, reason="project_excluded")
-    sources = _sources_from_receipt(receipt, privacy)
+    sources = _sources_from_receipt(receipt, privacy, cfg.privacy_email_allowlist)
     identity = capture_identity_from_receipt(receipt)
     fingerprint = capture_fingerprint_from_receipt(receipt)
-    result = import_capture(store, pid, identity, fingerprint, sources)
+    result = import_capture(store, pid, identity, fingerprint, sources,
+                            email_allowlist=cfg.privacy_email_allowlist)
     return ImportOutcome("imported", project_id=pid, import_result=result)
 
 
@@ -339,8 +341,8 @@ def _store_for_cfg(cfg: Config, writable: bool = True) -> KnowledgeStore:
     if not path.exists():
         if not writable:
             raise KnowledgeImportError("store_unavailable")
-        return KnowledgeStore.create(path)
-    return KnowledgeStore(path, writable=writable)
+        return KnowledgeStore.create(path, email_allowlist=cfg.privacy_email_allowlist)
+    return KnowledgeStore(path, writable=writable, email_allowlist=cfg.privacy_email_allowlist)
 
 
 def maybe_import_after_capture(cfg: Config, receipt: dict,

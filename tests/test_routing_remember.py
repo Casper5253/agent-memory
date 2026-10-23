@@ -98,11 +98,16 @@ class Remember(Base):
         self.assertIn("I prefer concise replies", text)
 
     def test_remember_redacts_and_survives_model_failure(self):
-        res = remember.remember_item(self.cfg, f"API key is {fx.SECRET_SAMPLES[0]} for staging", cwd=self.cwd,
+        personal = ["GB82 WEST 1234 5698 7654 32", "4111 1111 1111 1111", "111222333",
+                    "+31 6 12345678", "private.person@example.com"]
+        statement = f"API key is {fx.SECRET_SAMPLES[0]} for staging. Details {'; '.join(personal)}"
+        res = remember.remember_item(self.cfg, statement, cwd=self.cwd,
                                      consolidator=fx.failing_llm)
         self.assertFalse(res["consolidated"])
         for p in self.cfg.vault.rglob("*.md"):
-            self.assertNotIn(fx.SECRET_SAMPLES[0], p.read_text(encoding="utf-8"))
+            content = p.read_text(encoding="utf-8")
+            for secret in [fx.SECRET_SAMPLES[0], *personal]:
+                self.assertNotIn(secret, content)
         self.assertIn("fact:", notes.get_block(self.project_note(), notes.PENDING_BEGIN, notes.PENDING_END))
 
     def test_current_session_from_claude_env(self):

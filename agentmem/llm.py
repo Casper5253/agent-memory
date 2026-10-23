@@ -91,26 +91,27 @@ def _run(system: str, prompt: str, model: str, timeout: int) -> dict:
     return data
 
 
-def _strings(v, limit):
-    return [redact(str(x)).strip() for x in (v or []) if str(x).strip()][:limit] if isinstance(v, list) else []
+def _strings(v, limit, email_allowlist=None):
+    return [redact(str(x), email_allowlist=email_allowlist).strip() for x in (v or []) if str(x).strip()][:limit] if isinstance(v, list) else []
 
 
-def summarize(digest_text: str, model: str = "haiku", timeout: int = 180) -> dict:
+def summarize(digest_text: str, model: str = "haiku", timeout: int = 180, email_allowlist=None) -> dict:
     data = _run(SUMMARY_SYSTEM, "SESSION DIGEST:\n\n" + digest_text, model, timeout)
     if not isinstance(data.get("summary"), str) or not data["summary"].strip():
         raise LLMError("summary missing")
     decisions = []
     for d in data.get("decisions") or []:
         if isinstance(d, dict) and str(d.get("decision", "")).strip():
-            decisions.append({"decision": redact(str(d["decision"]).strip()), "rationale": redact(str(d.get("rationale", "")).strip())})
+            decisions.append({"decision": redact(str(d["decision"]).strip(), email_allowlist=email_allowlist),
+                              "rationale": redact(str(d.get("rationale", "")).strip(), email_allowlist=email_allowlist)})
     return {
-        "title": redact(str(data.get("title") or "")).strip()[:80],
-        "summary": redact(data["summary"].strip()),
-        "what_happened": _strings(data.get("what_happened"), 10),
+        "title": redact(str(data.get("title") or ""), email_allowlist=email_allowlist).strip()[:80],
+        "summary": redact(data["summary"].strip(), email_allowlist=email_allowlist),
+        "what_happened": _strings(data.get("what_happened"), 10, email_allowlist),
         "decisions": decisions[:12],
-        "facts": _strings(data.get("facts"), 12),
-        "open_questions": _strings(data.get("open_questions"), 8),
-        "next_steps": _strings(data.get("next_steps"), 8),
+        "facts": _strings(data.get("facts"), 12, email_allowlist),
+        "open_questions": _strings(data.get("open_questions"), 8, email_allowlist),
+        "next_steps": _strings(data.get("next_steps"), 8, email_allowlist),
         "_cost_usd": data.get("_cost_usd", 0.0),
     }
 
@@ -118,7 +119,8 @@ def summarize(digest_text: str, model: str = "haiku", timeout: int = 180) -> dic
 REQUIRED_HEADINGS = ["### Current state", "### Active decisions", "### Superseded decisions", "### Open questions and next steps"]
 
 
-def consolidate(state_md: str, summary: dict, link: str, date: str, model: str = "haiku", timeout: int = 180) -> tuple:
+def consolidate(state_md: str, summary: dict, link: str, date: str, model: str = "haiku", timeout: int = 180,
+                email_allowlist=None) -> tuple:
     payload = {k: v for k, v in summary.items() if not k.startswith("_")}
     prompt = (f"EXISTING STATE SECTION:\n{state_md or '(empty: this is the first session for the project)'}\n\n"
               f"NEW SESSION ({date}, link {link}):\n{json.dumps(payload, ensure_ascii=False, indent=1)}")
@@ -131,4 +133,4 @@ def consolidate(state_md: str, summary: dict, link: str, date: str, model: str =
         raise LLMError("consolidation output too long")
     while "[[[[" in md or "]]]]" in md:  # models sometimes re-wrap a link that already has brackets
         md = md.replace("[[[[", "[[").replace("]]]]", "]]")
-    return redact(md), data.get("_cost_usd", 0.0)
+    return redact(md, email_allowlist=email_allowlist), data.get("_cost_usd", 0.0)

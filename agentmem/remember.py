@@ -54,7 +54,7 @@ def _evidence_note(cfg: Config, *, when, agent, project, kind, text, rationale, 
         "## Statement", "", text, "",
         *(["## Rationale", "", rationale, ""] if rationale else []),
     ])
-    create_once(path, redact_session_note(body))
+    create_once(path, redact_session_note(body, cfg.privacy_email_allowlist))
     return path
 
 
@@ -67,13 +67,16 @@ def _remembered_list(cfg: Config, line: str) -> Path:
         if LIST_BEGIN not in text:
             text = text.rstrip("\n") + f"\n\n{LIST_BEGIN}\n{LIST_END}\n"
         existing = notes.get_block(text, LIST_BEGIN, LIST_END).splitlines()
-        atomic_write(path, notes.set_block(text, LIST_BEGIN, LIST_END, "\n".join([line] + [l for l in existing if l.strip()])))
+        text = redact(text, email_allowlist=cfg.privacy_email_allowlist)
+        atomic_write(path, notes.set_block(text, LIST_BEGIN, LIST_END,
+                                          "\n".join([line] + [l for l in existing if l.strip()])))
     return path
 
 
 def remember_item(cfg: Config, text: str, *, kind: str = "fact", project: str = "", cwd: str = "", agent: str = "user",
                   rationale: str = "", consolidator=None) -> dict:
-    text, rationale = redact(" ".join(text.split())), redact(rationale.strip())
+    text = redact(" ".join(text.split()), email_allowlist=cfg.privacy_email_allowlist)
+    rationale = redact(rationale.strip(), email_allowlist=cfg.privacy_email_allowlist)
     if not text:
         raise ValueError("nothing to remember")
     if kind not in KINDS:

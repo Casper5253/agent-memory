@@ -125,7 +125,10 @@ def finalize(cfg: Config, man: Manifest, row, summarizer=None, consolidator=None
         fresh = man.get(agent, sid)
         if fresh["parts"] != row["parts"]:
             return "already-captured"
-        return _finalize_locked(cfg, man, fresh, summarizer or llm.summarize, consolidator)
+        configured_summarizer = summarizer or (
+            lambda digest, timeout: llm.summarize(digest, timeout=timeout,
+                                                  email_allowlist=cfg.privacy_email_allowlist))
+        return _finalize_locked(cfg, man, fresh, configured_summarizer, consolidator)
 
 
 def _finalize_locked(cfg, man, row, summarizer, consolidator):
@@ -175,7 +178,8 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
             if _excluded(cfg, cwd):
                 man.mark(agent, sid, status="skipped", end_seen=0, skip_reason="excluded directory")
                 return "excluded"
-            d = extract.build(t, cfg.min_user_prompts, cfg.min_assistant_chars, cfg.digest_char_cap)
+            d = extract.build(t, cfg.min_user_prompts, cfg.min_assistant_chars, cfg.digest_char_cap,
+                              email_allowlist=cfg.privacy_email_allowlist)
             if not d.substantial:
                 man.mark(agent, sid, status=done_status, end_seen=0, skip_reason=d.gate_reason, cwd=cwd,
                          last_error=source_error)
@@ -199,7 +203,7 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                     log(cfg, "llm-fallback", agent=agent, session=sid, step="summarize", error=str(error))
             if summary is None:
                 summary = extract.fallback_summary(t, d)
-            summary = _redact_values(summary)
+            summary = _redact_values(summary, cfg.privacy_email_allowlist)
             summary["repo_head"] = repo_head
             previous = man.capture(agent, sid, part - 1) if part > 1 else None
             path = notes.session_note_path(cfg.sessions_dir, when, agent, summary.get("title") or t.title or "session", sid, part)
@@ -208,18 +212,19 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                         summary=summary, files=d.files, commands=d.commands, gate_reason=d.gate_reason,
                         prev_link=Path(previous["note_path"]).with_suffix("").as_posix() if previous else None,
                         project_note=_link(cfg, projects.note_path(cfg.vault, project)), repo_head=repo_head,
-                        attribution=attribution)
-            text = redact_session_note(text)
+                        attribution=attribution, email_allowlist=cfg.privacy_email_allowlist)
+            text = redact_session_note(text, cfg.privacy_email_allowlist)
             receipt = dict(version=1, agent=agent, session_id=sid, part=part, start=t.start, end=t.end,
                            project=project, summary=summary, digest_sha=d.sha, note_path=path.relative_to(cfg.vault).as_posix(),
                            text=text, content_sha=_hash(text), when=when.isoformat(), summarizer=kind, cost=cost,
                            prefix_sha=t.prefix_sha, evidence="transcript", related_projects=attribution.related_projects,
-                           source_warnings=t.warnings)
+                           source_warnings=_redact_values(t.warnings, cfg.privacy_email_allowlist))
             if cfg.knowledge_mode != "off":
                 try:
                     receipt["sources"] = ksources.build_receipt_packets(t, repo_head, part=part,
                         note_path=receipt["note_path"], origin_group=d.sha,
-                        privacy=ksources._privacy_for(cfg, project) or "model_allowed", original_messages=original_messages)
+                        privacy=ksources._privacy_for(cfg, project) or "model_allowed", original_messages=original_messages,
+                        email_allowlist=cfg.privacy_email_allowlist)
                 except Exception:
                     log(cfg, "knowledge-packet-error", agent=agent, session=sid, part=part)
         if ksources._privacy_for(cfg, receipt["project"]) == "excluded":
@@ -248,7 +253,8 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
         note_path = projects.note_path(cfg.vault, related)
         with file_lock(cfg.locks_dir / f"project-{notes.slug(related, 12)}.lock", timeout=cfg.lock_timeout_s):
             notes.update_project_note(note_path, related, f"{when:%Y-%m-%d}", session_link=link,
-                     session_line=f"- {when:%Y-%m-%d} [[{link}|{summary.get('title') or 'session'}]] (related)")
+                     session_line=f"- {when:%Y-%m-%d} [[{link}|{summary.get('title') or 'session'}]] (related)",
+                     email_allowlist=cfg.privacy_email_allowlist)
     man.record_capture(agent=agent, session_id=sid, part=part, note_path=receipt["note_path"], project=project,
                        title=summary.get("title", ""), date=f"{when:%Y-%m-%d}", start=receipt["start"], end=receipt["end"],
                        summarizer=kind, cost=cost, sha=receipt["digest_sha"], consolidated=consolidated,
@@ -271,13 +277,13 @@ def _source_error(warnings):
     return json.dumps({"source_warnings": warnings}, separators=(",", ":")) if warnings else None
 
 
-def _redact_values(value):
+def _redact_values(value, email_allowlist=None):
     if isinstance(value, str):
-        return redact(value)
+        return redact(value, email_allowlist=email_allowlist)
     if isinstance(value, dict):
-        return {k: _redact_values(v) for k, v in value.items()}
+        return {k: _redact_values(v, email_allowlist) for k, v in value.items()}
     if isinstance(value, list):
-        return [_redact_values(v) for v in value]
+        return [_redact_values(v, email_allowlist) for v in value]
     return value
 
 
@@ -291,7 +297,9 @@ def _pending_lines(summary: dict, link: str, date: str) -> list:
 def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str, when: datetime,
                              summary_kind: str, consolidator=None) -> tuple:
     """Reconcile one session into its project note. Returns (cost, consolidated?)."""
-    consolidator = consolidator or llm.consolidate
+    if consolidator is None:
+        consolidator = lambda state, current_summary, link, date, timeout: llm.consolidate(
+            state, current_summary, link, date, timeout=timeout, email_allowlist=cfg.privacy_email_allowlist)
     if ksources._privacy_for(cfg, project) == "excluded":
         return 0.0, False
     note_path = projects.note_path(cfg.vault, project)
@@ -299,7 +307,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
     session_line = f"- {date} [[{link}|{summary.get('title') or 'session'}]]"
     with file_lock(cfg.locks_dir / f"project-{notes.slug(project, 12)}.lock", timeout=cfg.lock_timeout_s):
         if not note_path.exists():
-            notes.update_project_note(note_path, project, date)
+            notes.update_project_note(note_path, project, date, email_allowlist=cfg.privacy_email_allowlist)
         text = notes.ensure_blocks(note_path.read_text(encoding="utf-8"))
         session_marker = f"[[{link}|"
         if (session_marker in notes.get_block(text, notes.SESS_BEGIN, notes.SESS_END)
@@ -313,12 +321,14 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                 if ksources._privacy_for(cfg, project) == "excluded":
                     return cost, False
                 notes.update_project_note(note_path, project, date, state=state, pending_clear=f"[[{link}]]",
-                                          session_link=link, session_line=session_line)
+                                          session_link=link, session_line=session_line,
+                                          email_allowlist=cfg.privacy_email_allowlist)
                 return cost, True
             except llm.LLMError as e:
                 log(cfg, "llm-fallback", step="consolidate", project=project, note=link, error=str(e))
         notes.update_project_note(note_path, project, date, pending_add=_pending_lines(summary, link, date),
-                                  session_link=link, session_line=session_line)
+                                  session_link=link, session_line=session_line,
+                                  email_allowlist=cfg.privacy_email_allowlist)
         return 0.0, False
 
 
@@ -345,7 +355,9 @@ def _validate_pending_identity(cfg, man, row, text, summary):
 
 def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidator=None, limit: int = 20) -> dict:
     """Retry reconciliation for captures that fell back (LLM down, or deterministic summary)."""
-    summarizer = summarizer or llm.summarize
+    if summarizer is None:
+        summarizer = lambda digest, timeout: llm.summarize(
+            digest, timeout=timeout, email_allowlist=cfg.privacy_email_allowlist)
     done = failed = 0
     for row in man.unconsolidated()[:limit]:
         if ksources._privacy_for(cfg, row["project"]) == "excluded":

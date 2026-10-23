@@ -7,15 +7,26 @@ import subprocess
 import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import policy as p
 from .models import (ApplyResult, BackupResult, CaptureIdentity, ImportResult,
                      KnowledgeError, ReviewRequest, ValidationError)
+from ..redact import redact
 
 SCHEMA_VERSION = 1
+
+
+def _redact_data(value, email_allowlist=None):
+    if isinstance(value, str):
+        return redact(value, email_allowlist=email_allowlist)
+    if isinstance(value, list):
+        return [_redact_data(item, email_allowlist) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_data(item, email_allowlist) for key, item in value.items()}
+    return value
 
 SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -146,13 +157,15 @@ def _git_safe(path):
 
 
 class KnowledgeStore:
-    def __init__(self, path, *, writable=False, timeout=1.0, clock=utc_now, fault=None, vault=None):
+    def __init__(self, path, *, writable=False, timeout=1.0, clock=utc_now, fault=None, vault=None,
+                 email_allowlist=None):
         self.path = Path(path).resolve()
         self.vault = Path(vault).resolve() if vault is not None else (
             self.path.parent.parent if self.path.parent.name == "_meta" else self.path.parent)
         self.writable = writable
         self.clock = clock
         self.fault = fault
+        self.email_allowlist = email_allowlist
         self.db = None
         try:
             self.db = sqlite3.connect(self.path.as_uri() + ("?mode=rw" if writable else "?mode=ro"),
@@ -355,7 +368,7 @@ class KnowledgeStore:
                     "ON CONFLICT(project_id) DO UPDATE SET desired_revision=excluded.desired_revision",
                     (result.project_id, result.project_revision))
 
-    def import_capture(self, project_id, capture_identity, capture_fingerprint, sources):
+    def import_capture(self, project_id, capture_identity, capture_fingerprint, sources, *, email_allowlist=None):
         if not isinstance(capture_identity, CaptureIdentity):
             raise ValidationError("invalid_capture_identity")
         p.enum(capture_identity.agent, ("claude", "codex", "opencode"))
@@ -369,6 +382,12 @@ class KnowledgeStore:
         for source in sources:
             p.validate_source(source, capture_identity)
             p.relative_path(source.note_path, self.vault)
+        sanitized = []
+        allowlist = self.email_allowlist if email_allowlist is None else email_allowlist
+        for source in sources:
+            excerpt = redact(source.excerpt, email_allowlist=allowlist)
+            sanitized.append(replace(source, excerpt=excerpt, content_sha=p.sha_text(excerpt)))
+        sources = sanitized
         sources = sorted(sources, key=lambda source: source.span_ordinal)
         if len({source.span_ordinal for source in sources}) != len(sources):
             raise ValidationError("duplicate_ordinal")
@@ -435,6 +454,8 @@ class KnowledgeStore:
 
     def save_proposal(self, project_id, source_id, payload, base_revision, *,
                       extractor_version="v1", prompt_version="v1", input_sha=None):
+        validated = p.validate_proposal(payload)
+        payload = _redact_data(p.proposal_payload(validated), self.email_allowlist)
         validated = p.validate_proposal(payload)
         payload_json = p.canonical(p.proposal_payload(validated))
         p.integer(base_revision)
@@ -768,8 +789,9 @@ def backup_store(store, destination):
     return store.backup(destination)
 
 
-def import_capture(store, project_id, capture_identity, capture_fingerprint, sources):
-    return store.import_capture(project_id, capture_identity, capture_fingerprint, sources)
+def import_capture(store, project_id, capture_identity, capture_fingerprint, sources, *, email_allowlist=None):
+    return store.import_capture(project_id, capture_identity, capture_fingerprint, sources,
+                                email_allowlist=email_allowlist)
 
 
 def apply_proposal(store, project_id, proposal_id, expected_project_revision, operation_id):
