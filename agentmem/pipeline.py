@@ -18,6 +18,7 @@ from pathlib import Path
 from . import adapters, extract, llm, notes, projects
 from .config import Config
 from .fsutil import create_once, file_lock
+from .knowledge import sources as ksources
 from .logutil import log
 from .manifest import Manifest
 from .redact import redact, redact_session_note
@@ -197,11 +198,12 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                         project_note=_link(cfg, projects.note_path(cfg.vault, project)), repo_head=repo_head,
                         attribution=attribution)
             text = redact_session_note(text)
+            source_packets = ksources.build_receipt_packets(t, repo_head)
             receipt = dict(version=1, agent=agent, session_id=sid, part=part, start=t.start, end=t.end,
                            project=project, summary=summary, digest_sha=d.sha, note_path=path.relative_to(cfg.vault).as_posix(),
                            text=text, content_sha=_hash(text), when=when.isoformat(), summarizer=kind, cost=cost,
                            prefix_sha=t.prefix_sha, evidence="transcript", related_projects=attribution.related_projects,
-                           source_warnings=t.warnings)
+                           source_warnings=t.warnings, sources=source_packets)
         receipt["receipt_sha"] = _receipt_hash(receipt)
         create_once(_receipt_path(cfg, agent, sid, part), json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
         receipt = _load_receipt(cfg, agent, sid, part, row["captured_until"])
@@ -228,6 +230,12 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                        summarizer=kind, cost=cost, sha=receipt["digest_sha"], consolidated=consolidated,
                        summary_json=json.dumps(summary, ensure_ascii=False),
                        error=_source_error(receipt.get("source_warnings", [])))
+    if cfg.knowledge_mode != "off" and project != projects.UNSORTED:
+        try:
+            ksources.maybe_import_after_capture(cfg, receipt)
+        except Exception as e:  # noqa: BLE001 - knowledge must never break capture
+            log(cfg, "knowledge-import-error", agent=agent, session=sid, part=part, project=project,
+                error=f"{type(e).__name__}: {e}")
     log(cfg, "captured", agent=agent, session=sid, part=part, project=project, note=link, summarizer=kind,
         consolidated=consolidated, cost_usd=round(cost, 5))
     return "captured"
