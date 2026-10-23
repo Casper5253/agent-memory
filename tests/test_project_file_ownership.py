@@ -106,6 +106,16 @@ class FileOwnership(unittest.TestCase):
         self.assertEqual(result.signals["Agent Environment"]["files"], 0)
         self.assertLessEqual(resolve.call_count, 3)
 
+    def test_worker_brief_config_paths_cannot_outvote_project_edits(self):
+        self.git(self.parent, "init", "-q")
+        paths = [str(self.agent / ("skill-" + str(i)) / "SKILL.md") for i in range(10)]
+        text = "Follow the worker brief:\n" + "\n".join(paths + paths)
+        result = projects.attribute(str(self.parent),self.map_path,
+            files=[str(self.parent / (str(i) + ".py")) for i in range(3)],text=text,create=False)
+        self.assertEqual(result.project,"Real Project")
+        self.assertEqual(result.signals["Real Project"]["files"],3)
+        self.assertEqual(result.signals["Agent Environment"]["paths"],3)
+
 
 if __name__ == "__main__":
     unittest.main()
