@@ -50,6 +50,7 @@ class ContextCase(unittest.TestCase):
         self.pid = str(uuid.uuid4())
         self.project_root = self.vault / "work" / "alpha"
         self.project_root.mkdir(parents=True)
+        (self.project_root.parent / ".git").mkdir()
         self.store.register_project(self.pid, "Alpha", [str(self.project_root)], privacy="model_allowed")
         self.request = ContextRequest("storage", project=self.pid)
 
@@ -162,6 +163,54 @@ class ContextCase(unittest.TestCase):
         result = self.context()
         self.assertEqual(result["items"], [])
         self.assertEqual(result["omitted"]["invalid_evidence"], 1)
+
+    def test_unregistered_verified_artifact_is_ineligible_until_wp06(self):
+        self.claim()
+        self.store.db.execute("UPDATE claims SET evidence_level='verified'")
+        result = self.context()
+        self.assertEqual(result["items"], [])
+        self.assertIn("verified_artifact_unavailable_wp06", result["warnings"])
+
+    def test_partial_local_scan_reports_its_bound(self):
+        cid = self.claim()
+        columns = [row[1] for row in self.store.db.execute("PRAGMA table_info(claims)")]
+        original = dict(self.store.db.execute("SELECT * FROM claims WHERE id=?", (cid,)).fetchone())
+        sql = "INSERT INTO claims VALUES (" + ",".join("?" for _ in columns) + ")"
+        self.store.db.execute("BEGIN")
+        for n in range(5000):
+            row = {**original, "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "context-bound-" + str(n)))}
+            self.store.db.execute(sql, [row[key] for key in columns])
+        self.store.db.execute("COMMIT")
+        result = self.context()
+        self.assertTrue(result["partial"])
+        self.assertLessEqual(result["omitted"]["invalid_evidence"], 5000)
+
+    def test_supported_injected_tokenizer_counts_the_entire_envelope(self):
+        self.claim()
+        class Counter:
+            id = "synthetic-pinned"
+            version = "1"
+            def count(self, text):
+                return len(text.encode("utf-8"))
+        request = replace(self.request, tokenizer_id=Counter.id, budget=2400)
+        result = build_context(self.store, request, tokenizer=Counter()).to_dict()
+        self.assertEqual(result["budget_unit"], "tokens:synthetic-pinned:1")
+        self.assertEqual(result["used"], len(p.canonical(result).encode("utf-8")))
+        self.assertLessEqual(result["used"], 2400)
+
+    def test_expansion_is_one_hop_and_at_most_ten_neighbors(self):
+        seed = self.claim(statement="Needle storage.", subject="needle", predicate="statement")
+        neighbors = [self.claim(statement="Neighbor number " + str(n) + ".", subject="neighbor" + str(n),
+                                predicate="statement", value=str(n)) for n in range(12)]
+        second = self.claim(statement="Second hop.", subject="second", predicate="statement")
+        for neighbor in neighbors:
+            self.store.db.execute("INSERT INTO relations VALUES (?,?,?,?,?)", (self.pid, seed, "depends_on", neighbor, "reason"))
+        self.store.db.execute("INSERT INTO relations VALUES (?,?,?,?,?)", (self.pid, neighbors[0], "depends_on", second, "reason"))
+        result = self.context(query="needle", budget=8000)
+        ids = {cid for item in result["items"] for cid in item["claim_ids"]}
+        self.assertIn(seed, ids)
+        self.assertNotIn(second, ids)
+        self.assertEqual(len(ids), 11)
 
     def test_query_and_budget_errors_are_small(self):
         for kwargs, code in ((dict(query=""), "empty_or_oversized_query"), (dict(budget=1023), "invalid_budget"),

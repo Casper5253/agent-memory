@@ -151,13 +151,18 @@ def _snapshot(store, request):
     store.db.execute("BEGIN")
     try:
         project = resolve_scope(store, request)
+        statuses = "'reported','accepted','disputed','superseded'" if request.as_of or request.mode == "history" else "'reported','accepted','disputed'"
         rows = store.db.execute("SELECT c.*,e.canonical_key,e.display_name,e.aliases_json FROM claims c "
             "JOIN entities e ON e.id=c.subject_id AND e.project_id=c.project_id "
-            "WHERE c.project_id=? ORDER BY c.id LIMIT 5001", (project["id"],)).fetchall()
+            "WHERE c.project_id=? AND c.status IN (" + statuses + ") ORDER BY c.id LIMIT 5001", (project["id"],)).fetchall()
         invalid = 0
         for row in rows[:5000]:
             claim = dict(row)
             if not temporal_eligible(claim, request, warnings):
+                continue
+            if claim["evidence_level"] == "verified":
+                warnings.add("verified_artifact_unavailable_wp06")
+                invalid += 1
                 continue
             citations, user, heads = _evidence(store, claim)
             if not citations:
