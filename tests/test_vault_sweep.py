@@ -1,5 +1,6 @@
 """WP-S1 vault sweep dry-run plan and apply, tested on a synthetic vault only."""
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -689,17 +690,17 @@ class SweepApplyOnlyAutoTests(unittest.TestCase):
         count_after = _count_files_in(self.vault)
         self.assertGreaterEqual(count_after, self._file_count_before)
 
-    def test_e_leftover_outside_allowed_roots_is_refused(self):
+    def test_e_root_leftover_is_archived(self):
         result = _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         leftover = self.vault / "Projects-Old"
-        self.assertTrue(leftover.exists(), "top-level source outside the allowed roots must remain untouched")
         archived = self.vault / "4-Archive" / "Projects-Old"
-        self.assertFalse(archived.exists(), "refused source must not be archived")
+        self.assertFalse(leftover.exists(), "listed top-level leftovers should be moved to the archive")
+        self.assertTrue(archived.is_dir())
+        self.assertTrue((archived / "readme.txt").is_file())
         logs = list((self.vault / "_meta" / "logs").glob("sweep-*.jsonl"))
         entries = [json.loads(line) for line in logs[-1].read_text(encoding="utf-8").splitlines() if line.strip()]
         leftover_entry = next(e for e in entries if e.get("action") == "leftover_archive")
-        self.assertEqual(leftover_entry["status"], "error")
-        self.assertIn("refused", leftover_entry["reason"])
+        self.assertIn(leftover_entry["status"], {"ok", "skip"})
 
     def test_f_stale_line_prefixed(self):
         _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
@@ -768,14 +769,15 @@ class SweepApplyGitResetTest(unittest.TestCase):
             self.assertIsNotNone(sha, f"snapshot SHA not found in output: {result.stdout}")
             self.assertRegex(sha, r"^[0-9a-f]{7,}$")
             leftover = vault / "Projects-Old"
-            self.assertTrue(leftover.exists(), "top-level source outside the allowed roots must remain untouched")
+            self.assertFalse(leftover.exists(), "listed top-level leftover should be archived")
+            self.assertTrue((vault / "4-Archive" / "Projects-Old").is_dir())
             reset_result = subprocess.run(
                 ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "reset", "--hard", sha],
                 cwd=str(vault), env=env, capture_output=True, text=True, timeout=10,
             )
             self.assertEqual(reset_result.returncode, 0, msg=reset_result.stderr)
             leftover_restored = vault / "Projects-Old"
-            self.assertTrue(leftover_restored.exists(), "refused source should remain after reset")
+            self.assertTrue(leftover_restored.exists(), "the Git snapshot should restore tracked root-leftover bytes")
             restored_bytes = {p.relative_to(vault).as_posix(): p.read_bytes() for p in tracked_paths}
             self.assertEqual(snapshot_bytes, restored_bytes)
         finally:
@@ -1003,7 +1005,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
-    def test_embedded_repository_aborts_apply(self):
+    def test_embedded_repository_snapshot_warning_does_not_abort_after_backup(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
             vault = self._build_minimal_git_vault(tmp.path)
@@ -1017,9 +1019,12 @@ class SweepApplyCorrectionTests(unittest.TestCase):
                     "stale_state_lines": [], "broken_links": [], "unsorted_sessions": [],
                     "re_attribution": {"items": [], "calibration_sample": []}}
             result = vs.apply_plan(vault, plan)
-            self.assertFalse(result.get("ok"))
-            self.assertIn("embedded repository", result.get("error", "").lower())
-            self.assertIn(str(emb / ".git"), result.get("error", ""))
+            self.assertTrue(result.get("ok"), msg=result)
+            self.assertTrue(Path(result["backup_dir"]).is_dir())
+            snapshot = next(e for e in result["log_entries"] if e.get("action") == "snapshot")
+            self.assertEqual(snapshot["status"], "warning")
+            self.assertIn("embedded repository", snapshot["reason"].lower())
+            self.assertIn(str(emb / ".git"), snapshot["reason"])
             self.assertFalse((vault / "_meta" / "PAUSE").exists())
         finally:
             tmp.cleanup()
@@ -1050,7 +1055,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
             vs = _load_sweep()
             plan = {"vault_path": str(vault), "fragments": [], "leftover_folders": [],
                     "stale_state_lines": [{"note": "1-Projects/parent/parent.md", "line": "repo head abc1234 commit",
-                                            "stale": True, "auto_apply": True}],
+                                            "line_index": 1, "stale": True, "auto_apply": True}],
                     "broken_links": [], "unsorted_sessions": [],
                     "re_attribution": {"items": [], "calibration_sample": []}}
             result = vs.apply_plan(vault, plan)
@@ -1126,7 +1131,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
             vs = _load_sweep()
             plan = {"vault_path": str(vault), "fragments": [], "leftover_folders": [],
                     "stale_state_lines": [{"note": "1-Projects/parent/parent.md", "line": "repo head abc1234 commit",
-                                            "stale": True, "auto_apply": True}],
+                                            "line_index": 1, "stale": True, "auto_apply": True}],
                     "broken_links": [], "unsorted_sessions": [],
                     "re_attribution": {"items": [], "calibration_sample": []}}
             r1 = vs.apply_plan(vault, plan)
@@ -1171,9 +1176,10 @@ class SweepApplyCorrectionTests(unittest.TestCase):
                     "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
                     "leftover_folders": [], "stale_state_lines": [], "broken_links": [],
                     "unsorted_sessions": [], "re_attribution": {"items": [], "calibration_sample": []}}
-            with patch.object(vs.shutil, "move", side_effect=OSError("simulated move failure")):
+            with patch.object(vs.os, "rename", side_effect=OSError("simulated move failure")):
                 failed = vs.apply_plan(vault, plan)
-            self.assertEqual(failed["log_entries"][1]["status"], "error")
+            failed_item = next(e for e in failed["log_entries"] if e.get("action") == "fragment_merge")
+            self.assertEqual(failed_item["status"], "error")
             succeeded = vs.apply_plan(vault, plan)
             self.assertTrue(succeeded.get("ok"), msg=succeeded)
             parent = (vault / "1-Projects" / "parent" / "parent.md").read_bytes()
@@ -1250,6 +1256,228 @@ class SweepApplyCorrectionTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_r2_restore_backup_preserves_embedded_repo_ignored_and_crlf_bytes(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            env = dict(os.environ)
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            subprocess.run(["git", "config", "core.autocrlf", "true"], cwd=vault, env=env, check=True)
+            parent_note = vault / "1-Projects" / "parent" / "parent.md"
+            parent_note.write_bytes(
+                b"# P\r\n<!-- agentmem:state:begin -->\r\nrepo head abc1234 commit\r\n"
+                b"<!-- agentmem:state:end -->\r\n<!-- agentmem:pending:begin -->\r\n- old todo\r\n"
+                b"<!-- agentmem:pending:end -->\r\n"
+            )
+            subprocess.run(["git", "-c", "core.autocrlf=false", "add", "-A"], cwd=vault, env=env, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "crlf source"], cwd=vault, env=env, check=True)
+            frag = vault / "1-Projects" / "frag"
+            subprocess.run(["git", "init", "-q"], cwd=frag, env=env, check=True)
+            subprocess.run(["git", "config", "user.email", "inner@test"], cwd=frag, env=env, check=True)
+            subprocess.run(["git", "config", "user.name", "Inner"], cwd=frag, env=env, check=True)
+            (frag / ".gitignore").write_bytes(b"*.local\n")
+            (frag / "inner.txt").write_bytes(b"committed inner bytes\r\n")
+            subprocess.run(["git", "add", "-A"], cwd=frag, env=env, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "inner"], cwd=frag, env=env, check=True)
+            (frag / "inner.txt").write_bytes(b"uncommitted inner bytes\xfe\r\n")
+            ignored = frag / "secret.local"
+            ignored.write_bytes(b"ignored precious bytes\xff\r\n")
+            before = {p: b for p, b in _snapshot_no_git(vault).items()
+                      if f"{os.sep}_meta{os.sep}logs{os.sep}" not in p}
+            inner_git_before = {
+                str(Path(root) / name).removeprefix(str(frag) + os.sep): (Path(root) / name).read_bytes()
+                for root, _, names in os.walk(frag)
+                for name in names
+            }
+            self.assertGreater(parent_note.read_bytes().count(b"\r\n"), 0)
+            plan = {"vault_path": str(vault),
+                    "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
+                    "leftover_folders": [],
+                    "stale_state_lines": [{"note": "1-Projects/parent/parent.md", "line": "repo head abc1234 commit",
+                                            "line_index": 1, "stale": True, "auto_apply": True}],
+                    "broken_links": [], "unsorted_sessions": [], "re_attribution": {"items": [], "calibration_sample": []}}
+            vs = _load_sweep()
+            stdout = io.StringIO()
+            from unittest.mock import patch
+            with patch("sys.stdout", stdout):
+                result = vs.apply_plan(vault, plan)
+            self.assertTrue(result.get("ok"), msg=result)
+            backup = Path(result["backup_dir"])
+            self.assertIn(str(backup), stdout.getvalue())
+            self.assertTrue((backup / "manifest.json").is_file())
+            backup_record = next(e for e in result["log_entries"] if e.get("action") == "backup")
+            self.assertEqual(backup_record["path"], str(backup))
+            self.assertTrue(ignored.exists() is False)
+            restore = _run_sweep("restore", "--backup", str(backup), "--vault", str(vault))
+            self.assertEqual(restore.returncode, 0, msg=restore.stderr)
+            after = {p: b for p, b in _snapshot_no_git(vault).items()
+                     if f"{os.sep}_meta{os.sep}logs{os.sep}" not in p}
+            self.assertEqual(before, after)
+            inner_git_after = {
+                str(Path(root) / name).removeprefix(str(vault / "1-Projects" / "frag") + os.sep):
+                    (Path(root) / name).read_bytes()
+                for root, _, names in os.walk(vault / "1-Projects" / "frag")
+                for name in names
+            }
+            self.assertEqual(inner_git_before, inner_git_after)
+            self.assertEqual((vault / "1-Projects" / "frag" / "inner.txt").read_bytes(),
+                             b"uncommitted inner bytes\xfe\r\n")
+            self.assertEqual(b"ignored precious bytes\xff\r\n", ignored.read_bytes())
+            self.assertGreater(parent_note.read_bytes().count(b"\r\n"), 0)
+        finally:
+            tmp.cleanup()
+
+    def test_r2_backup_verification_failure_aborts_before_vault_changes(self):
+        from unittest.mock import patch
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            before = _snapshot_no_git(vault)
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=vault, capture_output=True,
+                                  text=True, check=True).stdout.strip()
+            vs = _load_sweep()
+            copy_path = vs._copy_path
+
+            def corrupt_copy(source, target):
+                copy_path(source, target)
+                if target.is_file():
+                    target.write_bytes(target.read_bytes() + b"corrupt")
+
+            plan = {"fragments": [], "leftover_folders": [],
+                    "stale_state_lines": [{"note": "1-Projects/parent/parent.md", "line": "repo head abc1234 commit",
+                                            "line_index": 1, "stale": True}]}
+            with patch.object(vs, "_copy_path", side_effect=corrupt_copy):
+                result = vs.apply_plan(vault, plan)
+            self.assertFalse(result.get("ok"), msg=result)
+            self.assertIn("backup verification mismatch", result.get("error", ""))
+            self.assertEqual(before, _snapshot_no_git(vault))
+            after_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=vault, capture_output=True,
+                                        text=True, check=True).stdout.strip()
+            self.assertEqual(head, after_head)
+            self.assertFalse((vault / "_meta" / "PAUSE").exists())
+            self.assertFalse((vault / "_meta" / "logs").exists())
+            self.assertFalse(list(vault.parent.glob(f"{vault.name}-sweep-backup-*")))
+        finally:
+            tmp.cleanup()
+
+    def test_r2_failed_rename_leaves_fragment_and_related_files_unchanged(self):
+        from unittest.mock import patch
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            pjson = (vault / "_meta" / "projects.json").read_bytes()
+            parent_note = (vault / "1-Projects" / "parent" / "parent.md").read_bytes()
+            fragment_files = _snapshot_no_git(vault / "1-Projects" / "frag")
+            plan = {"vault_path": str(vault),
+                    "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
+                    "leftover_folders": [], "stale_state_lines": [], "broken_links": [],
+                    "unsorted_sessions": [], "re_attribution": {"items": [], "calibration_sample": []}}
+            vs = _load_sweep()
+            with patch.object(vs.os, "rename", side_effect=OSError("rename blocked")):
+                result = vs.apply_plan(vault, plan)
+            item = next(e for e in result["log_entries"] if e.get("action") == "fragment_merge")
+            self.assertEqual(item["status"], "error")
+            self.assertIn("rename blocked", item["reason"])
+            self.assertTrue((vault / "1-Projects" / "frag").is_dir())
+            self.assertEqual((vault / "_meta" / "projects.json").read_bytes(), pjson)
+            self.assertEqual((vault / "1-Projects" / "parent" / "parent.md").read_bytes(), parent_note)
+            self.assertEqual(_snapshot_no_git(vault / "1-Projects" / "frag"), fragment_files)
+            self.assertFalse((vault / "4-Archive" / "merged" / "frag").exists())
+        finally:
+            tmp.cleanup()
+
+    def test_r2_rejects_self_and_non_child_fragment_and_leftover_names(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            vs = _load_sweep()
+            pjson = (vault / "_meta" / "projects.json").read_bytes()
+            parent_note = (vault / "1-Projects" / "parent" / "parent.md").read_bytes()
+            for fragment, parent in (("parent", "parent"), ("parent", "PARENT"), (".", "parent"),
+                                     ("..", "parent"), ("frag/..", "parent"), ("frag\\..", "parent"),
+                                     ("frag", "."), ("frag", ".."), ("frag", "parent/..")):
+                result = vs.apply_plan(vault, {"fragments": [{"folder": fragment, "proposed_parent": parent}],
+                                                "leftover_folders": [], "stale_state_lines": []})
+                item = next(e for e in result["log_entries"] if e.get("action") == "fragment_merge")
+                self.assertEqual(item["status"], "error", (fragment, parent, item))
+                self.assertIn("refused", item["reason"])
+            for folder in (".", "..", "Projects-Old/..", "bad\\name"):
+                result = vs.apply_plan(vault, {"fragments": [], "leftover_folders": [{"folder": folder}],
+                                                "stale_state_lines": []})
+                item = next(e for e in result["log_entries"] if e.get("action") == "leftover_archive")
+                self.assertEqual(item["status"], "error", (folder, item))
+                self.assertIn("refused", item["reason"])
+            self.assertEqual((vault / "_meta" / "projects.json").read_bytes(), pjson)
+            self.assertEqual((vault / "1-Projects" / "parent" / "parent.md").read_bytes(), parent_note)
+        finally:
+            tmp.cleanup()
+
+    def test_r2_missing_parent_note_refuses_fragment_without_project_or_file_edits(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            parent_note = vault / "1-Projects" / "parent" / "parent.md"
+            parent_note.unlink()
+            before = (vault / "_meta" / "projects.json").read_bytes()
+            result = _load_sweep().apply_plan(vault, {
+                "fragments": [{"folder": "frag", "proposed_parent": "parent"}],
+                "leftover_folders": [], "stale_state_lines": []})
+            item = next(e for e in result["log_entries"] if e.get("action") == "fragment_merge")
+            self.assertEqual(item["status"], "error")
+            self.assertIn("parent note not found", item["reason"])
+            self.assertTrue((vault / "1-Projects" / "frag").is_dir())
+            self.assertEqual((vault / "_meta" / "projects.json").read_bytes(), before)
+            self.assertEqual((vault / "1-Projects" / "frag" / "frag.md").read_bytes(), b"# F\n<!-- agentmem:state:begin -->\nfrag state\n<!-- agentmem:state:end -->\n<!-- agentmem:pending:begin -->\nfrag pending\n<!-- agentmem:pending:end -->\n")
+        finally:
+            tmp.cleanup()
+
+    def test_r2_stale_duplicate_lines_use_plan_index_and_exact_text(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            note = vault / "1-Projects" / "parent" / "parent.md"
+            note.write_bytes(
+                b"<!-- agentmem:state:begin -->\nrepo head abc1234 commit\n repo head abc1234 commit\n"
+                b"<!-- agentmem:state:end -->\n"
+            )
+            vs = _load_sweep()
+            generated = vs._scan_stale(vault, {})
+            target = next(item for item in generated if item["line"] == " repo head abc1234 commit")
+            self.assertEqual(target["line_index"], 2)
+            target["stale"] = True
+            plan = {"stale_state_lines": [{"note": "1-Projects/parent/parent.md", "line": " repo head abc1234 commit",
+                                            "line_index": target["line_index"], "stale": True}]}
+            first = vs.apply_plan(vault, plan)
+            stale_result = next(e for e in first["log_entries"] if e.get("action") == "stale_line")
+            self.assertEqual(stale_result["status"], "ok")
+            expected = (b"<!-- agentmem:state:begin -->\nrepo head abc1234 commit\n"
+                        b" (as of unknown commit) repo head abc1234 commit\n<!-- agentmem:state:end -->\n")
+            self.assertEqual(note.read_bytes(), expected)
+            after_first = note.read_bytes()
+            second = vs.apply_plan(vault, plan)
+            stale_result = next(e for e in second["log_entries"] if e.get("action") == "stale_line")
+            self.assertEqual(stale_result["status"], "skip")
+            self.assertEqual(note.read_bytes(), after_first)
+        finally:
+            tmp.cleanup()
+
+    def test_r2_root_leftover_folder_is_archived(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            old = vault / "Projects-Old"
+            old.mkdir()
+            (old / "legacy.txt").write_bytes(b"archive me\xff")
+            plan = {"fragments": [], "leftover_folders": [{"folder": "Projects-Old", "auto_apply": True}],
+                    "stale_state_lines": []}
+            result = _load_sweep().apply_plan(vault, plan)
+            item = next(e for e in result["log_entries"] if e.get("action") == "leftover_archive")
+            self.assertEqual(item["status"], "ok", msg=item)
+            self.assertFalse(old.exists())
+            self.assertEqual((vault / item["dest"] / "legacy.txt").read_bytes(), b"archive me\xff")
+        finally:
+            tmp.cleanup()
+
     def test_non_utf8_note_does_not_crash_and_cleans_up(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
@@ -1261,7 +1489,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
             vs = _load_sweep()
             plan = {"vault_path": str(vault), "fragments": [], "leftover_folders": [],
                     "stale_state_lines": [{"note": "1-Projects/parent/parent.md", "line": "repo head abc1234 commit",
-                                            "stale": True, "auto_apply": True}],
+                                            "line_index": 1, "stale": True, "auto_apply": True}],
                     "broken_links": [], "unsorted_sessions": [],
                     "re_attribution": {"items": [], "calibration_sample": []}}
             result = vs.apply_plan(vault, plan)

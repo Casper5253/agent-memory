@@ -2,12 +2,14 @@
 """Vault hygiene sweep, dry-run plan and apply (WP-S1). Stdlib only."""
 import argparse
 import datetime
+import hashlib
 import json
 import shutil
 import subprocess
 import os
 import random
 import re
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -460,7 +462,7 @@ def _scan_stale(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
             gd = proj_folders[proj_name] / ".git"
             if gd.is_dir():
                 cur = _read_head(gd)
-        for line in block.splitlines():
+        for line_index, line in enumerate(block.splitlines()):
             s = line.strip()
             if not s:
                 continue
@@ -469,7 +471,8 @@ def _scan_stale(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
             if any(kw in s.lower() for kw in REPO_KW):
                 items.append({
                     "note": _rel(note, vault),
-                    "line": s,
+                    "line": line,
+                    "line_index": line_index,
                     "current_head": cur,
                     "stale": cur is not None and cur[:7] not in s,
                     "auto_apply": True,
@@ -686,6 +689,27 @@ def _append_to_pending(note: Path, heading: str, content: str) -> None:
     _atomic_write_bytes(note, data)
 
 
+def _make_parent_dirs(path: Path) -> list[Path]:
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    created = []
+    for directory in reversed(missing):
+        directory.mkdir()
+        created.append(directory)
+    return created
+
+
+def _remove_empty_dirs(paths: list[Path]) -> None:
+    for path in reversed(paths):
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+
+
 def _find_project_entry(data: dict, name: str, folder_path: Path | None = None) -> dict | None:
     for entry in data.get("projects", []):
         if entry.get("name") == name:
@@ -753,6 +777,11 @@ def _apply_fragment(vault: Path, item: dict, date_str: str) -> dict:
         entry["status"] = "error"
         entry["reason"] = "parent folder not found"
         return entry
+    parent_note = parent_dir / f"{parent}.md"
+    if not parent_note.is_file():
+        entry["status"] = "error"
+        entry["reason"] = "parent note not found"
+        return entry
     state_content = b""
     pending_content = b""
     frag_note = frag_dir / f"{folder}.md"
@@ -765,31 +794,49 @@ def _apply_fragment(vault: Path, item: dict, date_str: str) -> dict:
             entry["status"] = "error"
             entry["reason"] = str(e)
             return entry
-    # Update projects.json first, then parent pending, then move the folder last.
-    # This lets a rerun complete any half-done item instead of skipping it.
+    pjson = vault / "_meta" / "projects.json"
     try:
-        _update_projects_json(vault, folder, parent)
-    except (OSError, ValueError, json.JSONDecodeError) as e:
-        entry["status"] = "error"
-        entry["reason"] = f"projects.json update failed: {e}"
-        return entry
-    parent_note = parent_dir / f"{parent}.md"
-    if parent_note.is_file() and (state_content or pending_content):
-        heading = f"### Merged from {folder} ({date_str})"
-        parts = [p.decode("utf-8", errors="replace") for p in (state_content, pending_content) if p]
-        try:
-            _append_to_pending(parent_note, heading, "\n\n".join(parts))
-        except (OSError, ValueError) as e:
-            entry["status"] = "error"
-            entry["reason"] = f"pending append failed: {e}"
-            return entry
-    dest = _archive_dest(vault / "4-Archive" / "merged", folder)
-    try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(frag_dir), str(dest))
+        pjson_before = pjson.read_bytes() if pjson.is_file() else None
+        parent_note_before = parent_note.read_bytes()
     except OSError as e:
         entry["status"] = "error"
+        entry["reason"] = f"could not read merge inputs: {e}"
+        return entry
+    dest = _archive_dest(vault / "4-Archive" / "merged", folder)
+    created_dirs = _make_parent_dirs(dest.parent)
+    try:
+        os.rename(frag_dir, dest)
+    except OSError as e:
+        _remove_empty_dirs(created_dirs)
+        entry["status"] = "error"
         entry["reason"] = f"move failed: {e}"
+        return entry
+    try:
+        _update_projects_json(vault, folder, parent)
+        if state_content or pending_content:
+            heading = f"### Merged from {folder} ({date_str})"
+            parts = [p.decode("utf-8", errors="replace") for p in (state_content, pending_content) if p]
+            _append_to_pending(parent_note, heading, "\n\n".join(parts))
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        rollback_errors = []
+        try:
+            if pjson_before is None:
+                pjson.unlink(missing_ok=True)
+            else:
+                _atomic_write_bytes(pjson, pjson_before)
+        except OSError as rollback_error:
+            rollback_errors.append(f"projects.json rollback failed: {rollback_error}")
+        try:
+            _atomic_write_bytes(parent_note, parent_note_before)
+        except OSError as rollback_error:
+            rollback_errors.append(f"parent note rollback failed: {rollback_error}")
+        try:
+            os.rename(dest, frag_dir)
+            _remove_empty_dirs(created_dirs)
+        except OSError as rollback_error:
+            rollback_errors.append(f"folder rollback failed: {rollback_error}")
+        entry["status"] = "error"
+        entry["reason"] = f"merge update failed: {e}" + ("; " + "; ".join(rollback_errors) if rollback_errors else "")
         return entry
     entry["status"] = "ok"
     entry["dest"] = _rel(dest, vault)
@@ -805,12 +852,13 @@ def _apply_leftover(vault: Path, item: dict) -> dict:
         entry["reason"] = "already archived"
         return entry
     dest = _archive_dest(vault / "4-Archive", folder)
+    created_dirs = _make_parent_dirs(dest.parent)
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dest))
+        os.rename(src, dest)
     except OSError as e:
+        _remove_empty_dirs(created_dirs)
         entry["status"] = "error"
-        entry["reason"] = str(e)
+        entry["reason"] = f"move failed: {e}"
         return entry
     entry["status"] = "ok"
     entry["dest"] = _rel(dest, vault)
@@ -836,6 +884,11 @@ def _apply_stale_line(vault: Path, item: dict) -> dict:
     end_b = STATE_END.encode("utf-8")
     prefix_b = STALE_PREFIX.encode("utf-8")
     target_b = target_line.encode("utf-8")
+    line_index = item.get("line_index")
+    if not isinstance(line_index, int) or isinstance(line_index, bool) or line_index < 0:
+        entry["status"] = "error"
+        entry["reason"] = "missing or invalid state-block line index"
+        return entry
     i = data.find(begin_b)
     j = data.find(end_b)
     if i < 0 or j < i:
@@ -844,25 +897,25 @@ def _apply_stale_line(vault: Path, item: dict) -> dict:
         return entry
     block = data[i + len(begin_b):j]
     lines = block.splitlines(keepends=True)
-    found = False
-    for idx, raw in enumerate(lines):
-        if raw.strip() == target_b:
-            if raw.lstrip().startswith(prefix_b):
-                entry["status"] = "skip"
-                entry["reason"] = "already prefixed"
-                return entry
-            indent_b = raw[: len(raw) - len(raw.lstrip())]
-            new_line = indent_b + prefix_b + raw.lstrip()
-            if not new_line.endswith(b"\n"):
-                if raw.endswith(b"\n"):
-                    new_line += b"\n"
-            lines[idx] = new_line
-            found = True
-            break
-    if not found:
+    if line_index >= len(lines):
         entry["status"] = "skip"
-        entry["reason"] = "line not found"
+        entry["reason"] = "line index outside state block"
         return entry
+    raw = lines[line_index]
+    body = raw[:-2] if raw.endswith(b"\r\n") else raw[:-1] if raw.endswith((b"\n", b"\r")) else raw
+    indent_b = target_b[: len(target_b) - len(target_b.lstrip())]
+    content_b = target_b[len(indent_b):]
+    prefixed_b = indent_b + prefix_b + content_b
+    if body == prefixed_b:
+        entry["status"] = "skip"
+        entry["reason"] = "already prefixed"
+        return entry
+    if body != target_b:
+        entry["status"] = "skip"
+        entry["reason"] = "line text at planned index changed"
+        return entry
+    newline = raw[len(body):]
+    lines[line_index] = prefixed_b + newline
     new_block = b"".join(lines)
     new_data = data[:i + len(begin_b)] + new_block + data[j:]
     try:
@@ -888,6 +941,223 @@ def _today_str() -> str:
     return datetime.date.today().isoformat()
 
 
+def _utc_stamp() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _path_inventory(base: Path, roots: list[dict]) -> tuple[dict[str, dict], list[str]]:
+    files: dict[str, dict] = {}
+    directories: set[str] = set()
+
+    def add_file(path: Path, rel: str) -> None:
+        if path.is_symlink():
+            target = os.readlink(path)
+            files[rel] = {"kind": "symlink", "target": target,
+                          "sha256": hashlib.sha256(os.fsencode(target)).hexdigest()}
+        else:
+            files[rel] = {"kind": "file", "sha256": _hash_file(path)}
+
+    for item in roots:
+        if not item["exists"]:
+            continue
+        rel = item["path"]
+        path = base / Path(rel)
+        if path.is_symlink() or path.is_file():
+            add_file(path, rel)
+            continue
+        if not path.is_dir():
+            raise OSError(f"backup path is not a file or directory: {path}")
+        directories.add(rel)
+        for dirpath, dirnames, filenames in os.walk(path, topdown=True, followlinks=False):
+            current = Path(dirpath)
+            for name in list(dirnames):
+                child = current / name
+                child_rel = child.relative_to(base).as_posix()
+                if child.is_symlink():
+                    add_file(child, child_rel)
+                    dirnames.remove(name)
+                else:
+                    directories.add(child_rel)
+            for name in filenames:
+                child = current / name
+                add_file(child, child.relative_to(base).as_posix())
+    return files, sorted(directories)
+
+
+def _copy_path(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_symlink():
+        os.symlink(os.readlink(source), target, target_is_directory=source.is_dir())
+    elif source.is_dir():
+        shutil.copytree(source, target, symlinks=True)
+    elif source.is_file():
+        shutil.copy2(source, target)
+    else:
+        raise OSError(f"backup source is not a file or directory: {source}")
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        try:
+            path.unlink()
+        except PermissionError:
+            os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+            path.unlink()
+    elif path.is_dir():
+        def remove_readonly(func, raw_path, _exc_info):
+            os.chmod(raw_path, stat.S_IWRITE | stat.S_IREAD)
+            func(raw_path)
+        shutil.rmtree(path, onerror=remove_readonly)
+
+
+def _create_verified_backup(vault: Path, paths: list[Path]) -> tuple[Path, dict]:
+    root_map: dict[str, bool] = {}
+    for path in paths:
+        rel = path.relative_to(vault).as_posix()
+        root_map[rel] = path.exists() or path.is_symlink()
+    roots = [{"path": rel, "exists": exists} for rel, exists in sorted(root_map.items())]
+    parent_dirs: dict[str, bool] = {}
+    for item in roots:
+        parent = (vault / Path(item["path"])).parent
+        while parent != vault and _is_inside_vault_path(parent, vault):
+            rel = parent.relative_to(vault).as_posix()
+            parent_dirs[rel] = parent.is_dir()
+            parent = parent.parent
+    expected_files, expected_dirs = _path_inventory(vault, roots)
+    backup = vault.parent / f"{vault.name}-sweep-backup-{_utc_stamp()}"
+    backup.mkdir()
+    payload = backup / "payload"
+    try:
+        for item in roots:
+            if item["exists"]:
+                _copy_path(vault / Path(item["path"]), payload / Path(item["path"]))
+        copied_files, copied_dirs = _path_inventory(payload, roots)
+        if copied_files != expected_files or copied_dirs != expected_dirs:
+            raise OSError("backup verification mismatch: file list, hashes, or directory list differ")
+        manifest = {
+            "version": 1,
+            "vault_path": str(vault),
+            "roots": roots,
+            "parent_dirs": parent_dirs,
+            "files": expected_files,
+            "directories": expected_dirs,
+        }
+        (backup / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8",
+        )
+        return backup, manifest
+    except BaseException:
+        _remove_path(backup)
+        raise
+
+
+def _restore_backup(backup: Path, vault: Path) -> dict:
+    backup = backup.resolve()
+    vault = vault.resolve()
+    if _is_inside_vault_path(backup, vault):
+        raise ValueError("backup directory must be outside the vault")
+    manifest_path = backup / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("version") != 1:
+        raise ValueError("unsupported backup manifest version")
+    if os.path.normcase(str(Path(manifest.get("vault_path", "")).resolve())) != os.path.normcase(str(vault)):
+        raise ValueError("backup was created for a different vault")
+    roots = manifest.get("roots")
+    if not isinstance(roots, list):
+        raise ValueError("backup manifest has no roots list")
+    allowed = []
+    for item in roots:
+        rel = item.get("path", "")
+        parts = Path(rel).parts
+        if (not isinstance(rel, str) or not rel or Path(rel).is_absolute() or
+                any(part in (".", "..") for part in parts) or "\\" in rel):
+            raise ValueError(f"unsafe path in backup manifest: {rel!r}")
+        if not ((parts and parts[0] in ("1-Projects", "4-Archive") and len(parts) >= 2)
+                or rel == "_meta/projects.json"):
+            raise ValueError(f"backup path is outside supported vault data: {rel}")
+        target = vault / Path(rel)
+        if not _is_inside_vault_path(target.parent, vault):
+            raise ValueError(f"backup parent resolves outside vault: {rel}")
+        allowed.append(item)
+    parent_dirs = manifest.get("parent_dirs", {})
+    if not isinstance(parent_dirs, dict):
+        raise ValueError("backup manifest has invalid parent directory metadata")
+    for rel in parent_dirs:
+        parts = Path(rel).parts
+        if (Path(rel).is_absolute() or any(part in (".", "..") for part in parts) or "\\" in rel or
+                not ((parts and parts[0] in ("1-Projects", "4-Archive") and len(parts) >= 1)
+                     or rel == "_meta")):
+            raise ValueError(f"unsafe parent directory in backup manifest: {rel}")
+        if not _is_inside_vault_path((vault / Path(rel)).parent, vault):
+            raise ValueError(f"parent directory resolves outside vault: {rel}")
+    files, dirs = _path_inventory(backup / "payload", allowed)
+    if files != manifest.get("files") or dirs != manifest.get("directories"):
+        raise ValueError("backup verification failed: payload does not match manifest hashes")
+
+    for item in sorted(allowed, key=lambda entry: len(Path(entry["path"]).parts), reverse=True):
+        target = vault / Path(item["path"])
+        _remove_path(target)
+    for item in sorted(allowed, key=lambda entry: len(Path(entry["path"]).parts)):
+        if item["exists"]:
+            _copy_path(backup / "payload" / Path(item["path"]), vault / Path(item["path"]))
+        else:
+            parent = (vault / Path(item["path"])).parent
+            while parent != vault and _is_inside_vault_path(parent, vault):
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+
+    for rel, existed in sorted(parent_dirs.items(), key=lambda pair: len(Path(pair[0]).parts)):
+        directory = vault / Path(rel)
+        if existed:
+            directory.mkdir(parents=True, exist_ok=True)
+        elif directory.is_dir():
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+
+    restored_files, restored_dirs = _path_inventory(vault, allowed)
+    if restored_files != manifest.get("files") or restored_dirs != manifest.get("directories"):
+        raise OSError("restore verification failed: restored paths do not match backup hashes")
+    return {"ok": True, "backup": str(backup), "files": len(restored_files)}
+
+
+def _backup_targets(vault: Path, actions: list[tuple[str, dict]]) -> list[Path]:
+    targets: set[Path] = set()
+    for kind, item in actions:
+        if kind == "fragment":
+            folder, parent = item["folder"], item["proposed_parent"]
+            src = vault / "1-Projects" / folder
+            dest = _archive_dest(vault / "4-Archive" / "merged", folder)
+            targets.update((src, vault / "1-Projects" / parent / f"{parent}.md",
+                            vault / "_meta" / "projects.json", dest))
+        elif kind == "leftover":
+            folder = item["folder"]
+            src = vault / folder
+            dest = _archive_dest(vault / "4-Archive", folder)
+            targets.update((src, dest))
+        elif kind == "stale":
+            targets.add(vault / item["note"].replace("/", os.sep))
+    ordered = sorted(targets, key=lambda path: (len(path.parts), str(path)))
+    roots: list[Path] = []
+    for path in ordered:
+        if any(parent.is_dir() and path != parent and parent in path.parents for parent in roots):
+            continue
+        roots.append(path)
+    return roots
+
+
 def _count_files(path: Path) -> int:
     n = 0
     for _, _, files in os.walk(path):
@@ -904,18 +1174,28 @@ def _is_under_dir(child: Path, parent: Path) -> bool:
         return False
 
 
+def _safe_child_name(name: object) -> bool:
+    return (isinstance(name, str) and bool(name) and name not in (".", "..")
+            and "/" not in name and "\\" not in name and ":" not in name and "\0" not in name
+            and Path(name).name == name
+            and not Path(name).is_absolute())
+
+
 def _validate_item_paths(vault: Path, kind: str, item: dict) -> str | None:
     """Return an error message if a plan item resolves to an unsafe path, otherwise None."""
     if kind == "fragment":
         folder = item.get("folder", "")
         parent = item.get("proposed_parent", "")
-        if not isinstance(folder, str) or not folder or not isinstance(parent, str) or not parent:
+        if not _safe_child_name(folder) or not _safe_child_name(parent):
             return "missing folder or parent"
+        if folder.casefold() == parent.casefold():
+            return "fragment and parent names must differ"
         src = vault / "1-Projects" / folder
         parent_dir = vault / "1-Projects" / parent
-        if not _is_under_dir(src, vault / "1-Projects"):
+        projects_dir = vault / "1-Projects"
+        if src.parent.resolve() != projects_dir.resolve() or not _is_inside_vault_path(src, vault):
             return "fragment source must be under 1-Projects"
-        if not _is_under_dir(parent_dir, vault / "1-Projects"):
+        if parent_dir.parent.resolve() != projects_dir.resolve() or not _is_inside_vault_path(parent_dir, vault):
             return "fragment parent must be under 1-Projects"
         if _is_under_dir(src, vault / "0-Sessions") or _is_under_dir(parent_dir, vault / "0-Sessions"):
             return "fragment path under 0-Sessions"
@@ -925,21 +1205,17 @@ def _validate_item_paths(vault: Path, kind: str, item: dict) -> str | None:
         return None
     if kind == "leftover":
         folder = item.get("folder", "")
-        if not isinstance(folder, str) or not folder:
+        if not _safe_child_name(folder):
             return "missing folder"
         src = vault / folder
-        if not _is_inside_vault_path(src, vault):
-            return "path resolves outside vault"
-        if not (_is_under_dir(src, vault / "1-Projects") or _is_under_dir(src, vault / "4-Archive")):
-            return "source must be under 1-Projects or 4-Archive"
+        if src.parent.resolve() != vault.resolve() or not _is_inside_vault_path(src, vault):
+            return "leftover must be a direct child of the vault root"
         if _is_under_dir(src, vault / "0-Sessions"):
             return "source under 0-Sessions"
         archive_dest = _archive_dest(vault / "4-Archive", folder)
         if not _is_under_dir(archive_dest, vault / "4-Archive") or _is_under_dir(archive_dest, vault / "0-Sessions"):
             return "target must be under 4-Archive"
         rel = str(src.relative_to(vault))
-        if rel.startswith("0-Sessions" + os.sep):
-            return "leftover source under 0-Sessions"
         if rel.startswith("_meta" + os.sep) or rel == ".git":
             return "leftover source is protected"
         if any(rel.startswith(p) for p in PARA_PREFIXES) or rel in PARA_KNOWN:
@@ -1015,13 +1291,27 @@ def apply_plan(vault: Path, plan: dict, only_auto: bool = False, dry_run: bool =
     sha = None
     log_entries = []
     try:
+        backup, backup_manifest = _create_verified_backup(vault, _backup_targets(vault, actions))
+    except Exception as e:
+        print(f"error: backup failed before changes: {e}", file=sys.stderr)
+        return {"error": f"backup failed before changes: {e}", "ok": False, "log_entries": []}
+    print(f"sweep backup: {backup}")
+    log_entries.append({"ts": _now_iso(), "action": "backup", "path": str(backup),
+                        "files": len(backup_manifest["files"]), "sha": None, "status": "ok"})
+    try:
         if not pause_existed:
             pause_path.parent.mkdir(parents=True, exist_ok=True)
             pause_path.write_bytes(b"")
             pause_created = True
-        sha = _snapshot(vault, date_str)
-        print(f"sweep snapshot {date_str}: {sha}")
-        log_entries.append({"ts": _now_iso(), "action": "snapshot", "sha": sha, "status": "ok"})
+        try:
+            sha = _snapshot(vault, date_str)
+            print(f"sweep snapshot {date_str}: {sha}")
+            log_entries.append({"ts": _now_iso(), "action": "snapshot", "sha": sha, "status": "ok"})
+        except Exception as e:
+            message = f"git snapshot warning, verified backup is available: {type(e).__name__}: {e}"
+            print(message, file=sys.stderr)
+            log_entries.append({"ts": _now_iso(), "action": "snapshot", "sha": None,
+                                "status": "warning", "reason": message})
         for kind, item in actions:
             try:
                 if kind == "fragment":
@@ -1056,7 +1346,8 @@ def apply_plan(vault: Path, plan: dict, only_auto: bool = False, dry_run: bool =
                 pause_path.unlink(missing_ok=True)
             except OSError:
                 pass
-    return {"ok": True, "sha": sha, "actions": len(actions), "log_entries": log_entries}
+    return {"ok": True, "sha": sha, "backup_dir": str(backup),
+            "actions": len(actions), "log_entries": log_entries}
 
 
 def main():
@@ -1070,6 +1361,9 @@ def main():
     aply.add_argument("--plan", required=True)
     aply.add_argument("--only-auto", action="store_true")
     aply.add_argument("--dry-run", action="store_true")
+    restore = sub.add_parser("restore", help="Restore paths from a verified sweep backup")
+    restore.add_argument("--backup", required=True)
+    restore.add_argument("--vault", required=True)
     args = ap.parse_args()
     if args.command == "plan":
         vault = Path(args.vault).resolve()
@@ -1101,6 +1395,14 @@ def main():
         if not result.get("ok"):
             print(f"error: {result.get('error', 'unknown')}", file=sys.stderr)
             return 1
+        return 0
+    if args.command == "restore":
+        try:
+            result = _restore_backup(Path(args.backup), Path(args.vault))
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            print(f"error: restore failed: {e}", file=sys.stderr)
+            return 1
+        print(f"restored {result['files']} files from {result['backup']}")
         return 0
     ap.print_help()
     return 1
