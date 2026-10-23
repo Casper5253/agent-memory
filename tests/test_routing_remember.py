@@ -98,7 +98,7 @@ class Remember(Base):
         self.assertIn("I prefer concise replies", text)
 
     def test_remember_redacts_and_survives_model_failure(self):
-        personal = ["GB82 WEST 1234 5698 7654 32", "4111 1111 1111 1111", "111222333",
+        personal = ["GB82 WEST 1234 5698 7654 32", "4111 1111 1111 1111", "BSN 111222333",
                     "+31 6 12345678", "private.person@example.com"]
         statement = f"API key is {fx.SECRET_SAMPLES[0]} for staging. Details {'; '.join(personal)}"
         res = remember.remember_item(self.cfg, statement, cwd=self.cwd,

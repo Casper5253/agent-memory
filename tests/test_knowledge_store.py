@@ -191,7 +191,7 @@ class StoreCase(unittest.TestCase):
 
     def test_import_and_model_output_are_redacted_before_database_writes(self):
         email = "private.person@example.com"
-        imported = self.imported("private-data", excerpt=f"Use SQLite. BSN 111222333. Contact {email}.")
+        imported = self.imported("private-data", excerpt=f"Use SQLite. BSN 111222333 Contact {email}.")
         source = self.store.get_source(self.pid, imported.source_ids[0])
         self.assertNotIn("111222333", source["excerpt"])
         self.assertNotIn(email, source["excerpt"])
