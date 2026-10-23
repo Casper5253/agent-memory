@@ -12,8 +12,9 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 
-from .config import CAPTURE_ENV, RUNTIME
+from .config import CAPTURE_ENV
 from .redact import redact
 
 
@@ -31,13 +32,23 @@ Return ONLY a JSON object with exactly these keys:
   "facts": list of verified facts the session established (configuration values, paths, versions, behaviours observed). Max 12.
   "open_questions": list of unresolved questions (max 8)
   "next_steps": list of concrete follow-ups (max 8)
-Rules: use only information in the digest; never invent. Prefer specific nouns (file names, tools, versions).
-Write facts and decisions so they make sense without the transcript. Never include secrets, tokens or personal data."""
+Rules: use only information in the digest; never invent. The summarizer's own working directory, environment,
+machine, and other runtime context are not evidence about the session. Prefer specific nouns (file names, tools,
+versions). Every statement in summary, what_happened, decisions, facts, open_questions, next_steps, and title
+must have a citation object with the same section and exact claim text, plus an exact quote copied from the digest.
+Do not cite a quote that does not support its claim. Omit any claim without a supporting digest span. Return
+"citations": [{"section": "summary", "claim": "...", "quote": "exact digest text"}, ...].
+Never include secrets, tokens or personal data."""
 
 CONSOLIDATE_SYSTEM = """You maintain the CURRENT-STATE section of a project note in a knowledge vault.
-Input: (1) the existing state section (markdown), (2) a new session's summary JSON, (3) that session's wikilink and date.
+Input: (1) the existing state section (markdown), (2) a new session's summary JSON with digest citations,
+(3) that session's wikilink and date.
 Reconcile, do not append blindly:
 - Update "Current state" so it describes the project as it is NOW. Remove statements the new session made false.
+- The consolidator's own working directory, environment, machine, and other runtime context are not evidence.
+- Keep every prior fact and decision unless the cited session evidence contradicts it.
+- Every new status bullet must be supported by a cited summary claim and include its source link as
+  [[<session wikilink without brackets>#eN]], where eN is the evidence_id in the summary citation. Do not create a new assertion from an uncited statement.
 - A new decision that replaces an older active decision: move the old one to "Superseded decisions" as
   "- <old date> — <old decision> → superseded <new date>: <short reason> (<old link>)" and add the new one to "Active decisions".
 - Keep every still-valid decision with its original date and link. Never drop history silently.
@@ -54,9 +65,6 @@ Decision bullets: "- YYYY-MM-DD — <decision> — <rationale> (<session wikilin
 
 
 def _run(system: str, prompt: str, model: str, timeout: int) -> dict:
-    RUNTIME.mkdir(parents=True, exist_ok=True)
-    cwd = RUNTIME / "tmp"
-    cwd.mkdir(exist_ok=True)
     env = dict(os.environ, **{CAPTURE_ENV: "1"})
     exe = shutil.which("claude")
     if not exe:
@@ -65,8 +73,9 @@ def _run(system: str, prompt: str, model: str, timeout: int) -> dict:
             "--setting-sources", "", "--tools", "", "--disable-slash-commands", "--strict-mcp-config",
             "--system-prompt", system]
     try:
-        out = subprocess.run(args, input=prompt.encode("utf-8"), capture_output=True, timeout=timeout,
-                             cwd=cwd, env=env, shell=False)
+        with tempfile.TemporaryDirectory(prefix="agentmem-llm-") as neutral_dir:
+            out = subprocess.run(args, input=prompt.encode("utf-8"), capture_output=True, timeout=timeout,
+                                 cwd=neutral_dir, env=env, shell=False)
     except FileNotFoundError as e:
         raise LLMError("claude CLI not found") from e
     except subprocess.TimeoutExpired as e:
@@ -95,23 +104,65 @@ def _strings(v, limit, email_allowlist=None):
     return [redact(str(x), email_allowlist=email_allowlist).strip() for x in (v or []) if str(x).strip()][:limit] if isinstance(v, list) else []
 
 
+def _grounded_statements(data: dict, digest_text: str) -> tuple:
+    citations = []
+    for citation in data.get("citations", []) if isinstance(data.get("citations"), list) else []:
+        if not isinstance(citation, dict):
+            continue
+        section, claim, quote = (citation.get(k) for k in ("section", "claim", "quote"))
+        if not all(isinstance(value, str) and value.strip() for value in (section, claim, quote)):
+            continue
+        if quote in digest_text:
+            citations.append({"section": section, "claim": claim.strip(), "quote": quote.strip()})
+    return {(c["section"], c["claim"]): c for c in citations}, citations
+
+
+def _sentences(value):
+    return [part.strip() for part in re.split(r"(?<=[.!?])\s+", value.strip()) if part.strip()]
+
+
 def summarize(digest_text: str, model: str = "haiku", timeout: int = 180, email_allowlist=None) -> dict:
     data = _run(SUMMARY_SYSTEM, "SESSION DIGEST:\n\n" + digest_text, model, timeout)
-    if not isinstance(data.get("summary"), str) or not data["summary"].strip():
-        raise LLMError("summary missing")
+    grounded, citations = _grounded_statements(data, digest_text)
+
+    def keep(section, value):
+        return [part for part in _sentences(value) if (section, part) in grounded]
+
+    summary = " ".join(keep("summary", str(data.get("summary") or "")))
+    if not summary:
+        raise LLMError("summary missing digest-cited statements")
     decisions = []
     for d in data.get("decisions") or []:
-        if isinstance(d, dict) and str(d.get("decision", "")).strip():
-            decisions.append({"decision": redact(str(d["decision"]).strip(), email_allowlist=email_allowlist),
-                              "rationale": redact(str(d.get("rationale", "")).strip(), email_allowlist=email_allowlist)})
+        if not isinstance(d, dict):
+            continue
+        decision = str(d.get("decision", "")).strip()
+        rationale = str(d.get("rationale", "")).strip()
+        if decision and ("decision", decision) in grounded:
+            decisions.append({"decision": redact(decision, email_allowlist=email_allowlist),
+                              "rationale": redact(rationale, email_allowlist=email_allowlist)
+                              if rationale and ("rationale", rationale) in grounded else ""})
+    grounded_lists = {
+        "what_happened": [claim for claim in _strings(data.get("what_happened"), 10) if ("what_happened", claim) in grounded],
+        "facts": [claim for claim in _strings(data.get("facts"), 12) if ("facts", claim) in grounded],
+        "open_questions": [claim for claim in _strings(data.get("open_questions"), 8) if ("open_questions", claim) in grounded],
+        "next_steps": [claim for claim in _strings(data.get("next_steps"), 8) if ("next_steps", claim) in grounded],
+    }
+    title = str(data.get("title") or "").strip()
+    title = title if ("title", title) in grounded else ""
+    used = {(section, claim) for section, claim in grounded if section == "summary" and claim in summary}
+    used.update(("title", title) for _ in [0] if title)
+    for key, values in grounded_lists.items():
+        used.update((key, value) for value in values)
+    for decision in decisions:
+        used.add(("decision", decision["decision"]))
+        if decision["rationale"]:
+            used.add(("rationale", decision["rationale"]))
     return {
-        "title": redact(str(data.get("title") or ""), email_allowlist=email_allowlist).strip()[:80],
-        "summary": redact(data["summary"].strip(), email_allowlist=email_allowlist),
-        "what_happened": _strings(data.get("what_happened"), 10, email_allowlist),
+        "title": redact(title, email_allowlist=email_allowlist)[:80],
+        "summary": redact(summary, email_allowlist=email_allowlist),
+        **{key: _strings(values, len(values), email_allowlist) for key, values in grounded_lists.items()},
         "decisions": decisions[:12],
-        "facts": _strings(data.get("facts"), 12, email_allowlist),
-        "open_questions": _strings(data.get("open_questions"), 8, email_allowlist),
-        "next_steps": _strings(data.get("next_steps"), 8, email_allowlist),
+        "citations": [c for c in citations if (c["section"], c["claim"]) in used],
         "_cost_usd": data.get("_cost_usd", 0.0),
     }
 
@@ -122,15 +173,44 @@ REQUIRED_HEADINGS = ["### Current state", "### Active decisions", "### Supersede
 def consolidate(state_md: str, summary: dict, link: str, date: str, model: str = "haiku", timeout: int = 180,
                 email_allowlist=None) -> tuple:
     payload = {k: v for k, v in summary.items() if not k.startswith("_")}
+    citation_ids = []
+    if isinstance(payload.get("citations"), list):
+        for index, citation in enumerate(payload["citations"], 1):
+            if isinstance(citation, dict):
+                citation["evidence_id"] = f"e{index}"
+                citation_ids.append(f"e{index}")
     prompt = (f"EXISTING STATE SECTION:\n{state_md or '(empty: this is the first session for the project)'}\n\n"
               f"NEW SESSION ({date}, link {link}):\n{json.dumps(payload, ensure_ascii=False, indent=1)}")
-    data = _run(CONSOLIDATE_SYSTEM, prompt, model, timeout)
-    md = str(data.get("state_markdown") or "").strip()
-    pos = [md.find(h) for h in REQUIRED_HEADINGS]
-    if any(p < 0 for p in pos) or pos != sorted(pos):
-        raise LLMError("consolidation output missing required headings")
-    if len(md) > 8000:
-        raise LLMError("consolidation output too long")
+
+    def checked_markdown(data):
+        md = str(data.get("state_markdown") or "").strip()
+        pos = [md.find(h) for h in REQUIRED_HEADINGS]
+        if any(p < 0 for p in pos) or pos != sorted(pos):
+            raise LLMError("consolidation output missing required headings")
+        if len(md) > 8000:
+            raise LLMError("consolidation output too long")
+        old_bullets = {line.strip() for line in (state_md or "").splitlines() if line.strip().startswith("-")}
+        if citation_ids:
+            target = link[2:-2] if link.startswith("[[") and link.endswith("]]") else link
+            allowed = {f"[[{target}#{evidence_id}]]" for evidence_id in citation_ids}
+            for line in md.splitlines():
+                stripped = line.strip()
+                if (stripped.startswith("-") and stripped.lower() != "- none" and stripped not in old_bullets
+                        and not any(ref in stripped for ref in allowed)):
+                    raise LLMError("new status statement missing digest citation")
+        return md
+
+    try:
+        data = _run(CONSOLIDATE_SYSTEM, prompt, model, timeout)
+        md = checked_markdown(data)
+    except LLMError as error:
+        if str(error) != "consolidation output too long":
+            raise
+        shortened = prompt + "\n\nThe previous output exceeded 8000 characters. Shorten it to 8000 characters or fewer. " \
+            "Keep prior facts and decisions unless the cited session evidence contradicts them. " \
+            "Do not remove any prior item only because the page is long."
+        data = _run(CONSOLIDATE_SYSTEM, shortened, model, timeout)
+        md = checked_markdown(data)
     while "[[[[" in md or "]]]]" in md:  # models sometimes re-wrap a link that already has brackets
         md = md.replace("[[[[", "[[").replace("]]]]", "]]")
     return redact(md, email_allowlist=email_allowlist), data.get("_cost_usd", 0.0)

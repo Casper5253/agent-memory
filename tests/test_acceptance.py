@@ -232,6 +232,59 @@ class Acceptance(Base):
         self.assertIn("Postgres", notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END))
         self.assertEqual(notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END).strip(), "")
 
+    def test_11b_pending_older_update_does_not_overwrite_newer_status(self):
+        older = self.claude_session("s-pending-a", fx.SUBSTANTIAL, 120)
+        self.end("claude", "s-pending-a", older)
+        self.run_worker(consolidator=fx.failing_llm)
+        note = self.project_note()
+        original_state = notes.get_block(note, notes.STATE_BEGIN, notes.STATE_END)
+        pending = notes.get_block(note, notes.PENDING_BEGIN, notes.PENDING_END)
+        self.assertEqual(notes.get_block(note, notes.STATE_BEGIN, notes.STATE_END), original_state)
+        self.assertIn("status update pending", pending)
+        self.assertIn("model unavailable", pending)
+
+        newer = self.claude_session("s-newer-b", fx.SWITCH, 60)
+        self.end("claude", "s-newer-b", newer)
+        self.run_worker()
+        state_after_newer = notes.get_block(self.project_note(), notes.STATE_BEGIN, notes.STATE_END)
+        self.assertIn("Postgres", state_after_newer)
+        self.assertEqual(self.man.capture("claude", "s-pending-a", 1)["consolidated"], 1,
+                         "each new capture must drain older pending updates")
+
+        result = pipeline.consolidate_pending(self.cfg, self.man, fx.fake_summarize, fx.fake_consolidate)
+        final_note = self.project_note()
+        final_state = notes.get_block(final_note, notes.STATE_BEGIN, notes.STATE_END)
+        final_pending = notes.get_block(final_note, notes.PENDING_BEGIN, notes.PENDING_END)
+        self.assertIn("Postgres", final_state)
+        self.assertEqual(final_pending.strip(), "")
+        self.assertEqual(result["still_pending"], 0)
+        history = self.cfg.projects_dir / "Demo App" / "History.md"
+        history_text = history.read_text(encoding="utf-8")
+        self.assertIn("Use SQLite for storage", history_text)
+        older_link = Path(self.man.capture("claude", "s-pending-a", 1)["note_path"]).with_suffix("").as_posix()
+        self.assertIn(f"[[{older_link}]]", history_text)
+
+    def test_11c_displaced_state_items_are_linked_in_project_history(self):
+        path = self.cfg.projects_dir / "Demo App" / "Demo App.md"
+        old_state = "\n".join([
+            "### Current state", "- Current endpoint is /v1.", "- Blocker: migration is pending.", "",
+            "### Active decisions", "- Keep SQLite for local mode.", "", "### Superseded decisions", "- none", "",
+            "### Open questions and next steps", "- Confirm rollout date.",
+        ])
+        new_state = "\n".join([
+            "### Current state", "- Current endpoint is /v2.", "", "### Active decisions", "- none", "",
+            "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
+        ])
+        notes.update_project_note(path, "Demo App", "2026-10-23", state=old_state)
+        notes.update_project_note(path, "Demo App", "2026-10-24", state=new_state, session_link="0-Sessions/new-session")
+
+        history = path.with_name("History.md").read_text(encoding="utf-8")
+        self.assertIn("Current endpoint is /v1", history)
+        self.assertIn("Blocker: migration is pending", history)
+        self.assertIn("Keep SQLite for local mode", history)
+        self.assertIn("Confirm rollout date", history)
+        self.assertIn("[[0-Sessions/new-session]]", history)
+
     def _codex(self, sid, turns):
         path = self.tmp / "codex" / f"rollout-2026-10-14T10-00-00-{sid}.jsonl"
         fx.write_jsonl(path, fx.codex_lines(sid, self.cwd, turns))
