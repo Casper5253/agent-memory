@@ -125,6 +125,26 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(failed[0]['last_error'], 'FileNotFoundError: no transcript for codex:missing-tx-0001')
 
 
+class HealthTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / '.audit')
+        self.addCleanup(self.tmp.cleanup)
+        self.man = Manifest(Path(self.tmp.name) / 'manifest.sqlite')
+        self.addCleanup(self.man.close)
+
+    def test_health_counts_each_state_once(self):
+        self.man.touch('claude', 'waiting-0001', now=0)
+        self.man.record_event('claude', 'waiting-0001', 'turn', 0)
+        self.man.touch('codex', 'retrying-0002', end=True, now=0)
+        self.man.fail('codex', 'retrying-0002', 'FileNotFoundError: x', now=0)
+        self.man.touch('codex', 'failed-0003', end=True, now=0)
+        for _ in range(5):
+            self.man.fail('codex', 'failed-0003', 'FileNotFoundError: y', now=0)
+        self.man.touch('claude', 'done-0004', end=True, now=0)
+        self.man.mark('claude', 'done-0004', status='captured')
+        self.assertEqual(self.man.health(5), {'pending': 1, 'retrying': 1, 'failed': 1, 'unended': 1})
+
+
 class MigrationTests(unittest.TestCase):
     def test_v0_manifest_keeps_every_row(self):
         tmp = Path(tempfile.mkdtemp(dir=Path(__file__).resolve().parents[1] / '.audit'))
