@@ -6,6 +6,7 @@ tool outputs or raw transcript records.
 import hashlib
 import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 
 from .adapters import Transcript
@@ -26,6 +27,8 @@ class Digest:
     assistant_chars: int = 0
     recent: list = field(default_factory=list)          # last assistant messages (for prompt-less ranges)
     tool_calls: int = 0
+    git_commits: list = field(default_factory=list)
+    git_files: list = field(default_factory=list)
     text: str = ""                                      # bounded summarizer input
     sha: str = ""
 
@@ -83,6 +86,11 @@ def build(t: Transcript, min_prompts: int, min_chars: int, cap: int, *, email_al
                     d.files.append(rel)
         else:
             d.tool_calls += 1
+    d.git_commits, d.git_files = _git_session_evidence(t)
+    for path in d.git_files:
+        if path.lower() not in seen_files:
+            seen_files.add(path.lower())
+            d.files.append(path)
     d._gate = _gate(d, min_prompts, min_chars)
     d.text = _render(t, d, cap)
     d.sha = hashlib.sha256(d.text.encode("utf-8")).hexdigest()[:16]
@@ -90,6 +98,8 @@ def build(t: Transcript, min_prompts: int, min_chars: int, cap: int, *, email_al
 
 
 def _gate(d: Digest, min_prompts: int, min_chars: int) -> tuple:
+    if d.git_commits:
+        return True, f"{len(d.git_commits)} Git commits during session"
     if not d.prompts:
         if len(d.files) >= 3 or (d.tool_calls >= 20 and d.assistant_chars >= min_chars):
             return True, f"autonomous continuation ({d.tool_calls} tool calls, {len(d.files)} files)"
@@ -103,10 +113,58 @@ def _gate(d: Digest, min_prompts: int, min_chars: int) -> tuple:
     return False, f"trivial ({len(d.prompts)} prompts, {d.tool_calls} tool calls, {len(d.files)} files)"
 
 
+def _git_session_evidence(t: Transcript) -> tuple[list, list]:
+    """Return committed and still-dirty paths proven to have changed during this session window."""
+    if not t.cwd or not t.started:
+        return [], []
+    try:
+        commits = subprocess.run(["git", "-C", t.cwd, "log", "--since=" + t.started,
+                                  "--until=" + (t.ended or t.started), "--format=@@%H%x09%cI", "--name-only"],
+                                 capture_output=True, text=True, timeout=4, check=True).stdout
+        status = subprocess.run(["git", "-C", t.cwd, "status", "--porcelain", "--untracked-files=all"],
+                                capture_output=True, text=True, timeout=4, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return [], []
+    commit_ids, committed_paths = [], []
+    current_commit = False
+    for line in commits.splitlines():
+        if line.startswith("@@"):
+            commit_ids.append(line[2:].split("\t", 1)[0])
+            current_commit = True
+        elif line.strip() and current_commit:
+            committed_paths.append(line.strip().replace("\\", "/"))
+    window_start = _timestamp(t.started)
+    window_end = _timestamp(t.ended) if t.ended else None
+    dirty_paths = []
+    for line in status.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        candidate = os.path.join(t.cwd, path)
+        try:
+            modified = os.path.getmtime(candidate)
+        except OSError:
+            continue
+        if modified >= window_start and (window_end is None or modified <= window_end):
+            dirty_paths.append(path.replace("\\", "/"))
+    files = list(dict.fromkeys(committed_paths + dirty_paths))
+    return commit_ids, files
+
+
+def _timestamp(value):
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def _render(t: Transcript, d: Digest, cap: int) -> str:
     """Prompts and answers interleaved by turn, then files and commands. Middle turns are trimmed first."""
     head = [f"AGENT: {t.agent}", f"WORKING DIRECTORY: {t.cwd}", f"SESSION TITLE: {t.title or '-'}", ""]
     tail = ["", "FILES MODIFIED:"] + [f"- {f}" for f in d.files[:80]]
+    if d.git_commits:
+        tail += ["", "GIT COMMITS DURING SESSION:"] + [f"- {commit}" for commit in d.git_commits[:20]]
     tail += ["", "COMMANDS (first 40):"] + [f"- {c}" for c in d.commands[:40]]
     turns = []
     answers = iter(d.answers)
