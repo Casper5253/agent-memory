@@ -19,6 +19,24 @@ from agentmem.knowledge.retrieval import (ContextRequest, QmdClient, build_conte
 from agentmem.knowledge.store import KnowledgeStore
 
 
+class ScriptedExtraction(unittest.TestCase):
+    def test_scripted_proposals_use_only_source_content_and_cannot_grant_authority(self):
+        from tools.knowledge_scripted import ScriptedExtractor
+        from agentmem.knowledge.proposals import serialize_model_input
+        sid = "a" * 64
+        text = "Use SQLite for synthetic-component-01 storage. Reason: atomic cursor updates."
+        data = dict(sources=[dict(source_id=sid, excerpt=text, speaker="user")], existing_claims=[])
+        extractor = ScriptedExtractor({sid: dict(occurred_at="2026-10-01T00:00:00Z")})
+        proposal = json.loads(extractor(serialize_model_input(data)))
+        validated = p.validate_proposal(proposal)
+        self.assertEqual(validated.claims[0].statement, "Use SQLite for synthetic-component-01 storage.")
+        self.assertEqual(validated.claims[0].rationale, "atomic cursor updates")
+        self.assertEqual(validated.claims[0].evidence[0].source_id, sid)
+        self.assertNotIn("status", proposal["claims"][0])
+        self.assertNotIn("evidence_level", proposal["claims"][0])
+        self.assertEqual(json.loads(extractor(serialize_model_input(data))), proposal)
+
+
 class ContextCase(unittest.TestCase):
     def setUp(self):
         scratch = ROOT / ".audit" / "tmp"

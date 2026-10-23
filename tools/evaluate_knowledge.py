@@ -188,7 +188,7 @@ def _noop_consolidator(state, summary, link, date, timeout=0):
     return state or "", 0.0
 
 
-def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index):
+def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index, *, knowledge=False):
     sys.path.insert(0, str(ROOT))
     from agentmem.adapters import read as adapter_read, read_opencode
     from agentmem.config import Config
@@ -204,6 +204,9 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index)
         auto_index=False,
         embeddings=False,
         qmd_index=str(qmd_index) if qmd_index else "",
+        knowledge_mode="shadow" if knowledge else "off",
+        knowledge_project_ids={p["name"]: pid for pid, p in project_roots.items()} if knowledge else {},
+        project_privacy={p["name"]: p["policy"] for p in project_roots.values()} if knowledge else {},
     )
 
     transcripts_dir = Path(corpus.get("_transcripts_dir", ""))
@@ -233,8 +236,21 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index)
     if missing_response:
         raise SetupError(f"missing summary_response for {len(missing_response)} session parts")
 
+    if knowledge:
+        from agentmem.knowledge.store import KnowledgeStore
+        with KnowledgeStore.create(vault / cfg.knowledge_db) as store:
+            for pid, project in project_roots.items():
+                store.register_project(pid, project["name"], project["roots"], privacy=project["policy"], mode="shadow")
+
     # Replay opencode exports from the copied local JSON files instead of calling CLI.
     original_export_opencode = None
+    original_repo_head = None
+    if knowledge:
+        from agentmem import projects as projects_module
+        original_repo_head = projects_module.repo_head
+        recorded_heads = {_replace_placeholders(session.get("cwd", ""), work, vault): session.get("repo_head")
+                          for session in corpus["sessions"]}
+        projects_module.repo_head = lambda cwd: recorded_heads.get(str(cwd))
     if opencode_sources:
         import agentmem.adapters as adapters_mod
         original_export_opencode = adapters_mod.export_opencode
@@ -295,6 +311,8 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index)
         finally:
             llm.summarize = original_summarize
     finally:
+        if original_repo_head is not None:
+            projects_module.repo_head = original_repo_head
         if original_export_opencode is not None:
             import agentmem.adapters as adapters_mod
             adapters_mod.export_opencode = original_export_opencode
@@ -500,7 +518,15 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
         cache = tmp / "cache"
         vault, work, home, roots = make_temp_vault(tmp, corpus, qmd_index="index")
         try:
-            run_pipeline_for_corpus(vault, work, home, corpus, roots, qmd_index="index")
+            candidate = arm in ("candidate", "candidate-noreview")
+            cfg = run_pipeline_for_corpus(vault, work, home, corpus, roots, qmd_index="index", knowledge=candidate)
+            extraction, approvals = None, []
+            if candidate:
+                from tools.knowledge_scripted import extract_seeded_captures, apply_seeded_approvals, seed_repository_heads
+                seed_repository_heads(roots, corpus["projects"])
+                extraction = extract_seeded_captures(cfg)
+                if arm == "candidate":
+                    approvals = apply_seeded_approvals(cfg, corpus["acceptances"], corpus["sources"])
             rc, stdout, stderr = run_mem_command(vault, home, ["index", "--no-embed"], timeout=120, cwd=tmp, cache_dir=cache)
             index_result = {"returncode": rc, "stdout": stdout.strip(), "stderr": stderr[:500]}
             qmd_status, qmd_version = detect_qmd(env=isolated_environment(vault, home, cache), cwd=tmp)
@@ -515,17 +541,20 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
                 contexts = {}
                 grades = {}
                 for name, request in (("primary", primary), ("raw", query)):
-                    package = package_baseline_context(vault, home, request, qmd_available=qmd_status == "ok", cwd=tmp, cache_dir=cache)
+                    package = (package_candidate_context(cfg, request) if candidate else
+                        package_baseline_context(vault, home, request, qmd_available=qmd_status == "ok", cwd=tmp, cache_dir=cache))
                     grade = grade_query(query, expected[query["query_id"]], package, corpus=corpus, vault=vault)
-                    grade.update(backend=package["backend"], qmd_used=package["qmd_used"], fallback=package["fallback"],
-                                 hit_count=package["hit_count"], search_terms=request["query"], search_error=package["search_error"])
+                    grade.update(backend=package.get("backend", "local"), qmd_used=package.get("qmd_used", False), fallback=package.get("fallback", False),
+                                 hit_count=package.get("hit_count", len(package.get("items", []))), search_terms=request["query"], search_error=package.get("search_error", ""))
+                    if candidate:
+                        grade.update(extraction="scripted", context=package)
                     contexts[name] = package
                     grades[name] = grade
                 row = dict(grades["primary"], case=query["case"], partition=query["partition"], raw=grades["raw"])
                 row["quality_measured"] = not bool(row["unmeasured"])
                 outcomes.append(row)
             diagnostics = []
-            for terms in ("historical", "storage"):
+            for terms in (() if candidate else ("historical", "storage")):
                 package = package_baseline_context(vault, home, {"query": terms, "budget": 2400}, cwd=tmp, cache_dir=cache)
                 diagnostics.append({"terms": terms, "backend": package["backend"], "hit_count": package["hit_count"],
                                     "snippet_count": len(package["snippets"]), "search_error": package["search_error"]})
@@ -565,13 +594,31 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
                                   "Frozen replay summaries and no-op consolidation do not establish model extraction or normal current-state quality.",
                                   "One correctness run; no latency, cost, semantic or exact-token performance claim.",
                                   "The 800-character snippet cap and conservative byte packaging are frozen for both query forms."]}
+        if candidate:
+            result.update(extraction="scripted", extraction_run=extraction, seeded_approvals=approvals,
+                blocked_cases={"T01": {"blocked_on": "WP-06", "reason": "operator-reviewed documentary registration unavailable"}})
+            result["limitations"] = ["Scripted extraction measures the context slice, never real-model extraction quality.",
+                "T01 is a measured failure blocked on WP-06 documentary registration. Gold is unchanged.",
+                "Operational fault execution remains unmeasured and separate from retrieval quality.",
+                "No adoption verdict, latency distribution, cost or exact-token claim."]
         write_outputs(output_dir, result, outcomes, corpus)
         return exit_code
 
 
+def package_candidate_context(cfg, query):
+    from agentmem.knowledge.retrieval import ContextRequest, build_context
+    from agentmem.knowledge.store import KnowledgeStore
+    with KnowledgeStore(cfg.vault / cfg.knowledge_db, vault=cfg.vault) as store:
+        request = ContextRequest(query["query"], project=query["project"],
+            mode="current" if query.get("mode") == "as_of" else query.get("mode", "current"),
+            as_of=query.get("as_of"), budget=query.get("budget", 2400))
+        package = build_context(store, request).to_dict()
+    return package
+
+
 def main():
     p = argparse.ArgumentParser(description="WP-00 knowledge evaluation harness")
-    p.add_argument("--arm", choices=["baseline", "reliability"], required=True)
+    p.add_argument("--arm", choices=["baseline", "reliability", "candidate-noreview", "candidate"], required=True)
     p.add_argument("--fixtures", required=True)
     p.add_argument("--output", required=True)
     args = p.parse_args()
