@@ -410,7 +410,33 @@ class SweepTests(unittest.TestCase):
             self.assertIn("Child-copy", frags)
             frag = frags["Child-copy"]
             self.assertEqual(frag["evidence"], "shared_remote")
-            self.assertTrue(frag["auto_apply"])
+            self.assertFalse(frag["auto_apply"])
+        finally:
+            tmp.cleanup()
+
+    def test_worktree_of_nested_foreign_repo_is_not_parent_worktree(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault, work = tmp.path / "vault", tmp.path / "work"
+            for d in ("_meta", "1-Projects/Parent", "1-Projects/Parent Wt"):
+                (vault / d).mkdir(parents=True)
+            parent = work / "parent"
+            parent.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=parent)
+            _git("config", "user.email", "test@test", cwd=parent)
+            _git("config", "user.name", "Test", cwd=parent)
+            (parent / "f.txt").write_text("p", encoding="utf-8")
+            _git("add", ".", cwd=parent)
+            _git("commit", "-q", "-m", "init", cwd=parent)
+            foreign = parent / "foreign.git"
+            _git("init", "-q", "--bare", "-b", "main", str(foreign), cwd=work)
+            _git("push", "-q", str(foreign), "main", cwd=parent)
+            _git("worktree", "add", "-q", str(work / "parent-wt"), "main", cwd=foreign)
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "Parent", "roots": [str(parent)], "status": "active"},
+                {"name": "Parent Wt", "roots": [str(work / "parent-wt")], "status": "active"}]}), encoding="utf-8")
+            frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
+            self.assertFalse(frags.get("Parent Wt", {"auto_apply": False})["auto_apply"])
         finally:
             tmp.cleanup()
 

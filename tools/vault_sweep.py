@@ -235,8 +235,10 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
                     parent_root = _resolved(proj_folders[parent])
                     if frag_root == parent_root:
                         evidence = "guess"
-                    else:
+                    elif _resolved(parent_gd) == _resolved(proj_folders[parent] / ".git"):
                         evidence = "worktree"
+                    else:
+                        evidence = "guess"
                 else:
                     parent = None
 
@@ -264,7 +266,8 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
                 evidence = "guess"
 
         if parent and evidence:
-            auto = evidence in ("worktree", "shared_remote")
+            # Remote equality cannot be proven from URLs alone, so only a registered worktree of the parent's own .git applies unreviewed.
+            auto = evidence == "worktree"
             items.append({"folder": name, "proposed_parent": parent, "evidence": evidence, "auto_apply": auto})
     return items
 
