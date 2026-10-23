@@ -9,6 +9,7 @@ import uuid
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -242,6 +243,121 @@ class ImportFromReceipt(SourceCase):
             self.assertEqual(outcomes[0].status, "imported")
         finally:
             man.close()
+
+
+class CaptureRegressions(SourceCase):
+    def prepare(self, **changes):
+        sys.path.insert(0, str(ROOT / "tests"))
+        import fixtures as fx
+        self.fx = fx
+        self.capture_cfg = fx.make_vault(self.root, knowledge_mode="shadow",
+            knowledge_project_ids={"Demo App": self.pid}, project_privacy={"Demo App": "model_allowed"}, **changes)
+        self.transcript = self.root / "capture.jsonl"
+        self.cwd = str(self.root / "work" / "demo-app")
+        fx.write_jsonl(self.transcript, fx.claude_lines("capture", self.cwd, fx.SUBSTANTIAL))
+        return self.capture_cfg
+
+    def capture(self, cfg, summary=None, merge=None):
+        from agentmem import pipeline
+        from agentmem.manifest import Manifest
+        with closing(Manifest(cfg.manifest_path)) as man:
+            man.touch("claude", "capture", cwd=self.cwd, source=str(self.transcript), end=True)
+            with patch("agentmem.projects.repo_head", return_value=None):
+                result = pipeline.finalize(cfg, man, man.get("claude", "capture"),
+                    summary or self.fx.fake_summarize, merge or self.fx.fake_consolidate)
+            return result, [dict(row) for row in man.query_captures()]
+
+    def test_private_capture_remember_and_deferred_make_zero_model_calls(self):
+        from agentmem import pipeline, remember
+        from agentmem.manifest import Manifest
+        cfg = self.prepare()
+        cfg.project_privacy["Demo App"] = "local_only"
+        calls = []
+        def forbidden(*args, **kwargs):
+            calls.append(args)
+            return (self.fx.fake_consolidate if len(args) > 1 else self.fx.fake_summarize)(*args, **kwargs)
+        self.assertEqual(self.capture(cfg, forbidden, forbidden)[0], "captured")
+        remember.remember_item(cfg, "LOCAL_ONLY_CANARY", cwd=self.cwd, consolidator=forbidden)
+        with closing(Manifest(cfg.manifest_path)) as man:
+            pipeline.consolidate_pending(cfg, man, summarizer=forbidden, consolidator=forbidden)
+        self.assertEqual(calls, [])
+
+    def test_excluded_capture_and_remember_store_only_skip(self):
+        from agentmem import remember
+        cfg = self.prepare()
+        cfg.project_privacy["Demo App"] = "excluded"
+        calls = []
+        def forbidden(*args, **kwargs):
+            calls.append(args)
+            return (self.fx.fake_consolidate if len(args) > 1 else self.fx.fake_summarize)(*args, **kwargs)
+        outcome, rows = self.capture(cfg, forbidden, forbidden)
+        self.assertEqual(outcome, "excluded")
+        self.assertEqual(rows, [])
+        result = remember.remember_item(cfg, "EXCLUDED_CANARY", cwd=self.cwd, consolidator=forbidden)
+        self.assertEqual(result["status"], "excluded")
+        self.assertEqual(calls, [])
+        self.assertEqual(list(cfg.sessions_dir.rglob("*.md")), [])
+        self.assertEqual(list((cfg.meta / "capture-receipts").glob("*.json")), [])
+
+    def test_real_capture_and_resumed_part_import_independently(self):
+        cfg = self.prepare()
+        self.assertEqual(self.capture(cfg)[0], "captured")
+        self.fx.write_jsonl(self.transcript, self.fx.claude_lines("capture", self.cwd, self.fx.SWITCH), append=True)
+        self.assertEqual(self.capture(cfg)[0], "captured")
+        rows = self.store.db.execute("SELECT part,length(capture_sha) FROM imports ORDER BY part").fetchall()
+        self.assertEqual([tuple(row) for row in rows], [(1, 64), (2, 64)])
+
+    def test_mode_off_has_no_packet_dependency_or_new_receipt_fields(self):
+        cfg = self.prepare()
+        cfg.knowledge_mode = "off"
+        with patch.object(ksources, "build_receipt_packets", side_effect=RuntimeError("unavailable")):
+            self.assertEqual(self.capture(cfg)[0], "captured")
+        receipt = json.loads(next((cfg.meta / "capture-receipts").glob("*.json")).read_text(encoding="utf-8"))
+        self.assertNotIn("sources", receipt)
+        self.assertNotIn("source_warnings", receipt)
+
+    def test_scan_rejects_bad_receipt_hash_and_manifest_project_mismatch(self):
+        from agentmem import pipeline
+        from agentmem.manifest import Manifest
+        cfg = self.prepare()
+        with patch.object(ksources, "_store_for_cfg", side_effect=OSError("offline")):
+            self.capture(cfg)
+        path = next((cfg.meta / "capture-receipts").glob("*.json"))
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        beta = str(uuid.uuid4())
+        cfg.knowledge_project_ids["Beta"] = beta
+        cfg.project_privacy["Beta"] = "model_allowed"
+        receipt["project"] = "Beta"
+        with closing(Manifest(cfg.manifest_path)) as man:
+            for valid_hash in (False, True):
+                if valid_hash:
+                    receipt["receipt_sha"] = pipeline._receipt_hash(receipt)
+                path.write_text(json.dumps(receipt), encoding="utf-8")
+                ksources.scan_unimported_captures(cfg, man, self.store)
+                self.assertEqual(self.store.db.execute("SELECT count(*) FROM imports").fetchone()[0], 0)
+
+    def test_packet_hashes_located_raw_bytes_and_full_packet_budget(self):
+        from agentmem import adapters
+        from agentmem.knowledge.policy import canonical
+        cfg = self.prepare()
+        t = adapters.read_claude(str(self.transcript))
+        packets = ksources.build_receipt_packets(t)
+        raw = self.transcript.read_bytes()
+        for packet in packets:
+            import hashlib
+            self.assertEqual(packet["original_range_sha"], hashlib.sha256(raw[packet["start"]:packet["end"]]).hexdigest())
+    def test_full_serialized_packet_budget_and_original_order(self):
+        from agentmem.knowledge.policy import canonical
+        t = Transcript("codex", "s1", "missing-synthetic.jsonl")
+        t.events = [Event("user", "text", str(i) + "x" * 5999, ordinal=i) for i in range(10)]
+        packets = ksources.build_receipt_packets(t)
+        self.assertLessEqual(len(canonical(packets).encode()), 32768)
+        self.assertEqual([p["locator_json"]["event_ordinal"] for p in packets],
+                         sorted(p["locator_json"]["event_ordinal"] for p in packets))
+
+    def test_interior_fences_and_quotes_are_pasted(self):
+        for text in ("Here is data:\n```\nPASTED_CANARY\n```", "Here is a quote:\n> PASTED_CANARY"):
+            self.assertEqual(ksources._speaker(Event("user", "text", text)), "pasted")
 
 
 if __name__ == "__main__":

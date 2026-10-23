@@ -8,6 +8,7 @@ import unittest
 import uuid
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -242,6 +243,66 @@ class AuthorityInjection(ProposalCase):
         result = self.store.apply_proposal(self.pid, proposal_id, rev, proposal_id)
         claim = self.store.get_claim(self.pid, result.created_claim_ids[0])
         self.assertEqual(claim["status"], "reported")
+
+
+class LifecycleRegressions(ProposalCase):
+    def output(self, sid):
+        return self.bind_fixture((FIXTURE_DIR / "valid_minimal.json").read_text(encoding="utf-8"), sid)
+
+    def test_impossible_input_budget_never_calls_model(self):
+        sid = self.import_source()
+        called = []
+        with self.assertRaises(KnowledgeError) as caught:
+            kprop.extract_and_apply(str(self.path), sid, lambda prompt: called.append(prompt) or self.output(sid), max_input_units=1)
+        self.assertEqual(caught.exception.code, "input_limit")
+        self.assertEqual(called, [])
+
+    def test_exact_serialized_input_is_trimmed_and_evidence_is_bounded(self):
+        sid = self.import_source(excerpt="x" * 6000)
+        with KnowledgeStore(self.path) as store:
+            inp = kprop.build_proposal_input(store, sid, max_input_units=1800)
+        self.assertLessEqual(len(kprop.serialize_model_input(inp).encode()), 5400)
+        self.assertTrue(inp["sources"][0]["truncated"])
+        # The full persisted source must not make evidence outside the supplied prefix eligible.
+        body = json.loads(self.output(sid))
+        body["claims"][0]["evidence"][0].update(start=5500, end=5503)
+        self.assertCode("evidence_range", lambda: kprop.extract_and_apply(
+            str(self.path), sid, lambda prompt: json.dumps(body), max_input_units=1800))
+
+    def test_changed_job_state_and_expired_lease_cannot_commit(self):
+        for field, value in (("state", "quarantined"), ("lease_until", "2000-01-01T00:00:00Z"), ("lease_token", "replacement")):
+            with self.subTest(field=field):
+                sid = self.import_source(session=field)
+                def late(prompt):
+                    with KnowledgeStore(self.path, writable=True) as other:
+                        other.db.execute(f"UPDATE jobs SET {field}=? WHERE source_id=?", (value, sid))
+                    return self.output(sid)
+                result = kprop.process_pending_extract_jobs(str(self.path), late)
+                self.assertFalse(any(r["status"] == "applied" for r in result))
+                self.assertEqual(self.store.db.execute("SELECT count(*) FROM claims").fetchone()[0], 0)
+
+    def test_timeout_retries_are_counted_backed_off_and_capped(self):
+        sid = self.import_source()
+        called = []
+        def timeout(prompt):
+            with KnowledgeStore(self.path) as reader:
+                row = reader.db.execute("SELECT state,attempts,lease_token FROM jobs WHERE source_id=?", (sid,)).fetchone()
+            self.assertEqual(row["state"], "running")
+            self.assertTrue(row["lease_token"])
+            called.append(row["attempts"])
+            raise TimeoutError("offline")
+        for attempt in range(3):
+            result = kprop.process_pending_extract_jobs(str(self.path), timeout)
+            self.assertEqual(result[0]["error_code"], "model_timeout")
+            row = self.store.db.execute("SELECT * FROM jobs WHERE source_id=?", (sid,)).fetchone()
+            if attempt < 2:
+                self.assertEqual(row["state"], "pending")
+                self.assertIsNotNone(row["next_try_at"])
+                self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), timeout), [])
+                self.store.db.execute("UPDATE jobs SET next_try_at=NULL WHERE source_id=?", (sid,))
+        self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), timeout), [])
+        self.assertEqual(called, [1, 2, 3])
+        self.assertEqual(row["state"], "quarantined")
 
 
 if __name__ == "__main__":
