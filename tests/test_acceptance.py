@@ -84,12 +84,11 @@ class Acceptance(Base):
         self.run_worker()
         self.run_worker()
         allnotes = self.session_notes()
-        self.assertEqual(len(allnotes), 2)
-        part2 = [p for p in allnotes if p.stem.endswith("-p2")]
-        self.assertEqual(len(part2), 1)
-        text = part2[0].read_text(encoding="utf-8")
+        self.assertEqual(len(allnotes), 1)
+        text = allnotes[0].read_text(encoding="utf-8")
         self.assertIn("Postgres", text)
-        self.assertNotIn("Set up storage for the demo app", text, "part 2 must only cover the new range")
+        self.assertIn("Set up storage for the demo app", text, "continued notes retain the earlier session section")
+        self.assertEqual(1, text.count("## Continued"))
 
     def test_03b_promptless_continuation_is_captured(self):
         src = self.claude_session("s-cont", fx.SUBSTANTIAL, 120)
@@ -100,9 +99,9 @@ class Acceptance(Base):
         fx.write_jsonl(src, [l for l in lines if not (l["type"] == "user" and isinstance(l["message"]["content"], str))], append=True)
         self.end("claude", "s-cont", src)
         self.run_worker()
-        part2 = [p for p in self.session_notes() if p.stem.endswith("-p2")]
-        self.assertEqual(len(part2), 1, "work without new prompts must still be captured")
-        self.assertIn("install.py", part2[0].read_text(encoding="utf-8"))
+        notes = self.session_notes()
+        self.assertEqual(len(notes), 1, "work without new prompts must still update the session note")
+        self.assertIn("install.py", notes[0].read_text(encoding="utf-8"))
 
     def test_04_concurrent_sessions_do_not_corrupt_metadata(self):
         home = self.tmp / "rt"
@@ -145,7 +144,7 @@ class Acceptance(Base):
         self.assertEqual(len(self.session_notes()), 1, "retry must reuse the existing note")
         self.assertIs(Manifest.record_capture, real)
 
-    def test_06_historical_notes_are_immutable(self):
+    def test_06_continuation_updates_the_session_note_once(self):
         src = self.claude_session("s-immut", fx.SUBSTANTIAL)
         self.end("claude", "s-immut", src)
         self.run_worker()
@@ -155,9 +154,12 @@ class Acceptance(Base):
         self.end("claude", "s-immut", src)
         self.run_worker()
         pipeline.consolidate_pending(self.cfg, self.man, fx.fake_summarize, fx.fake_consolidate)
-        self.assertEqual(note.read_bytes(), before)
+        after = note.read_bytes()
+        self.assertNotEqual(after, before)
+        self.assertEqual(1, after.decode("utf-8").count("## Continued"))
+        self.assertEqual(1, len(self.session_notes()))
         self.assertFalse(fsutil.create_once(note, "overwrite attempt"))
-        self.assertEqual(note.read_bytes(), before)
+        self.assertEqual(note.read_bytes(), after)
         self.assertIn("immutable: true", before.decode())
 
     def test_07_project_note_reflects_updated_decisions(self):
