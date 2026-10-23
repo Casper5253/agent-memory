@@ -7,6 +7,7 @@ Isolation is structural, not a convention:
   AGENTMEM_CAPTURE=1          any hook that does run exits immediately
 Callers must handle LLMError: the pipeline falls back to deterministic output, never a partial write.
 """
+import copy
 import json
 import os
 import re
@@ -172,7 +173,7 @@ REQUIRED_HEADINGS = ["### Current state", "### Active decisions", "### Supersede
 
 def consolidate(state_md: str, summary: dict, link: str, date: str, model: str = "haiku", timeout: int = 180,
                 email_allowlist=None) -> tuple:
-    payload = {k: v for k, v in summary.items() if not k.startswith("_")}
+    payload = copy.deepcopy({k: v for k, v in summary.items() if not k.startswith("_")})
     citation_ids = []
     if isinstance(payload.get("citations"), list):
         for index, citation in enumerate(payload["citations"], 1):
