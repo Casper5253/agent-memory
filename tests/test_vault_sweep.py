@@ -468,6 +468,32 @@ class SweepTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_registered_worktree_with_broken_head_is_not_proof(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault, work = tmp.path / "vault", tmp.path / "work"
+            for d in ("_meta", "1-Projects/Parent", "1-Projects/Parent Broken"):
+                (vault / d).mkdir(parents=True)
+            parent = work / "parent"
+            parent.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=parent)
+            _git("config", "user.email", "test@test", cwd=parent)
+            _git("config", "user.name", "Test", cwd=parent)
+            (parent / "f.txt").write_text("p", encoding="utf-8")
+            _git("add", ".", cwd=parent)
+            _git("commit", "-q", "-m", "init", cwd=parent)
+            frag = work / "parent-broken"
+            _git("worktree", "add", "-q", "--detach", str(frag), "HEAD", cwd=parent)
+            admin = parent / ".git" / "worktrees" / "parent-broken"
+            (admin / "HEAD").rename(admin / "HEAD.saved")
+            (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
+                {"name": "Parent", "roots": [str(parent)], "status": "active"},
+                {"name": "Parent Broken", "roots": [str(frag)], "status": "active"}]}), encoding="utf-8")
+            frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
+            self.assertFalse(frags.get("Parent Broken", {"auto_apply": False})["auto_apply"])
+        finally:
+            tmp.cleanup()
+
     def test_ambiguous_root_marked_guess(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:

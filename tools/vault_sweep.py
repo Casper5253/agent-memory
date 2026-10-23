@@ -237,7 +237,7 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
                     if frag_root == parent_root:
                         evidence = "guess"
                     elif (_resolved(parent_gd) == _resolved(proj_folders[parent] / ".git")
-                          and frag_root in _registered_worktrees(proj_folders[parent])):
+                          and _git_confirms_worktree(path, proj_folders[parent])):
                         evidence = "worktree"
                     else:
                         evidence = "guess"
@@ -274,17 +274,28 @@ def _scan_fragments(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
     return items
 
 
-def _registered_worktrees(repo_root: Path) -> set[str]:
-    """Worktrees git itself has registered for this repository; empty when git cannot say."""
+def _git(args: list, cwd: Path) -> "str | None":
     try:
-        out = subprocess.run(["git", "-C", str(repo_root), "worktree", "list", "--porcelain"],
-                             capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
-        return set()
-    if out.returncode != 0:
-        return set()
-    return {_resolved(Path(line[len("worktree "):])) for line in out.stdout.splitlines()
-            if line.startswith("worktree ")}
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def _git_confirms_worktree(frag_root: Path, parent_root: Path) -> bool:
+    """Git itself must list the fragment as a live worktree of the parent and resolve its HEAD and common dir."""
+    listing = _git(["worktree", "list", "--porcelain"], parent_root)
+    if listing is None:
+        return False
+    target, live = _resolved(frag_root), False
+    for block in listing.strip().split("\n\n"):
+        fields = dict((line.split(" ", 1) + [""])[:2] for line in block.splitlines())
+        if "worktree" in fields and _resolved(Path(fields["worktree"])) == target:
+            live = fields.get("HEAD", "").strip("0") != "" and "prunable" not in fields
+    if not live or _git(["rev-parse", "--verify", "HEAD"], frag_root) is None:
+        return False
+    common = _git(["rev-parse", "--path-format=absolute", "--git-common-dir"], frag_root)
+    return common is not None and _resolved(Path(common.strip())) == _resolved(parent_root / ".git")
 
 
 def _resolved(p: Path) -> str:
