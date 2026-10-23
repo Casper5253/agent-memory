@@ -106,6 +106,8 @@ def _strings(v, limit, email_allowlist=None):
 
 
 def _grounded_statements(data: dict, digest_text: str) -> tuple:
+    normalize = lambda value: re.sub(r"\s+", " ", value).strip()
+    digest = normalize(digest_text)
     citations = []
     for citation in data.get("citations", []) if isinstance(data.get("citations"), list) else []:
         if not isinstance(citation, dict):
@@ -113,13 +115,23 @@ def _grounded_statements(data: dict, digest_text: str) -> tuple:
         section, claim, quote = (citation.get(k) for k in ("section", "claim", "quote"))
         if not all(isinstance(value, str) and value.strip() for value in (section, claim, quote)):
             continue
-        if quote in digest_text:
-            citations.append({"section": section, "claim": claim.strip(), "quote": quote.strip()})
+        claim_text, quote_text = normalize(claim), normalize(quote)
+        if quote_text in digest and claim_text in quote_text:
+            canonical = {"decisions": "decision"}.get(section.strip(), section.strip())
+            citations.append({"section": canonical, "claim": claim_text, "quote": quote_text})
     return {(c["section"], c["claim"]): c for c in citations}, citations
 
 
 def _sentences(value):
-    return [part.strip() for part in re.split(r"(?<=[.!?])\s+", value.strip()) if part.strip()]
+    value = value.strip()
+    value = re.sub(r"\b(e\.g|i\.e|Mr|Mrs|Ms|Dr|vs)\.\s+", r"\1<PERIOD> ", value, flags=re.I)
+    return [part.replace("<PERIOD>", ".").strip()
+            for part in re.split(r"(?<=[.!?])\s+", value) if part.strip()]
+
+
+def _claim_key(section, claim):
+    section = {"decisions": "decision"}.get(section, section)
+    return section, re.sub(r"\s+", " ", claim).strip()
 
 
 def summarize(digest_text: str, model: str = "haiku", timeout: int = 180, email_allowlist=None) -> dict:
@@ -127,7 +139,7 @@ def summarize(digest_text: str, model: str = "haiku", timeout: int = 180, email_
     grounded, citations = _grounded_statements(data, digest_text)
 
     def keep(section, value):
-        return [part for part in _sentences(value) if (section, part) in grounded]
+        return [part for part in _sentences(value) if _claim_key(section, part) in grounded]
 
     summary = " ".join(keep("summary", str(data.get("summary") or "")))
     if not summary:
@@ -138,18 +150,19 @@ def summarize(digest_text: str, model: str = "haiku", timeout: int = 180, email_
             continue
         decision = str(d.get("decision", "")).strip()
         rationale = str(d.get("rationale", "")).strip()
-        if decision and ("decision", decision) in grounded:
+        if decision and _claim_key("decision", decision) in grounded:
             decisions.append({"decision": redact(decision, email_allowlist=email_allowlist),
                               "rationale": redact(rationale, email_allowlist=email_allowlist)
-                              if rationale and ("rationale", rationale) in grounded else ""})
+                              if rationale and (_claim_key("rationale", rationale) in grounded
+                                                or _claim_key("decision", rationale) in grounded) else ""})
     grounded_lists = {
-        "what_happened": [claim for claim in _strings(data.get("what_happened"), 10) if ("what_happened", claim) in grounded],
-        "facts": [claim for claim in _strings(data.get("facts"), 12) if ("facts", claim) in grounded],
-        "open_questions": [claim for claim in _strings(data.get("open_questions"), 8) if ("open_questions", claim) in grounded],
-        "next_steps": [claim for claim in _strings(data.get("next_steps"), 8) if ("next_steps", claim) in grounded],
+        "what_happened": [claim for claim in _strings(data.get("what_happened"), 10) if _claim_key("what_happened", claim) in grounded],
+        "facts": [claim for claim in _strings(data.get("facts"), 12) if _claim_key("facts", claim) in grounded],
+        "open_questions": [claim for claim in _strings(data.get("open_questions"), 8) if _claim_key("open_questions", claim) in grounded],
+        "next_steps": [claim for claim in _strings(data.get("next_steps"), 8) if _claim_key("next_steps", claim) in grounded],
     }
     title = str(data.get("title") or "").strip()
-    title = title if ("title", title) in grounded else ""
+    title = title if _claim_key("title", title) in grounded else ""
     used = {(section, claim) for section, claim in grounded if section == "summary" and claim in summary}
     used.update(("title", title) for _ in [0] if title)
     for key, values in grounded_lists.items():
@@ -158,12 +171,14 @@ def summarize(digest_text: str, model: str = "haiku", timeout: int = 180, email_
         used.add(("decision", decision["decision"]))
         if decision["rationale"]:
             used.add(("rationale", decision["rationale"]))
+            used.add(("decision", decision["rationale"]))
+    used_claims = {claim for _, claim in used}
     return {
         "title": redact(title, email_allowlist=email_allowlist)[:80],
         "summary": redact(summary, email_allowlist=email_allowlist),
         **{key: _strings(values, len(values), email_allowlist) for key, values in grounded_lists.items()},
         "decisions": decisions[:12],
-        "citations": [c for c in citations if (c["section"], c["claim"]) in used],
+        "citations": [c for c in citations if (c["section"], c["claim"]) in used or c["claim"] in used_claims],
         "_cost_usd": data.get("_cost_usd", 0.0),
     }
 
@@ -191,14 +206,21 @@ def consolidate(state_md: str, summary: dict, link: str, date: str, model: str =
         if len(md) > 8000:
             raise LLMError("consolidation output too long")
         old_bullets = {line.strip() for line in (state_md or "").splitlines() if line.strip().startswith("-")}
-        if citation_ids:
-            target = link[2:-2] if link.startswith("[[") and link.endswith("]]") else link
-            allowed = {f"[[{target}#{evidence_id}]]" for evidence_id in citation_ids}
-            for line in md.splitlines():
-                stripped = line.strip()
-                if (stripped.startswith("-") and stripped.lower() != "- none" and stripped not in old_bullets
-                        and not any(ref in stripped for ref in allowed)):
-                    raise LLMError("new status statement missing digest citation")
+        target = link[2:-2] if link.startswith("[[") and link.endswith("]]") else link
+        citation_claims = {
+            f"[[{target}#{citation.get('evidence_id')}]]": re.sub(r"\s+", " ", citation.get("claim", "")).strip()
+            for citation in payload.get("citations", []) if isinstance(citation, dict)
+            and citation.get("evidence_id") and isinstance(citation.get("claim"), str)
+        }
+        for line in md.splitlines():
+            stripped = line.strip()
+            if not (stripped.startswith("-") and stripped.lower() != "- none" and stripped not in old_bullets):
+                continue
+            refs = re.findall(r"\[\[[^\]]+\]\]", stripped)
+            body = re.sub(r"\[\[[^\]]+\]\]", "", stripped)
+            normalized_body = re.sub(r"\s+", " ", body).strip()
+            if not refs or not any(ref in citation_claims and citation_claims[ref] in normalized_body for ref in refs):
+                raise LLMError("new status statement lacks a matching digest claim citation")
         return md
 
     try:
