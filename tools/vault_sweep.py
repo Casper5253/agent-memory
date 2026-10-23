@@ -30,6 +30,11 @@ PENDING_BEGIN = "<!-- agentmem:pending:begin -->"
 PENDING_END = "<!-- agentmem:pending:end -->"
 STALE_PREFIX = "(as of unknown commit) "
 HEX7 = re.compile(r"\b[0-9a-fA-F]{7,}\b")
+STALE_REF = re.compile(
+    r"(?:(?P<ref>[A-Za-z0-9_][A-Za-z0-9_./-]*)\s+at\s+(?P<sha>[0-9a-f]{7,})"
+    r"|HEAD\s+(?P<head_sha>[0-9a-f]{7,}))",
+    re.IGNORECASE,
+)
 REPO_KW = ("repo", "repository", "head", "commit")
 FRAG_SUFFIXES = ("-worktree", "-wt", "-copy", "-tmp", "-dev", "-feature")
 GENERIC_WORDS = {"app", "project", "repo", "service", "lib", "tool", "test", "main"}
@@ -457,26 +462,28 @@ def _scan_stale(vault: Path, proj_folders: dict[str, Path]) -> list[dict]:
         if not block:
             continue
         proj_name = note.parent.name
-        cur = None
-        if proj_name in proj_folders:
-            gd = proj_folders[proj_name] / ".git"
-            if gd.is_dir():
-                cur = _read_head(gd)
+        repo = proj_folders.get(proj_name)
+        cur = _git(["rev-parse", "--verify", "HEAD^{commit}"], repo).strip() if repo else None
         for line_index, line in enumerate(block.splitlines()):
             s = line.strip()
-            if not s:
+            searchable = re.sub(r"\[\[[^\]]*\]\]", "", s)
+            match = STALE_REF.search(searchable)
+            if not match:
                 continue
-            if not HEX7.search(s):
-                continue
-            if any(kw in s.lower() for kw in REPO_KW):
-                items.append({
-                    "note": _rel(note, vault),
-                    "line": line,
-                    "line_index": line_index,
-                    "current_head": cur,
-                    "stale": cur is not None and cur[:7] not in s,
-                    "auto_apply": True,
-                })
+            ref = match.group("ref") or "HEAD"
+            sha = match.group("sha") or match.group("head_sha")
+            resolved_ref = _git(["rev-parse", "--verify", f"{ref}^{{commit}}"], repo) if repo else None
+            resolved_sha = _git(["rev-parse", "--verify", f"{sha}^{{commit}}"], repo) if repo else None
+            unresolved = not resolved_ref or not resolved_sha
+            items.append({
+                "note": _rel(note, vault),
+                "line": line,
+                "line_index": line_index,
+                "current_head": cur,
+                "stale": not unresolved and resolved_ref.strip() != resolved_sha.strip(),
+                "auto_apply": not unresolved,
+                **({"reason": "unresolved"} if unresolved else {}),
+            })
     return items
 
 

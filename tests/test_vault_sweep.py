@@ -100,6 +100,14 @@ def _build_vault(base: Path) -> Path:
     (da / "x.txt").write_text("x", encoding="utf-8")
     _git("add", ".", cwd=da)
     _git("commit", "-q", "-m", "init", cwd=da)
+    old_demo_head = _git("rev-parse", "HEAD", cwd=da).stdout.strip()
+    (da / "x.txt").write_text("x2", encoding="utf-8")
+    _git("add", "x.txt", cwd=da)
+    _git("commit", "-q", "-m", "advance main", cwd=da)
+    demo_note = da / "demo-app.md"
+    demo_text = demo_note.read_text(encoding="utf-8")
+    demo_note.write_text(demo_text.replace("repository HEAD: abc1234 (stale, real head is dynamic)",
+                                           f"main at {old_demo_head}"), encoding="utf-8")
     _git("remote", "add", "origin", str(demo_remote), cwd=da)
 
     _git("worktree", "add", "-q", str(vault / "1-Projects" / "frag-a"), "HEAD", cwd=da)
@@ -146,7 +154,7 @@ def _build_vault(base: Path) -> Path:
         "## Current state (maintained by agentmem)\n\n"
         "<!-- agentmem:state:begin -->\n"
         "### Current state\n"
-        f"- repository HEAD: {lib_head}\n\n"
+        f"- HEAD {lib_head}\n\n"
         "### Active decisions\n- none\n\n"
         "### Superseded decisions\n- none\n\n"
         "### Open questions and next steps\n- none\n"
@@ -267,13 +275,51 @@ class SweepTests(unittest.TestCase):
         plan = self._plan()
         stale = [i for i in plan["stale_state_lines"] if "demo-app" in i["note"]]
         self.assertTrue(len(stale) >= 1, f"expected stale demo-app lines, got {stale}")
-        self.assertIn("abc1234", stale[0]["line"])
+        self.assertIn("main at ", stale[0]["line"])
         self.assertTrue(stale[0]["stale"])
         self.assertIsNotNone(stale[0]["current_head"])
         self.assertTrue(stale[0]["auto_apply"])
         fresh = [i for i in plan["stale_state_lines"] if "my-lib" in i["note"]]
         self.assertTrue(len(fresh) >= 1)
         self.assertFalse(fresh[0]["stale"])
+
+    def test_c_stale_scan_requires_resolvable_current_ref_claim(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = tmp.path / "vault"
+            repo = vault / "1-Projects" / "Demo"
+            repo.mkdir(parents=True)
+            _git("init", "-q", "-b", "main", cwd=repo)
+            _git("config", "user.email", "test@test", cwd=repo)
+            _git("config", "user.name", "Test", cwd=repo)
+            (repo / "f.txt").write_text("one", encoding="utf-8")
+            _git("add", ".", cwd=repo)
+            _git("commit", "-q", "-m", "first", cwd=repo)
+            old = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+            _git("branch", "deleted", old, cwd=repo)
+            (repo / "f.txt").write_text("two", encoding="utf-8")
+            _git("commit", "-q", "-am", "second", cwd=repo)
+            _git("branch", "-D", "deleted", cwd=repo)
+            note = repo / "Demo.md"
+            note.write_text(
+                "<!-- agentmem:state:begin -->\n"
+                f"- session [[old-session-{old[:7]}]] repo hash\n"
+                f"- history on other-branch commit {old}\n"
+                f"- repo main at {old}\n"
+                f"- deleted at {old}\n"
+                "<!-- agentmem:state:end -->\n", encoding="utf-8",
+            )
+            items = _load_sweep()._scan_stale(vault, {"Demo": repo})
+            self.assertEqual(len(items), 2, items)
+            stale = next(item for item in items if item["line"].startswith("- repo main at"))
+            self.assertTrue(stale["stale"])
+            self.assertTrue(stale["auto_apply"])
+            unresolved = next(item for item in items if item["line"].startswith("- deleted at"))
+            self.assertFalse(unresolved["auto_apply"])
+            self.assertFalse(unresolved["stale"])
+            self.assertEqual(unresolved["reason"], "unresolved")
+        finally:
+            tmp.cleanup()
 
     def test_d_broken_links_detected(self):
         plan = self._plan()
@@ -734,7 +780,7 @@ class SweepApplyOnlyAutoTests(unittest.TestCase):
         demo_note = self.vault / "1-Projects" / "demo-app" / "demo-app.md"
         text = demo_note.read_text(encoding="utf-8")
         self.assertIn("(as of unknown commit)", text)
-        self.assertIn("abc1234", text)
+        self.assertIn("main at ", text)
 
     def test_g_pause_removed_when_not_preexisting(self):
         pause = self.vault / "_meta" / "PAUSE"
