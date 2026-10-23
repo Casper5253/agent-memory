@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from tools import knowledge_grader
 from tools.knowledge_grader import grade_query, lifecycle_check
 from agentmem.manifest import Manifest
 
@@ -418,6 +419,28 @@ class KnowledgeGrader(unittest.TestCase):
             with self.subTest(query=query["query_id"]):
                 self.assertFalse(grade_query(query, expected, package, corpus=corpus, vault=self.vault)["pass"])
                 self.assertFalse(grade_query(query, expected, self.package([]), corpus=corpus, vault=self.vault)["pass"])
+
+
+class GateApplicabilityTests(unittest.TestCase):
+    def test_k0_gate_excludes_reviewed_t03_without_dropping_audit_rows(self):
+        queries = {
+            "reviewed": {"case": "T03", "variant": "reviewed"},
+            "unreviewed": {"case": "T03", "variant": "unreviewed"},
+        }
+        rows = {
+            "reviewed": {"pass": False, "unmeasured": []},
+            "unreviewed": {"pass": True, "unmeasured": []},
+        }
+
+        selector = getattr(knowledge_grader, "applicable_gate_rows", None)
+        self.assertIsNotNone(selector, "gate scoring must expose arm applicability")
+        k0 = selector(rows, queries, "K0")
+        k = selector(rows, queries, "K")
+
+        self.assertEqual(set(k0), {"unreviewed"})
+        self.assertEqual(k0["unreviewed"]["pass"], True)
+        self.assertEqual(set(k), {"reviewed", "unreviewed"})
+        self.assertEqual(set(rows), {"reviewed", "unreviewed"})
 
 
 if __name__ == "__main__":

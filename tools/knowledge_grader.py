@@ -30,6 +30,17 @@ UNCERTAINTY = re.compile(r"\b(?:unresolved|uncertain|disputed|conflicting report
 RESOLUTION = re.compile(r"\b(?:no unresolved|not uncertain|no uncertainty|no contradiction|no disagreement|only current truth|only correct choice|resolved|accepted current|sole current|the only alternative|with certainty|winner)\b")
 CURRENT_ASSERTION = r"\b(?:accepted.{0,35}(?:current|use now)|current (?:decision|choice|truth)|use .{0,60} now|now use)\b"
 QUERY_STOPWORDS = frozenset("a an and are as at be been by can could did do does for from had has have how i in is it its may me of on or our should that the their then these this those to was we were what when where which while who why will with would you your".split())
+K0_UNREVIEWED_CASES = frozenset({"T02", "T03", "T04"})
+
+
+def gate_query_applicable(arm, query):
+    return not (arm == "K0" and query.get("case") in K0_UNREVIEWED_CASES
+                and query.get("variant") != "unreviewed")
+
+
+def applicable_gate_rows(rows, queries, arm):
+    return {qid: row for qid, row in rows.items()
+            if qid in queries and gate_query_applicable(arm, queries[qid]) and not row.get("unmeasured")}
 
 
 def formulate_query(question):
