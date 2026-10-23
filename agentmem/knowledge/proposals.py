@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from ..config import Config
 from . import policy as p
 from .models import ApplyResult, KnowledgeError, ValidationError
 from .store import KnowledgeStore
@@ -171,6 +172,12 @@ def _privacy_ok(store: KnowledgeStore, project_id: str, source_id: str) -> bool:
     return all(source["privacy"] == "model_allowed" for source in sources.values())
 
 
+def _check_config_privacy(cfg: Config, project_id: str) -> None:
+    names = [name for name, pid in cfg.knowledge_project_ids.items() if pid == project_id]
+    if not names or any(cfg.project_privacy.get(name) != "model_allowed" for name in names):
+        raise KnowledgeError("model_disallowed")
+
+
 def build_proposal_input(store: KnowledgeStore, source_id: str, max_input_units: int = _DEFAULT_INPUT_UNITS) -> dict:
     """Read-only snapshot of one source group plus up to 20 relevant existing claims."""
     row = store.db.execute("SELECT project_id FROM sources WHERE id=?", (source_id,)).fetchone()
@@ -243,29 +250,17 @@ def serialize_model_input(input_dict: dict) -> str:
 
 
 def extract_and_apply(store_path: str, source_id: str, model_callable, *,
+                      cfg: Config,
                       max_input_units: int = _DEFAULT_INPUT_UNITS,
                       max_output_bytes: int = _MAX_OUTPUT_BYTES,
                       extractor_version: str = "v1", prompt_version: str = "v1",
-                      timeout_s: float = _MODEL_TIMEOUT, _lease: ExtractionLease | None = None,
-                      cfg=None) -> ApplyResult:
-    """Isolated model call outside DB locks, then persist and apply as reported.
-    
-    When cfg is provided, checks current project privacy before model call.
-    """
+                      timeout_s: float = _MODEL_TIMEOUT, _lease: ExtractionLease | None = None) -> ApplyResult:
+    """Check current privacy, call the model outside DB locks, then apply as reported."""
     path = Path(store_path).resolve()
     with KnowledgeStore(path) as reader:
         input_dict = build_proposal_input(reader, source_id, max_input_units=max_input_units)
         project_id = input_dict["project_id"]
         if not _privacy_ok(reader, project_id, source_id):
-            raise KnowledgeError("model_disallowed")
-    # Check current cfg privacy before model call
-    if cfg is not None:
-        project_name = None
-        for name, pid in cfg.knowledge_project_ids.items():
-            if pid == project_id:
-                project_name = name
-                break
-        if project_name and cfg.project_privacy.get(project_name) in ("local_only", "excluded"):
             raise KnowledgeError("model_disallowed")
     lease = _lease or _claim_lease(path, source_id)
     if lease is None:
@@ -276,6 +271,7 @@ def extract_and_apply(store_path: str, source_id: str, model_callable, *,
             if not _privacy_ok(reader, project_id, source_id):
                 raise KnowledgeError("model_disallowed")
         prompt = serialize_model_input(input_dict)
+        _check_config_privacy(cfg, project_id)
         started = time.monotonic()
         raw_output = _call_model(model_callable, prompt, min(timeout_s, _MODEL_TIMEOUT))
         if time.monotonic() - started >= min(timeout_s, _MODEL_TIMEOUT):
@@ -303,14 +299,12 @@ def extract_and_apply(store_path: str, source_id: str, model_callable, *,
         raise
 
 
-def process_pending_extract_jobs(store_path: str, model_callable, *, limit: int = 10,
+def process_pending_extract_jobs(store_path: str, model_callable, *, cfg: Config, limit: int = 10,
                                  max_input_units: int = _DEFAULT_INPUT_UNITS,
                                  max_calls: int = 2, budget_s: float = 300,
-                                 timeout_s: float = _MODEL_TIMEOUT,
-                                 cfg=None) -> list:
+                                 timeout_s: float = _MODEL_TIMEOUT) -> list:
     """Durable extraction runner for queued jobs. Returns one result per processed job.
     
-    When cfg is provided, checks current project privacy before each model call.
     max_calls counts only jobs that actually invoked the model (not blocked by privacy).
     """
     path = Path(store_path).resolve()
@@ -331,11 +325,6 @@ def process_pending_extract_jobs(store_path: str, model_callable, *, limit: int 
             lease = _claim_lease(path, source_id, job_id)
             if lease is None:
                 raise KnowledgeError("attempt_limit")
-            # Check current privacy before model call
-            if cfg is not None:
-                project = cfg.project_privacy.get(project_id)
-                if project in ("local_only", "excluded"):
-                    raise KnowledgeError("model_disallowed")
             result = extract_and_apply(str(path), source_id, model_callable, max_input_units=max_input_units,
                                        timeout_s=min(timeout_s, deadline-time.monotonic()), _lease=lease, cfg=cfg)
             model_call_count += 1

@@ -67,6 +67,9 @@ class ProposalCase(unittest.TestCase):
 
     def import_source(self, excerpt="The synthetic project uses SQLite for durable storage.", session="s1", project_id=None, **changes):
         project_id = project_id or self.pid
+        project = self.store.get_project(project_id)
+        self.cfg.knowledge_project_ids[project["name"]] = project_id
+        self.cfg.project_privacy.setdefault(project["name"], project["privacy"])
         source = _source_input(session=session, excerpt=excerpt, **changes)
         result = self.store.import_capture(project_id, CaptureIdentity("codex", session, 1), sha_text(session), [source])
         return result.source_ids[0]
@@ -168,7 +171,7 @@ class ModelInputAndPrivacy(ProposalCase):
                     called.append(prompt)
                     return '{"schema_version":1,"entities":[],"claims":[],"relations":[]}'
                 with self.assertRaises(KnowledgeError) as caught:
-                    kprop.extract_and_apply(str(self.path), source_id, fake)
+                    kprop.extract_and_apply(str(self.path), source_id, fake, cfg=self.cfg)
                 self.assertIn(caught.exception.code, {"model_disallowed", "project_ineligible"})
                 self.assertEqual(called, [])
 
@@ -190,7 +193,7 @@ class ExtractAndApply(ProposalCase):
                         "evidence": [{"source_id": source_id, "start": 0, "end": 3, "role": "supports"}]}],
             "relations": [],
         }
-        result = kprop.extract_and_apply(str(self.path), source_id, self._fake(payload))
+        result = kprop.extract_and_apply(str(self.path), source_id, self._fake(payload), cfg=self.cfg)
         self.assertEqual(len(result.created_claim_ids), 1)
         claim = self.store.get_claim(self.pid, result.created_claim_ids[0])
         self.assertEqual((claim["status"], claim["evidence_level"]), ("reported", "reported"))
@@ -200,7 +203,7 @@ class ExtractAndApply(ProposalCase):
         def huge(prompt: str) -> str:
             return '{"schema_version":1,"entities":[],"claims":[{"ref":"c1","subject_ref":"e1","kind":"fact","predicate":"x","value":"' + "x" * 40000 + '","statement":"x","rationale":"x","valid_from":null,"valid_to":null,"valid_precision":"unknown","valid_end_state":"unknown","evidence":[{"source_id":"' + source_id + '","start":0,"end":1,"role":"supports"}]}],"relations":[]}'
         with self.assertRaises(ValidationError) as caught:
-            kprop.extract_and_apply(str(self.path), source_id, huge, max_output_bytes=32768)
+            kprop.extract_and_apply(str(self.path), source_id, huge, max_output_bytes=32768, cfg=self.cfg)
         self.assertEqual(caught.exception.code, "proposal_limit")
 
     def test_apply_is_idempotent(self):
@@ -214,7 +217,7 @@ class ExtractAndApply(ProposalCase):
                         "evidence": [{"source_id": source_id, "start": 0, "end": 3, "role": "supports"}]}],
             "relations": [],
         }
-        first = kprop.extract_and_apply(str(self.path), source_id, self._fake(payload))
+        first = kprop.extract_and_apply(str(self.path), source_id, self._fake(payload), cfg=self.cfg)
         proposal = self.store.db.execute("SELECT base_revision FROM proposals WHERE id=?", (first.operation_id,)).fetchone()
         second = self.store.apply_proposal(self.pid, first.operation_id, proposal["base_revision"], first.operation_id)
         self.assertTrue(second.replayed)
@@ -272,7 +275,7 @@ class LifecycleRegressions(ProposalCase):
         sid = self.import_source()
         called = []
         with self.assertRaises(KnowledgeError) as caught:
-            kprop.extract_and_apply(str(self.path), sid, lambda prompt: called.append(prompt) or self.output(sid), max_input_units=1)
+            kprop.extract_and_apply(str(self.path), sid, lambda prompt: called.append(prompt) or self.output(sid), max_input_units=1, cfg=self.cfg)
         self.assertEqual(caught.exception.code, "input_limit")
         self.assertEqual(called, [])
 
@@ -286,7 +289,7 @@ class LifecycleRegressions(ProposalCase):
         body = json.loads(self.output(sid))
         body["claims"][0]["evidence"][0].update(start=5500, end=5503)
         self.assertCode("evidence_range", lambda: kprop.extract_and_apply(
-            str(self.path), sid, lambda prompt: json.dumps(body), max_input_units=1800))
+            str(self.path), sid, lambda prompt: json.dumps(body), max_input_units=1800, cfg=self.cfg))
 
     def test_changed_job_state_and_expired_lease_cannot_commit(self):
         for field, value in (("state", "quarantined"), ("lease_until", "2000-01-01T00:00:00Z"), ("lease_token", "replacement")):
@@ -296,7 +299,7 @@ class LifecycleRegressions(ProposalCase):
                     with KnowledgeStore(self.path, writable=True) as other:
                         other.db.execute(f"UPDATE jobs SET {field}=? WHERE source_id=?", (value, sid))
                     return self.output(sid)
-                result = kprop.process_pending_extract_jobs(str(self.path), late)
+                result = kprop.process_pending_extract_jobs(str(self.path), late, cfg=self.cfg)
                 self.assertFalse(any(r["status"] == "applied" for r in result))
                 self.assertEqual(self.store.db.execute("SELECT count(*) FROM claims").fetchone()[0], 0)
 
@@ -311,15 +314,15 @@ class LifecycleRegressions(ProposalCase):
             called.append(row["attempts"])
             raise TimeoutError("offline")
         for attempt in range(3):
-            result = kprop.process_pending_extract_jobs(str(self.path), timeout)
+            result = kprop.process_pending_extract_jobs(str(self.path), timeout, cfg=self.cfg)
             self.assertEqual(result[0]["error_code"], "model_timeout")
             row = self.store.db.execute("SELECT * FROM jobs WHERE source_id=?", (sid,)).fetchone()
             if attempt < 2:
                 self.assertEqual(row["state"], "pending")
                 self.assertIsNotNone(row["next_try_at"])
-                self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), timeout), [])
+                self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), timeout, cfg=self.cfg), [])
                 self.store.db.execute("UPDATE jobs SET next_try_at=NULL WHERE source_id=?", (sid,))
-        self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), timeout), [])
+        self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), timeout, cfg=self.cfg), [])
         self.assertEqual(called, [1, 2, 3])
         self.assertEqual(row["state"], "quarantined")
 
@@ -333,7 +336,7 @@ class LifecycleRegressions(ProposalCase):
             return self.output(sid)
         try:
             self.assertCode("model_timeout", lambda: kprop.extract_and_apply(
-                str(self.path), sid, slow, timeout_s=0.03))
+                str(self.path), sid, slow, timeout_s=0.03, cfg=self.cfg))
             self.assertTrue(started.is_set())
         finally:
             release.set()
@@ -348,7 +351,7 @@ class LifecycleRegressions(ProposalCase):
         self.store.db.execute("INSERT INTO jobs VALUES (?,?,?,'extract',?,NULL,'pending',0,NULL,NULL,NULL,NULL)",
                               (key,self.pid,sid,key))
         called = []
-        result = kprop.process_pending_extract_jobs(str(self.path), lambda prompt: called.append(prompt))
+        result = kprop.process_pending_extract_jobs(str(self.path), lambda prompt: called.append(prompt), cfg=self.cfg)
         self.assertEqual(result[0]["error_code"], "attempt_limit")
         self.assertEqual(called, [])
 
@@ -362,7 +365,7 @@ class LifecycleRegressions(ProposalCase):
             expired.append(True)
         with patch.object(kprop._LeasedStore,"_finish",expire_after_writes), patch.object(kprop,"_now",
                 side_effect=lambda: "2999-01-01T00:00:00Z" if expired else now()):
-            self.assertCode("lease_lost",lambda: kprop.extract_and_apply(str(self.path),sid,lambda prompt:self.output(sid)))
+            self.assertCode("lease_lost",lambda: kprop.extract_and_apply(str(self.path),sid,lambda prompt:self.output(sid), cfg=self.cfg))
         self.assertEqual(self.store.db.execute("SELECT count(*) FROM claims").fetchone()[0],0)
         self.assertEqual(self.store.db.execute("SELECT state FROM proposals").fetchone()[0],"ready")
 
@@ -372,8 +375,8 @@ class LifecycleRegressions(ProposalCase):
         def invalid(prompt):
             called.append(prompt)
             return "not json"
-        self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), invalid)[0]["error_code"], "invalid_json")
-        self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), invalid), [])
+        self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), invalid, cfg=self.cfg)[0]["error_code"], "invalid_json")
+        self.assertEqual(kprop.process_pending_extract_jobs(str(self.path), invalid, cfg=self.cfg), [])
         self.assertEqual(len(called), 1)
 
     def test_authority_and_foreign_source_controls_reach_the_validator(self):
@@ -390,7 +393,7 @@ class LifecycleRegressions(ProposalCase):
                 body["claims"][0][name] = "accepted" if name == "status" else "verified"
             seen=[]
             self.assertCode(code, lambda: kprop.extract_and_apply(str(self.path),sid,
-                lambda prompt: seen.append(prompt) or json.dumps(body)))
+                lambda prompt: seen.append(prompt) or json.dumps(body), cfg=self.cfg))
             self.assertNotIn("OTHER_GROUP_CANARY",seen[0])
             self.assertNotIn("FOREIGN_PROJECT_CANARY",seen[0])
 
