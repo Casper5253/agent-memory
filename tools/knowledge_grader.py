@@ -357,10 +357,21 @@ def _structured_citations(query, context, corpus, vault):
                 if "alternatives" in bundle:
                     if set(bundle) != {"status", "claim_ids", "alternatives", "omitted_alternatives"}:
                         raise ValueError("invalid_conflict_bundle")
-                    if bundle["status"] != "unresolved" or bundle["omitted_alternatives"] != 0 or not alternatives:
+                    if (bundle["status"] != "unresolved" or type(bundle["omitted_alternatives"]) is not int
+                            or bundle["omitted_alternatives"] < 0 or not alternatives):
                         raise ValueError("incomplete_conflict_bundle")
                     if sorted(bundle["claim_ids"]) != sorted(cid for item in alternatives for cid in item["claim_ids"]):
                         raise ValueError("forged_conflict_ids")
+                    missing = set()
+                    for member in bundle["claim_ids"]:
+                        rows = store.db.execute("SELECT a.id,b.id FROM relations r JOIN claims a ON a.id=r.from_id "
+                            "AND a.project_id=r.project_id JOIN claims b ON b.id=r.to_id AND b.project_id=r.project_id "
+                            "WHERE r.project_id=? AND r.kind='contradicts' AND (a.id=? OR b.id=?) "
+                            "AND a.status IN ('reported','accepted','disputed') AND b.status IN ('reported','accepted','disputed')",
+                            (query["project"], member, member)).fetchall()
+                        missing.update(cid for row in rows for cid in row if cid not in bundle["claim_ids"])
+                    if bundle["omitted_alternatives"] != len(missing):
+                        raise ValueError("forged_omitted_alternatives")
                 for item in alternatives:
                     required = {"claim_ids", "status", "evidence_level", "user_stated", "statement", "rationale", "freshness",
                                 "valid_from", "valid_to", "recorded_at", "citations", "relations"}
@@ -396,9 +407,10 @@ def _structured_citations(query, context, corpus, vault):
                         eligible_related.append(other["id"])
                     shown_as_history = row["status"] == "superseded" and item.get("section") == "history"
                     if eligible_related and not shown_as_history and (
-                            bundle.get("status") != "unresolved" or not set(eligible_related) <= set(bundle["claim_ids"])):
+                            bundle.get("status") != "unresolved" or (not set(eligible_related) <= set(bundle["claim_ids"])
+                            and not bundle.get("omitted_alternatives"))):
                         raise ValueError("hidden_conflicting_alternative")
-                    if bundle.get("status") == "unresolved" and row["status"] != "disputed" and not eligible_related:
+                    if bundle.get("status") == "unresolved" and row["status"] != "disputed" and not related:
                         raise ValueError("forged_dispute")
                     if query.get("as_of"):
                         instant = datetime.fromisoformat(query["as_of"].replace("Z", "+00:00"))
@@ -422,9 +434,9 @@ def _structured_citations(query, context, corpus, vault):
                         raise ValueError("missing_or_forged_user_stated")
                     if not item["citations"]:
                         raise ValueError("missing_source_id")
-                    fixture_ids = set()
+                    fixture_ids, pasted = set(), False
                     for citation in item["citations"]:
-                        if set(citation) != {"source_id", "note_path", "start", "end", "quote_sha", "quote", "source_kind"}:
+                        if set(citation) != {"source_id", "note_path", "start", "end", "quote_sha", "quote", "source_kind", "speaker"}:
                             raise ValueError("invalid_citation_shape")
                         eligible = [s for s in intact if s["id"] == citation["source_id"]]
                         if not eligible:
@@ -434,8 +446,10 @@ def _structured_citations(query, context, corpus, vault):
                         if (type(start) is not int or type(end) is not int or not source["source_start"] <= start < end <= source["source_end"]
                                 or end - start > 240 or source["excerpt"][start:end] != citation["quote"]
                                 or policy.sha_text(citation["quote"]) != citation["quote_sha"]
-                                or citation["note_path"] != source["note_path"] or citation["source_kind"] != source["kind"]):
+                                or citation["note_path"] != source["note_path"] or citation["source_kind"] != source["kind"]
+                                or citation["speaker"] != source["speaker"]):
                             raise ValueError("forged_quote")
+                        pasted |= citation["speaker"] == "pasted"
                         policy.relative_path(citation["note_path"], Path(vault))
                         support_text = source["excerpt"][source["source_start"]:source["source_end"]]
                         if not _supports(support_text, item["statement"]) or (item["rationale"] and not _supports(support_text, item["rationale"])):
@@ -446,7 +460,7 @@ def _structured_citations(query, context, corpus, vault):
                     text += "\nStatus: " + item["status"] + "; evidence: " + item["evidence_level"]
                     if user:
                         text += "; user_stated"
-                    if any(s["speaker"] == "pasted" for s in intact):
+                    if pasted:
                         text += "; pasted"
                     if bundle.get("status") == "unresolved":
                         text += "; unresolved alternatives; disputed"

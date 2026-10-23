@@ -100,6 +100,29 @@ class StructuredKnowledgeGrader(unittest.TestCase):
         context["items"][0]["alternatives"][0]["status"] = "accepted"
         self.assertFalse(self.grade(context)["pass"])
 
+    def test_real_wrong_and_foreign_claims_cannot_borrow_the_requested_identity(self):
+        import uuid
+        wrong = self.fixture.claim(statement="A different supported fact.", subject="different", predicate="statement")
+        context = self.fixture.context(query="different")
+        self.assertEqual(context["items"][0]["claim_ids"], [wrong])
+        result = self.grade(context)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("missing_supported_claim" in failure for failure in result["failures"]), result)
+        foreign = str(uuid.uuid4())
+        self.fixture.store.register_project(foreign, "Foreign", [str(self.vault / "foreign")], privacy="model_allowed")
+        original = self.fixture.pid
+        self.fixture.pid = foreign
+        try:
+            self.fixture.claim(statement="Foreign supported fact.", subject="foreign", predicate="statement")
+            foreign_context = self.fixture.context(project=foreign, query="foreign")
+        finally:
+            self.fixture.pid = original
+        context = self.fixture.context()
+        context["items"].extend(foreign_context["items"])
+        result = self.grade(context)
+        self.assertFalse(result["pass"])
+        self.assertTrue(any("foreign" in failure for failure in result["failures"]), result)
+
     def test_superseded_claim_returned_as_current_fails(self):
         successor = self.fixture.claim(statement="Use JSON storage.", value="json", valid_from="2026-10-05T00:00:00Z")
         self.fixture.review(self.cid, "supersede", successor)
@@ -121,6 +144,41 @@ class StructuredKnowledgeGrader(unittest.TestCase):
         self.assertFalse(self.grade(context, corpus)["pass"])
         self.fixture.store.db.execute("UPDATE sources SET excerpt='tampered'")
         self.assertFalse(self.grade(context, corpus)["pass"])
+
+    def test_pasted_label_is_visible_and_must_match_the_cited_source(self):
+        self.fixture.store.db.execute("UPDATE sources SET speaker='pasted'")
+        self.gold["expected_labels"] = ["reported", "pasted"]
+        result = self.grade()
+        self.assertTrue(result["pass"], result)
+        context = self.fixture.context()
+        del context["items"][0]["citations"][0]["speaker"]
+        self.assertFalse(self.grade(context)["pass"])
+        context = self.fixture.context()
+        context["items"][0]["citations"][0]["speaker"] = "user"
+        self.assertFalse(self.grade(context)["pass"])
+
+    def test_temporal_warning_credit_requires_display_and_db_proof(self):
+        self.fixture.claim(statement="An undated fact.", subject="undated", predicate="statement", valid_from=None)
+        self.query.update(mode="as_of", as_of="2026-10-03T00:00:00Z")
+        self.gold["expected_labels"] = ["reported", "unknown_time_excluded"]
+        context = self.fixture.context(as_of=self.query["as_of"])
+        result = self.grade(copy.deepcopy(context))
+        self.assertTrue(result["pass"], result)
+        context["warnings"] = []
+        self.assertFalse(self.grade(context)["pass"])
+        self.fixture.store.db.execute("UPDATE claims SET status='quarantined' WHERE valid_from IS NULL")
+        context = self.fixture.context(as_of=self.query["as_of"])
+        context["warnings"].append("unknown_time_excluded")
+        self.assertFalse(self.grade(context)["pass"])
+
+    def test_omitted_alternatives_count_is_proven_not_asserted(self):
+        self.fixture.claim(statement="Use JSON storage.", value="json", valid_from="2026-10-05T00:00:00Z")
+        self.query.update(mode="as_of", as_of="2026-10-03T00:00:00Z")
+        context = self.fixture.context(as_of=self.query["as_of"])
+        result = self.grade(copy.deepcopy(context))
+        self.assertTrue(result["pass"], result)
+        context["items"][0]["omitted_alternatives"] = 0
+        self.assertFalse(self.grade(context)["pass"])
 
 
 class KnowledgeGrader(unittest.TestCase):
