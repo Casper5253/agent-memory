@@ -394,7 +394,9 @@ def _structured_citations(query, context, corpus, vault):
                                     or (other["valid_to"] and datetime.fromisoformat(other["valid_to"].replace("Z", "+00:00")) <= instant)):
                                 continue
                         eligible_related.append(other["id"])
-                    if eligible_related and (bundle.get("status") != "unresolved" or not set(eligible_related) <= set(bundle["claim_ids"])):
+                    shown_as_history = row["status"] == "superseded" and item.get("section") == "history"
+                    if eligible_related and not shown_as_history and (
+                            bundle.get("status") != "unresolved" or not set(eligible_related) <= set(bundle["claim_ids"])):
                         raise ValueError("hidden_conflicting_alternative")
                     if bundle.get("status") == "unresolved" and row["status"] != "disputed" and not eligible_related:
                         raise ValueError("forged_dispute")
@@ -444,6 +446,8 @@ def _structured_citations(query, context, corpus, vault):
                     text += "\nStatus: " + item["status"] + "; evidence: " + item["evidence_level"]
                     if user:
                         text += "; user_stated"
+                    if any(s["speaker"] == "pasted" for s in intact):
+                        text += "; pasted"
                     if bundle.get("status") == "unresolved":
                         text += "; unresolved alternatives; disputed"
                     live = next((p.get("repo", {}).get("head") for p in corpus.get("projects", []) if p["id"] == query["project"]), None)
@@ -464,9 +468,28 @@ def _structured_citations(query, context, corpus, vault):
                             (query["project"], relation["from_id"], relation["kind"], relation["to_id"])).fetchone():
                             raise ValueError("forged_relation")
                     citations.append(Citation(item["citations"][0]["note_path"], text, frozenset(fixture_ids)))
+            proven = _proven_warnings(store, query) & set(context.get("warnings") or [])
+            if proven:
+                note = "\nWarnings: " + "; ".join(sorted(w.replace("_", " ") for w in proven))
+                citations = [Citation(c.path, c.text + note, c.source_ids) for c in citations]
         finally:
             store.db.execute("ROLLBACK")
     return citations
+
+
+def _proven_warnings(store, query):
+    """Recompute temporal warnings from the query project's claims; a package cannot assert its own."""
+    proven = set()
+    if not query.get("as_of"):
+        return proven
+    rows = store.db.execute("SELECT valid_from, valid_end_state, valid_precision FROM claims WHERE project_id=? "
+                            "AND status IN ('reported','accepted','disputed','superseded')", (query["project"],)).fetchall()
+    for row in rows:
+        if not row["valid_from"] or row["valid_end_state"] == "unknown":
+            proven.add("unknown_time_excluded")
+        elif row["valid_precision"] == "day":
+            proven.add("date_precision_excluded")
+    return proven
 
 
 def _grade_structured(query, gold, context, *, corpus, vault):
