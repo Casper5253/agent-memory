@@ -29,7 +29,10 @@ def render_text(payload):
             if claim.get("freshness_warning"):
                 lines.append(claim["freshness_warning"])
             for citation in claim["citations"]:
-                lines.append("Source " + citation["note_path"] + " [" + str(citation["start"]) + ":" + str(citation["end"]) + "] " + citation["quote"])
+                lines.append("Source " + citation["note_path"] + " [" + str(citation["start"]) + ":" + str(citation["end"]) + "] "
+                    + citation["speaker"] + ": " + citation["quote"])
+        if item.get("omitted_alternatives"):
+            lines.append("Omitted alternatives: " + str(item["omitted_alternatives"]))
     lines.extend(payload.get("warnings", []))
     if "used" in payload:
         lines.append(str(payload["used"]) + "/" + str(payload["budget"]) + " " + payload["budget_unit"])
@@ -38,18 +41,18 @@ def render_text(payload):
     return "\n".join(lines)
 
 
-def _request(args):
+def _request(args, qmd_timeout_ms=1500):
     return ContextRequest(" ".join(getattr(args, "terms", [])), project=args.project, cwd=str(Path.cwd()),
         mode=getattr(args, "mode", "current"), as_of=getattr(args, "as_of", None),
         budget=getattr(args, "budget", 2400), semantic=getattr(args, "semantic", False),
-        tokenizer_id=getattr(args, "tokenizer", None))
+        tokenizer_id=getattr(args, "tokenizer", None), qmd_timeout_ms=qmd_timeout_ms)
 
 
 def _serve(args, status_only=False):
     try:
         cfg = config.load(args.vault)
         with KnowledgeStore(cfg.vault / cfg.knowledge_db, vault=cfg.vault) as store:
-            request = _request(args)
+            request = _request(args, cfg.knowledge_qmd_timeout_ms)
             project = resolve_scope(store, request)
             if cfg.project_privacy.get(project["name"]) == "excluded":
                 payload = error_response("project_excluded", "privacy_violation").to_dict()
@@ -83,7 +86,7 @@ def register(subparsers):
     context.add_argument("--mode", choices=("current", "history"), default="current")
     context.add_argument("--as-of")
     context.add_argument("--budget", type=int, default=2400)
-    context.add_argument("--semantic", action="store_true")
+    context.add_argument("--semantic", action="store_true", help="optional QMD vector search; calls an embedding model")
     context.add_argument("--tokenizer")
     context.add_argument("--json", action="store_true")
     context.set_defaults(fn=cmd_context)

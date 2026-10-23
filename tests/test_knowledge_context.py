@@ -139,6 +139,17 @@ class ContextCase(unittest.TestCase):
         self.assertEqual(result["items"][0]["claim_ids"], [old])
         self.assertEqual(result["items"][0]["alternatives"][0]["status"], "disputed")
         self.assertIn("unknown_time_excluded", result["warnings"])
+        self.assertEqual(result["items"][0]["omitted_alternatives"], 2)
+
+    def test_corrupt_conflict_partner_is_reported_as_omitted(self):
+        old = self.claim(statement="Use JSON storage.", value="json")
+        self.claim()
+        self.store.db.execute("UPDATE sources SET excerpt='corrupt' WHERE id IN "
+            "(SELECT source_id FROM evidence WHERE claim_id=?)", (old,))
+        result = self.context()
+        self.assertEqual(result["items"][0]["status"], "unresolved")
+        self.assertEqual(result["items"][0]["omitted_alternatives"], 1)
+        self.assertEqual(len(result["items"][0]["alternatives"]), 1)
 
     def test_project_isolation_and_scope_resolution(self):
         self.claim()
@@ -301,6 +312,33 @@ class ContextCase(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired):
                 QmdClient("isolated").search("storage", timeout=.02)
         self.assertEqual(run.call_args.kwargs, dict(timeout=.02, index="isolated"))
+
+    def test_cli_uses_configured_qmd_timeout_and_discloses_embedding(self):
+        import io
+        from contextlib import redirect_stdout
+        from types import SimpleNamespace
+        from agentmem.config import Config
+        from agentmem.knowledge.cli import cmd_context
+        self.claim()
+        calls = []
+        class Client:
+            def search(self, *args, **kwargs):
+                calls.append(kwargs["timeout"])
+                return []
+        args = SimpleNamespace(vault=str(self.vault), project=self.pid, terms=["storage"], json=True)
+        cfg = Config(vault=self.vault, knowledge_qmd_timeout_ms=75)
+        with patch("agentmem.knowledge.cli.config.load", return_value=cfg), \
+                patch("agentmem.knowledge.cli.QmdClient", return_value=Client()), redirect_stdout(io.StringIO()):
+            self.assertEqual(cmd_context(args), 0)
+        self.assertEqual(len(calls), 1)
+        self.assertGreater(calls[0], 0)
+        self.assertLessEqual(calls[0], .075)
+        from agentmem.cli import main
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaises(SystemExit) as stopped:
+            main(["context", "--help"])
+        self.assertEqual(stopped.exception.code, 0)
+        self.assertIn("calls an embedding model", output.getvalue())
 
     def test_revision_changes_retry_once_then_busy(self):
         self.claim()

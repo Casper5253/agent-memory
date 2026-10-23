@@ -610,6 +610,8 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
                 extraction = extract_seeded_captures(cfg)
                 if arm == "candidate":
                     approvals = apply_seeded_approvals(cfg, corpus["acceptances"], corpus["sources"])
+                with closing(sqlite3.connect(vault / cfg.knowledge_db)) as review_db:
+                    review_count = review_db.execute("SELECT COUNT(*) FROM operations WHERE actor_kind='operator'").fetchone()[0]
             rc, stdout, stderr = run_mem_command(vault, home, ["index", "--no-embed"], timeout=120, cwd=tmp, cache_dir=cache, source_root=source_root)
             index_result = {"returncode": rc, "stdout": stdout.strip(), "stderr": stderr[:500]}
             qmd_status, qmd_version = detect_qmd(env=isolated_environment(vault, home, cache), cwd=tmp)
@@ -687,7 +689,7 @@ def run_baseline(fixtures_dir, output_dir, arm="baseline"):
                                   "The 800-character snippet cap and conservative byte packaging are frozen for both query forms."]}
         if candidate:
             result.update(extraction="scripted", extraction_run=extraction, seeded_approvals=approvals,
-                adversarial_controls=controls,
+                adversarial_controls=controls, operator_review_operations=review_count,
                 blocked_cases={"T01": {"blocked_on": "WP-06", "reason": "operator-reviewed documentary registration unavailable"}})
             result["limitations"] = ["Scripted extraction measures the context slice, never real-model extraction quality.",
                 "T01 is a measured failure blocked on WP-06 documentary registration. Gold is unchanged.",
@@ -703,7 +705,7 @@ def package_candidate_context(cfg, query):
     with KnowledgeStore(cfg.vault / cfg.knowledge_db, vault=cfg.vault) as store:
         request = ContextRequest(query["query"], project=query["project"],
             mode="current" if query.get("mode") == "as_of" else query.get("mode", "current"),
-            as_of=query.get("as_of"), budget=query.get("budget", 2400))
+            as_of=query.get("as_of"), budget=query.get("budget", 2400), qmd_timeout_ms=cfg.knowledge_qmd_timeout_ms)
         package = build_context(store, request).to_dict()
     return package
 

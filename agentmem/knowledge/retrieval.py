@@ -24,6 +24,7 @@ class ContextRequest:
     budget: int = 2400
     semantic: bool = False
     tokenizer_id: str | None = None
+    qmd_timeout_ms: int = 1500
 
 
 @dataclass
@@ -142,7 +143,7 @@ def _evidence(store, claim):
         end = min(end, start + 240)
         quote = excerpt[start:end]
         citations.append(dict(source_id=span["source_id"], note_path=span["note_path"], start=start,
-            end=end, quote_sha=p.sha_text(quote), quote=quote, source_kind=span["kind"]))
+            end=end, quote_sha=p.sha_text(quote), quote=quote, source_kind=span["kind"], speaker=span["speaker"]))
     return citations, user_stated, heads
 
 
@@ -170,13 +171,21 @@ def _snapshot(store, request):
                 continue
             claim.update(citations=citations[:1], user_stated=user, heads=heads)
             claims[claim["id"]] = claim
-        relations = [dict(row) for row in store.db.execute(
-            "SELECT * FROM relations WHERE project_id=? ORDER BY from_id,kind,to_id", (project["id"],))
-            if row["from_id"] in claims and row["to_id"] in claims]
+        relations, missing_partners = [], {}
+        for row in store.db.execute("SELECT r.*,a.status AS a_status,b.status AS b_status FROM relations r "
+                "JOIN claims a ON a.id=r.from_id AND a.project_id=r.project_id "
+                "JOIN claims b ON b.id=r.to_id AND b.project_id=r.project_id "
+                "WHERE r.project_id=? ORDER BY r.from_id,r.kind,r.to_id", (project["id"],)):
+            if row["from_id"] in claims and row["to_id"] in claims:
+                relations.append({key: row[key] for key in ("project_id", "from_id", "kind", "to_id", "rationale")})
+            elif row["kind"] == "contradicts" and row["a_status"] in p.LIVE_STATUSES and row["b_status"] in p.LIVE_STATUSES:
+                for included, omitted in ((row["from_id"], row["to_id"]), (row["to_id"], row["from_id"])):
+                    if included in claims:
+                        missing_partners.setdefault(included, set()).add(omitted)
         projections = [dict(row) for row in store.db.execute(
             "SELECT * FROM projections WHERE project_id=? AND status='clean' AND rendered_revision=?",
             (project["id"], project["revision"]))]
-        return project, claims, relations, projections, warnings, invalid, len(rows) > 5000
+        return project, claims, relations, projections, warnings, invalid, len(rows) > 5000, missing_partners
     finally:
         store.db.execute("ROLLBACK")
 
@@ -286,7 +295,7 @@ def _item(claim, relations, head):
     return item
 
 
-def _bundles(ranked, claims, relations, head):
+def _bundles(ranked, claims, relations, head, missing_partners):
     selected = list(ranked)
     for cid in ranked[:10]:
         for r in relations:
@@ -312,9 +321,10 @@ def _bundles(ranked, claims, relations, head):
                 pending.extend(adjacency[current] - members)
         seen.update(members)
         items = [_item(claims[member], relations, head) for member in sorted(members)]
-        conflict = len(members) > 1 or any(item["status"] == "disputed" for item in items)
+        missing = set().union(*(missing_partners.get(member, set()) for member in members))
+        conflict = bool(missing) or len(members) > 1 or any(item["status"] == "disputed" for item in items)
         if conflict:
-            bundle = dict(status="unresolved", claim_ids=sorted(members), alternatives=items, omitted_alternatives=0)
+            bundle = dict(status="unresolved", claim_ids=sorted(members), alternatives=items, omitted_alternatives=len(missing))
             priority = 0
         else:
             bundle = items[0]
@@ -333,15 +343,17 @@ def build_context(store, request, qmd_client=None, tokenizer=None, clock=time.mo
         return error_response("invalid_mode")
     if request.tokenizer_id is not None and (tokenizer is None or request.tokenizer_id != tokenizer.id):
         return error_response("unsupported_tokenizer")
+    if type(request.qmd_timeout_ms) is not int or request.qmd_timeout_ms < 1:
+        return error_response("invalid_qmd_timeout")
     if request.as_of:
         try:
             p.instant(request.as_of)
         except KnowledgeError:
             return error_response("invalid_as_of")
     try:
-        backend_deadline = clock() + 1.5 if qmd_client is not None else None
+        backend_deadline = clock() + min(request.qmd_timeout_ms, 1500) / 1000 if qmd_client is not None else None
         for attempt in range(2):
-            project, claims, relations, projections, warnings, invalid, partial = _snapshot(store, request)
+            project, claims, relations, projections, warnings, invalid, partial, missing_partners = _snapshot(store, request)
             lexical = lexical_ranks(request.query, claims)
             lists = [lexical]
             degraded = False
@@ -373,7 +385,7 @@ def build_context(store, request, qmd_client=None, tokenizer=None, clock=time.mo
                 budget_unit="tokens:" + tokenizer.id + ":" + tokenizer.version if tokenizer else "tokens_est_3b")
             response.omitted["invalid_evidence"] = invalid
             response.warnings = sorted(warnings)
-            bundles = _bundles(fuse_ranks(*lists), claims, relations, head)
+            bundles = _bundles(fuse_ranks(*lists), claims, relations, head, missing_partners)
             deferred, spent = [], dict(accepted=0, reported=0)
             quotas = dict(accepted=request.budget * .60, reported=request.budget * .25)
 
