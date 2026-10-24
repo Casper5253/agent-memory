@@ -194,23 +194,26 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
             cwd = t.cwd or row["cwd"] or ""
             done_status = "captured" if row["parts"] else "skipped"
             if t.end <= row["captured_until"] or not t.events:
-                man.mark(agent, sid, status=done_status, end_seen=0, skip_reason=row["skip_reason"] or "no new content",
+                man.mark(agent, sid, status=done_status, captured_until=max(row["captured_until"], t.end),
+                         end_seen=0, skip_reason=row["skip_reason"] or "no new content",
                          last_error=source_error)
                 return "no-new-content"
             if _excluded(cfg, cwd):
-                man.mark(agent, sid, status="skipped", end_seen=0, skip_reason="excluded directory")
+                man.mark(agent, sid, status="skipped", captured_until=t.end, end_seen=0, skip_reason="excluded directory")
                 return "excluded"
             d = extract.build(t, cfg.min_user_prompts, cfg.min_assistant_chars, cfg.digest_char_cap,
                               email_allowlist=cfg.privacy_email_allowlist)
             if not d.substantial:
-                man.mark(agent, sid, status=done_status, end_seen=0, skip_reason=d.gate_reason, cwd=cwd,
+                man.mark(agent, sid, status=done_status, captured_until=t.end, end_seen=0,
+                         skip_reason=d.gate_reason, cwd=cwd,
                          last_error=source_error)
                 return "trivial"
             edited = [p for ev in t.events if ev.kind == "edit" for p in ev.paths]
             attribution = projects.attribute(cwd, cfg.projects_map, files=edited, text="\n".join(d.prompts))
             project = attribution.project
             if ksources._privacy_for(cfg, project) == "excluded":
-                man.mark(agent, sid, status="skipped", end_seen=0, project=project, skip_reason="project excluded")
+                man.mark(agent, sid, status="skipped", captured_until=t.end, end_seen=0,
+                         project=project, skip_reason="project excluded")
                 return "excluded"
             repo_head = projects.repo_head(cwd)
             when = _parse_time(t.started)
@@ -295,8 +298,9 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
     when = _parse_time(receipt["when"])
     cost, consolidated = receipt["cost"], False
     if project != projects.UNSORTED:
+        capture_id = _capture_identity(agent, sid, part)
         extra_cost, consolidated = consolidate_into_project(cfg, project, summary, link, when, kind, consolidator,
-                                                            order_part=part)
+                                                            order_part=part, capture_id=capture_id)
         cost += extra_cost
     for related in receipt["related_projects"]:
         note_path = projects.note_path(cfg.vault, related)
@@ -360,12 +364,17 @@ def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
                     continue
                 match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", source.name)
                 known_id = source.stem if agent == "claude" else (match.group(0) if match else "")
-                if known_id and man.get(agent, known_id) is not None:
+                known = man.get(agent, known_id) if known_id else None
+                if known and known["status"] not in ("captured", "skipped"):
                     continue
                 transcript = adapters.read(agent, source.stem, str(source))
                 if not transcript.session_id or not transcript.cwd or not transcript.events:
                     continue
-                if man.get(agent, transcript.session_id) is not None:
+                known = man.get(agent, transcript.session_id)
+                if known:
+                    if known["status"] in ("captured", "skipped") and transcript.end > known["captured_until"]:
+                        discovered += int(man.reopen_for_growth(agent, transcript.session_id, end=transcript.end,
+                            source=str(source), cwd=transcript.cwd, modified=modified))
                     continue
                 man.touch(agent, transcript.session_id, cwd=transcript.cwd, source=str(source), now=modified)
                 discovered += 1
@@ -382,9 +391,10 @@ def _pending_lines(summary: dict, link: str, date: str) -> list:
     return out or [f"- [ ] {date} [[{link}]] — review session for state changes"]
 
 
-def _pending_marker(pending: str, link: str):
+def _pending_marker(pending: str, link: str, capture_id=None):
+    identity = f"capture-ref:{capture_id}" if capture_id else f"[[{link}]]"
     for line in pending.splitlines():
-        if f"[[{link}]]" not in line or "status update pending" not in line:
+        if f"[[{link}]]" not in line or identity not in line or "status update pending" not in line:
             continue
         base = re.search(r"\bbase=([0-9a-f]{64})\b", line)
         order = re.search(r"\border=(\d+):(\d+)\b", line)
@@ -392,8 +402,13 @@ def _pending_marker(pending: str, link: str):
     return None, None
 
 
+def _capture_identity(agent, sid, part):
+    return hashlib.sha256(json.dumps([agent, sid, int(part)], separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str, when: datetime,
-                             summary_kind: str, consolidator=None, order_override=None, order_part: int = 1) -> tuple:
+                             summary_kind: str, consolidator=None, order_override=None, order_part: int = 1,
+                             capture_id=None) -> tuple:
     """Reconcile one session into its project note. Returns (cost, consolidated?)."""
     if consolidator is None:
         consolidator = lambda state, current_summary, link, date, timeout: llm.consolidate(
@@ -402,7 +417,10 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         return 0.0, False
     note_path = projects.note_path(cfg.vault, project)
     date = f"{when:%Y-%m-%d}"
+    capture_marker = f"<!-- agentmem:capture:{capture_id} -->" if capture_id else ""
+    pending_ref = f"capture-ref:{capture_id}" if capture_id else f"[[{link}]]"
     session_line = f"- {date} [[{link}|{summary.get('title') or 'session'}]]"
+    consolidated_session_line = f"{session_line} {capture_marker}".rstrip()
     with file_lock(cfg.locks_dir / f"project-{notes.slug(project, 12)}.lock", timeout=cfg.lock_timeout_s):
         if not note_path.exists():
             notes.update_project_note(note_path, project, date, email_allowlist=cfg.privacy_email_allowlist)
@@ -412,17 +430,18 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         order_time = int(order_override if order_override is not None else when.timestamp() * 1_000_000)
         order = (order_time, int(order_part))
         base_revision = hashlib.sha256(current_state.encode("utf-8")).hexdigest()
-        pending_base, pending_order = _pending_marker(pending, link)
-        session_marker = f"[[{link}|"
-        if (session_marker in notes.get_block(text, notes.SESS_BEGIN, notes.SESS_END)
-                and f"[[{link}]]" not in notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)):
+        pending_base, pending_order = _pending_marker(pending, link, capture_id)
+        session_block = notes.get_block(text, notes.SESS_BEGIN, notes.SESS_END)
+        session_marker = capture_marker if capture_id else f"[[{link}|"
+        if (session_marker in session_block
+                and pending_ref not in pending):
             return 0.0, True
         if notes.state_order(text) >= order and notes.state_order(text) != (0, 0):
             if not pending_order:
                 reason = "newer state exists; reconciliation required"
-                pending_lines = [f"- [ ] {date} [[{link}]] — status update pending ({reason}; "
+                pending_lines = [f"- [ ] {date} [[{link}]] {pending_ref} — status update pending ({reason}; "
                                  f"base={base_revision}; order={order[0]}:{order[1]})"]
-                pending_lines += _pending_lines(summary, link, date)
+                pending_lines += [f"{line} {pending_ref}" for line in _pending_lines(summary, link, date)]
                 notes.update_project_note(note_path, project, date, pending_add=pending_lines,
                                           session_link=link, session_line=session_line,
                                           email_allowlist=cfg.privacy_email_allowlist)
@@ -436,8 +455,8 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                                            f"[[{link}]]", date, timeout=cfg.llm_timeout_s)
                 if ksources._privacy_for(cfg, project) == "excluded":
                     return cost, False
-                notes.update_project_note(note_path, project, date, state=state, pending_clear=f"[[{link}]]",
-                                          session_link=link, session_line=session_line,
+                notes.update_project_note(note_path, project, date, state=state, pending_clear=pending_ref,
+                                          session_link=link, session_line=consolidated_session_line,
                                           state_order_value=order,
                                           email_allowlist=cfg.privacy_email_allowlist)
                 return cost, True
@@ -448,26 +467,31 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
             reason = "summary is deterministic or project consolidation is unavailable"
         reason = " ".join(reason.split())
         pending_order = pending_order or order
-        pending_lines = [f"- [ ] {date} [[{link}]] — status update pending ({reason[:180]}; "
+        pending_lines = [f"- [ ] {date} [[{link}]] {pending_ref} — status update pending ({reason[:180]}; "
                          f"base={pending_base or base_revision}; order={pending_order[0]}:{pending_order[1]})"]
-        pending_lines += [line for line in _pending_lines(summary, link, date)
+        pending_lines += [f"{line} {pending_ref}" for line in _pending_lines(summary, link, date)
                           if "status update pending" not in line]
-        notes.update_project_note(note_path, project, date, pending_clear=f"[[{link}]]",
+        notes.update_project_note(note_path, project, date, pending_clear=pending_ref,
                                   pending_add=pending_lines,
                                   session_link=link, session_line=session_line,
                                   email_allowlist=cfg.privacy_email_allowlist)
         return 0.0, False
 
 
-def _validate_pending_identity(cfg, man, row, text, summary):
+def _validate_pending_identity(cfg, man, row, text, summary, receipt=None):
     memory = row["summarizer"] == "remember"
     fields = notes.session_metadata(text, note_type="memory" if memory else "session")
-    part = fields.get("part", "1" if memory else None)
-    if (fields.get("agent"), part, fields.get("project")) != (row["agent"], str(row["part"]), row["project"]):
+    actual_part = fields.get("part", "1" if memory else None)
+    expected_part = int(receipt.get("note_part", row["part"])) if receipt else int(row["part"])
+    expected_project = (receipt.get("note_project", receipt.get("project")) if receipt else row["project"])
+    if (fields.get("agent") != row["agent"] or fields.get("project") != expected_project
+            or actual_part != str(expected_part)):
         raise ValueError("capture_identity_conflict: pending note identity or project differs")
     sid = fields.get("session_id")
     if sid == row["session_id"]:
         return
+    if receipt:
+        raise ValueError("capture_identity_conflict: pending receipt session differs")
     if sid != "[REDACTED]":
         raise ValueError("capture_identity_conflict: pending session differs")
     path = _validated_path(cfg, row["note_path"])
@@ -478,6 +502,18 @@ def _validate_pending_identity(cfg, man, row, text, summary):
         raise ValueError("capture_identity_conflict: masked pending identity lacks unique supported manifest")
     if not memory and notes.source_range(text) != (row["start_offset"], row["end_offset"]):
         raise ValueError("capture_identity_conflict: masked pending source range differs")
+
+
+def _receipt_section_present(text, receipt, part):
+    receipt_text = receipt["text"]
+    if int(part) == int(receipt.get("note_part", part)):
+        return text.startswith(receipt_text)
+    sections = re.split(r"(?m)(?=^## Continued )", receipt_text)
+    for section in sections:
+        match = re.search(r"(?m)^- Capture part: (\d+)$", section)
+        if match and int(match[1]) == int(part):
+            return section.rstrip() in text
+    return False
 
 
 def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidator=None, limit: int = 20,
@@ -499,10 +535,15 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
             path = _validated_path(cfg, row["note_path"])
             persisted = path.read_bytes()
             text = persisted.decode("utf-8")
-            _validate_pending_identity(cfg, man, row, text, summary)
-            fields = notes.session_metadata(text, note_type="memory" if row["summarizer"] == "remember" else "session")
             receipt = _load_receipt(cfg, row["agent"], row["session_id"], row["part"], row["start_offset"] or 0)
-            if receipt and (hashlib.sha256(persisted).hexdigest() != receipt["content_sha"] or summary != receipt["summary"]):
+            _validate_pending_identity(cfg, man, row, text, summary, receipt)
+            fields = notes.session_metadata(text, note_type="memory" if row["summarizer"] == "remember" else "session")
+            if receipt and (receipt.get("project") != row["project"]
+                            or receipt.get("note_path") != row["note_path"]
+                            or receipt.get("start") != row["start_offset"]
+                            or receipt.get("end") != row["end_offset"]
+                            or not _receipt_section_present(text, receipt, row["part"])
+                            or summary != receipt["summary"]):
                 raise ValueError("capture_identity_conflict: pending evidence mismatch")
         except (OSError, ValueError) as error:
             log(cfg, "pending-retry-failed", session=row["session_id"], error=str(error))
@@ -513,9 +554,11 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
             kind = "persisted"
         link = Path(row["note_path"]).with_suffix("").as_posix()
         session_when = _parse_time(fields.get("started")) if fields.get("started") else _parse_time(row["date"])
+        capture_id = (None if row["summarizer"] == "remember" else
+                      _capture_identity(row["agent"], row["session_id"], row["part"]))
         cost, ok = consolidate_into_project(cfg, row["project"], summary, link, session_when, kind, consolidator,
                                             order_override=int(session_when.timestamp() * 1_000_000),
-                                            order_part=int(row["part"]))
+                                            order_part=int(row["part"]), capture_id=capture_id)
         if ok:
             man.set_consolidated(row["agent"], row["session_id"], row["part"], 1, cost)
             done += 1

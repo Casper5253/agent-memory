@@ -120,6 +120,16 @@ class Manifest:
         with self.tx() as db:
             db.execute(f"UPDATE sessions SET {cols} WHERE agent=? AND session_id=?", (*fields.values(), agent, session_id))
 
+    def reopen_for_growth(self, agent, session_id, *, end, source, cwd, modified):
+        """Reopen a completed scan only when the transcript extends beyond its cursor."""
+        with self.tx() as db:
+            changed = db.execute(
+                "UPDATE sessions SET status='pending', source=COALESCE(?, source), cwd=COALESCE(?, cwd), "
+                "last_activity=?, end_seen=0, updated=? WHERE agent=? AND session_id=? "
+                "AND status IN ('captured','skipped') AND captured_until < ?",
+                (source, cwd, modified, time.time(), agent, session_id, end)).rowcount
+            return changed == 1
+
     def fail(self, agent, session_id, error: str, now=None):
         now = now or time.time()
         with self.tx() as db:
