@@ -133,13 +133,27 @@ class SupersedeScopeTests(unittest.TestCase):
         self.assertEqual(result.sections, old)
         self.assertEqual([d.reason for d in result.displaced], ['git-live'])
 
-    def test_resolved_item_does_not_require_a_replacement(self):
+    def test_resolved_item_requires_a_replacement(self):
         old = status.empty()
         old['next'] = [status.Item('i1', 'Implement coverage', '[[old#e1]]')]
         update = dict(sections=status.empty(), displaced=[dict(id='i1', reason='resolved', ref='[[new#e1]]', claim='Coverage completed')])
         result = status.reconcile(old, update, {'[[new#e1]]': 'Coverage completed'})
-        self.assertEqual(result.sections, status.empty())
-        self.assertEqual(result.displaced[0].reason, 'resolved')
+        self.assertEqual(result.sections, old)
+        self.assertEqual(result.displaced, [])
+
+    def test_resolved_section_compatibility_matrix(self):
+        for source in status.SECTIONS:
+            for destination in status.SECTIONS:
+                with self.subTest(source=source, destination=destination):
+                    old = status.empty()
+                    old[source] = [status.Item('i1', 'Original claim', '[[old#e1]]')]
+                    update = dict(sections={**status.empty(), destination: [dict(text='Completed claim', ref='[[new#e1]]')]},
+                                  displaced=[dict(id='i1', reason='resolved', ref='[[new#e1]]', claim='Completed claim')])
+                    result = status.reconcile(old, update, {'[[new#e1]]': 'Completed claim'})
+                    compatible = (source == 'questions' and destination in ('decisions', 'latest', 'working_now')
+                                  or source in ('active', 'next') and destination in ('latest', 'working_now'))
+                    self.assertEqual(any(i.id == 'i1' for items in result.sections.values() for i in items), not compatible)
+                    self.assertEqual(len(result.displaced), int(compatible))
 
 
 if __name__ == '__main__':

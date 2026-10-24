@@ -262,6 +262,23 @@ def touch_state_order(text: str, order: tuple) -> str:
     return text.rstrip("\n") + "\n\n" + marker + "\n"
 
 
+EVIDENCE_ORDER = re.compile(r'(?m)^<!-- agentmem:evidence-order:([0-9a-f]{64}):(\d+):(\d+) -->\n?')
+
+
+def evidence_orders(text, sections):
+    stored = {m[1]: (int(m[2]), int(m[3])) for m in EVIDENCE_ORDER.finditer(text)}
+    fallback = state_order(text)
+    return {item.ref: stored.get(hashlib.sha256(item.ref.encode('utf-8')).hexdigest(), fallback)
+            for items in sections.values() for item in items}
+
+
+def touch_evidence_orders(text, orders):
+    text = EVIDENCE_ORDER.sub('', text).rstrip('\n')
+    markers = [f'<!-- agentmem:evidence-order:{hashlib.sha256(ref.encode("utf-8")).hexdigest()}:{order[0]}:{order[1]} -->'
+               for ref, order in sorted(orders.items())]
+    return text + '\n\n' + '\n'.join(markers) + '\n'
+
+
 def append_project_history(path: Path, project: str, date: str, session_link: str, items, reason: str,
                            email_allowlist=None, records=None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -318,7 +335,7 @@ def recover_status_update(path):
 
 def update_project_note(path: Path, project: str, today: str, *, state=None, pending_add=None, pending_clear=None,
                         session_link=None, session_line=None, state_order_value=None, email_allowlist=None,
-                        status_result=None, update_key=None, touch=True) -> None:
+                        status_result=None, update_key=None, touch=True, evidence_order_values=None) -> None:
     """Caller holds the project lock. Re-reads the note, edits only managed blocks, writes atomically.
 
     touch=False leaves the `updated` stamp alone, for writes that did not change the note's content."""
@@ -364,6 +381,8 @@ def update_project_note(path: Path, project: str, today: str, *, state=None, pen
         text = set_block(text, STATE_BEGIN, STATE_END, state)
         if state_order_value is not None:
             text = touch_state_order(text, state_order_value)
+        if evidence_order_values is not None:
+            text = touch_evidence_orders(text, evidence_order_values)
     if pending_add or pending_clear:
         lines = [l for l in get_block(text, PENDING_BEGIN, PENDING_END).splitlines() if l.strip()]
         if pending_clear:

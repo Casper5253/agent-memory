@@ -19,6 +19,11 @@ SUPERSEDE_SECTIONS = {
     key: frozenset(('next', 'active', 'questions')) if key in ('next', 'active', 'questions') else frozenset((key,))
     for key in SECTIONS
 }
+RESOLVE_SECTIONS = {
+    'questions': frozenset(('decisions', 'latest', 'working_now')),
+    'next': frozenset(('latest', 'working_now')),
+    'active': frozenset(('latest', 'working_now')),
+}
 FORMAT = '<!-- agentmem:status:v2 -->'
 REF = re.compile(r'(?:\[\[[^\[\]\n#|]+#e[1-9][0-9]*\]\]|migration:\d{4}-\d{2}-\d{2})')
 GIT_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
@@ -180,13 +185,14 @@ def _matches_claim(text, ref, allowed):
     return isinstance(evidence, str) and bool(evidence.strip()) and grounded(text, evidence, evidence)
 
 
-def reconcile(old, update, allowed):
+def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
     if (not isinstance(update, dict) or not isinstance(update.get('sections'), dict)
             or set(update['sections']) != set(SECTIONS)
             or any(not isinstance(items, list) for items in update['sections'].values())
             or not isinstance(update.get('displaced'), list)):
         raise ValueError('invalid StatusUpdate JSON')
     originals = {i.id: (section, i) for section, items in old.items() for i in items}
+    source_orders = source_orders or {}
     result, handled = Result(empty()), set()
     counter = len(originals)
     for section, items in update['sections'].items():
@@ -194,7 +200,9 @@ def reconcile(old, update, allowed):
             if isinstance(entry, dict) and set(entry) == {'keep'} and isinstance(entry['keep'], str):
                 identity = entry['keep']
                 if identity in originals and identity not in handled:
-                    result.sections[section].append(originals[identity][1])
+                    original_section, item = originals[identity]
+                    destination = original_section if source_orders.get(item.ref, (0, 0)) > new_order else section
+                    result.sections[destination].append(item)
                     handled.add(identity)
                 continue
             if section == 'decisions':
@@ -217,11 +225,15 @@ def reconcile(old, update, allowed):
                 and reason in ('superseded', 'resolved') and isinstance(ref, str)
                 and valid_text(claim, new=True) and _matches_claim(claim, ref, allowed)):
             section, item = originals[identity]
-            if reason == 'superseded' and not any(
+            if source_orders.get(item.ref, (0, 0)) > new_order:
+                result.events.append(('refused', f'newer source evidence: {identity}'))
+                continue
+            compatible_sections = SUPERSEDE_SECTIONS[section] if reason == 'superseded' else RESOLVE_SECTIONS.get(section, ())
+            if not any(
                     replacement.ref == ref and replacement.id not in originals
                     and not any(pattern.search(replacement.text) for pattern in GIT_PATTERNS)
-                    for compatible in SUPERSEDE_SECTIONS[section] for replacement in result.sections[compatible]):
-                result.events.append(('refused', f'incompatible supersession: {identity}'))
+                    for compatible in compatible_sections for replacement in result.sections[compatible]):
+                result.events.append(('refused', f'incompatible {reason}: {identity}'))
                 continue
             result.displaced.append(Displaced(item, section, reason, ref, claim))
             handled.add(identity)
@@ -237,10 +249,21 @@ def reconcile(old, update, allowed):
             else:
                 kept.append(item)
         excess = max(0, len(kept) - SECTIONS[section][1])
-        oldest = sorted(range(len(kept)), key=lambda n: (_ref_date(kept[n].ref), n))[:excess]
+        oldest = sorted(range(len(kept)), key=lambda n: (
+            source_orders.get(kept[n].ref, new_order), _ref_date(kept[n].ref), n))[:excess]
         result.displaced += [Displaced(kept[n], section, 'limit') for n in oldest]
         result.sections[section] = [item for n, item in enumerate(kept) if n not in oldest]
     return result
+
+
+def proposed_update(result, old):
+    """Revalidate typed model results against the current page and source orders."""
+    originals = {item.id: item for items in old.values() for item in items}
+    return dict(sections={section: [dict(keep=item.id) if originals.get(item.id) == item
+                                   else dict(text=item.text, ref=item.ref) for item in items]
+                          for section, items in result.sections.items()},
+                displaced=[dict(id=d.item.id, reason=d.reason, ref=d.evidence, claim=d.claim)
+                           for d in result.displaced if d.reason in ('superseded', 'resolved')])
 
 
 def _ref_date(ref):
