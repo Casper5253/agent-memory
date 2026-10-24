@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agentmem import llm
+from agentmem import llm, notes, status
 
 
 class SummaryGroundingTests(unittest.TestCase):
@@ -56,60 +56,40 @@ class SummaryGroundingTests(unittest.TestCase):
         self.assertIn("not evidence", prompt)
 
     def test_new_status_bullet_must_link_to_summary_evidence(self):
-        state = "\n".join([
-            "### Current state", "- New project status", "", "### Active decisions", "- none",
-            "", "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
-        ])
-        summary = {"summary": "Session changed status.", "citations": [
-            {"section": "summary", "claim": "Session changed status.", "quote": "Changed status."},
-        ]}
-        with patch.object(llm, "_run", return_value={"state_markdown": state}):
-            with self.assertRaisesRegex(llm.LLMError, "new status statement lacks a matching digest claim citation"):
-                llm.consolidate("", summary, "[[0-Sessions/session-a]]", "2026-10-23")
+        output = dict(sections={**status.empty(), "latest": [{"text": "Uncited", "ref": "[[wrong#e1]]"}]}, displaced=[])
+        summary = {"citations": [{"claim": "Changed status.", "quote": "Changed status."}]}
+        with patch.object(llm, "_run", return_value=output):
+            result, _ = llm.consolidate(notes.EMPTY_STATE, summary, "[[session-a]]", "2026-10-23")
+        self.assertEqual(result.sections["latest"], [])
+        self.assertIn(("dropped", "invalid new item"), result.events)
 
     def test_existing_facts_are_preserved_and_new_status_links_to_evidence(self):
-        old_fact = "- Existing endpoint remains supported."
-        output = "\n".join([
-            "### Current state", old_fact + "\n- Added endpoint support. [[0-Sessions/session-b#e1]]", "",
-            "### Active decisions", "- none", "", "### Superseded decisions", "- none", "",
-            "### Open questions and next steps", "- none",
-        ])
-        summary = {"summary": "Added endpoint support.", "citations": [
-            {"section": "summary", "claim": "Added endpoint support.", "quote": "Added endpoint support."},
-        ]}
-        with patch.object(llm, "_run", return_value={"state_markdown": output}) as invoke:
-            state, _ = llm.consolidate(old_fact, summary, "[[0-Sessions/session-b]]", "2026-10-23")
+        old = status.empty()
+        old["working_now"] = [status.Item("i1", "Existing endpoint remains supported.", "[[old#e1]]")]
+        output = dict(sections={**status.empty(), "working_now": [
+            {"keep": "i1"}, {"text": "New endpoint is supported", "ref": "[[session-b#e1]]"}]}, displaced=[])
+        summary = {"citations": [{"claim": "Added endpoint support.", "quote": "Added endpoint support."}]}
+        with patch.object(llm, "_run", return_value=output):
+            result, _ = llm.consolidate(status.render(old), summary, "[[session-b]]", "2026-10-23")
+        self.assertEqual(result.sections["working_now"][0], old["working_now"][0])
+        self.assertEqual(result.sections["working_now"][1].ref, "[[session-b#e1]]")
 
-        self.assertIn(old_fact, state)
-        self.assertIn("[[0-Sessions/session-b#e1]]", state)
-        self.assertIn("Keep every prior fact and decision unless the cited session evidence contradicts it.", invoke.call_args.args[0])
+    def test_oversized_new_item_is_dropped_without_retry(self):
+        output = dict(sections={**status.empty(), "latest": [{"text": "x" * 9000, "ref": "[[session-a#e1]]"}]}, displaced=[])
+        summary = {"citations": [{"claim": "x", "quote": "x"}]}
+        with patch.object(llm, "_run", return_value=output) as invoke:
+            result, _ = llm.consolidate(notes.EMPTY_STATE, summary, "[[session-a]]", "2026-10-23")
+        self.assertEqual(result.sections["latest"], [])
+        self.assertEqual(invoke.call_count, 1)
 
-    def test_oversized_consolidation_retries_once_with_shorten_instruction(self):
-        oversized = "\n".join([
-            "### Current state", "- " + ("old detail " * 900), "", "### Active decisions", "- none", "",
-            "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
-        ])
-        shortened = "\n".join([
-            "### Current state", "- none", "", "### Active decisions", "- none", "",
-            "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
-        ])
-        with patch.object(llm, "_run", side_effect=[{"state_markdown": oversized}, {"state_markdown": shortened}]) as invoke:
-            state, _ = llm.consolidate("", {}, "[[0-Sessions/session-a]]", "2026-10-23")
-
-        self.assertEqual(state, shortened)
-        self.assertEqual(invoke.call_count, 2)
-        self.assertIn("Shorten it to 8000 characters or fewer", invoke.call_args.args[1])
-
-    def test_second_oversized_consolidation_fails_after_one_retry(self):
-        oversized = "\n".join([
-            "### Current state", "- " + ("old detail " * 900), "", "### Active decisions", "- none", "",
-            "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
-        ])
-        with patch.object(llm, "_run", side_effect=[{"state_markdown": oversized}, {"state_markdown": oversized}]) as invoke:
-            with self.assertRaisesRegex(llm.LLMError, "consolidation output too long"):
-                llm.consolidate("", {}, "[[0-Sessions/session-a]]", "2026-10-23")
-
-        self.assertEqual(invoke.call_count, 2)
+    def test_large_existing_page_preserved_by_item_caps_without_shorten(self):
+        old = status.empty()
+        for n, key in enumerate(status.SECTIONS):
+            old[key] = [status.Item(f"i{n + 1}", "old detail " * 899 + "end", "[[old#e1]]")]
+        with patch.object(llm, "_run", return_value=dict(sections=status.empty(), displaced=[])) as invoke:
+            result, _ = llm.consolidate(status.render(old), {}, "[[session-a]]", "2026-10-23")
+        self.assertEqual(result.sections, old)
+        self.assertEqual(invoke.call_count, 1)
 
 
 if __name__ == "__main__":

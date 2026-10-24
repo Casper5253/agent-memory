@@ -410,6 +410,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                              summary_kind: str, consolidator=None, order_override=None, order_part: int = 1,
                              capture_id=None) -> tuple:
     """Reconcile one session into its project note. Returns (cost, consolidated?)."""
+    from . import status
     if consolidator is None:
         consolidator = lambda state, current_summary, link, date, timeout: llm.consolidate(
             state, current_summary, link, date, timeout=timeout, email_allowlist=cfg.privacy_email_allowlist)
@@ -422,6 +423,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
     session_line = f"- {date} [[{link}|{summary.get('title') or 'session'}]]"
     consolidated_session_line = f"{session_line} {capture_marker}".rstrip()
     with file_lock(cfg.locks_dir / f"project-{notes.slug(project, 12)}.lock", timeout=cfg.lock_timeout_s):
+        notes.recover_status_update(note_path)
         if not note_path.exists():
             notes.update_project_note(note_path, project, date, email_allowlist=cfg.privacy_email_allowlist)
         text = notes.ensure_blocks(note_path.read_text(encoding="utf-8"))
@@ -451,16 +453,24 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         if (summary_kind != "deterministic" and cfg.summarizer != "none"
                 and ksources._privacy_for(cfg, project) not in ("local_only", "excluded")):
             try:
-                state, cost = consolidator(notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END), summary,
+                old = status.live_page(current_state)
+                if not status.evidence_refs(summary, link):
+                    raise llm.LLMError('uncited summary, status not updated')
+                result, cost = consolidator(current_state, summary,
                                            f"[[{link}]]", date, timeout=cfg.llm_timeout_s)
+                if not isinstance(result, status.Result):
+                    result = status.reconcile(old, result, status.evidence_refs(summary, link))
                 if ksources._privacy_for(cfg, project) == "excluded":
                     return cost, False
-                notes.update_project_note(note_path, project, date, state=state, pending_clear=pending_ref,
+                for action, item in result.events:
+                    log(cfg, 'status-item', project=project, note=link, action=action, item=item)
+                notes.update_project_note(note_path, project, date, status_result=result,
+                                          update_key=f'{capture_id or link}:{order[0]}:{order[1]}', pending_clear=pending_ref,
                                           session_link=link, session_line=consolidated_session_line,
                                           state_order_value=order,
                                           email_allowlist=cfg.privacy_email_allowlist)
                 return cost, True
-            except llm.LLMError as e:
+            except (llm.LLMError, ValueError) as e:
                 log(cfg, "llm-fallback", step="consolidate", project=project, note=link, error=str(e))
                 reason = str(e)
         else:

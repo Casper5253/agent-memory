@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from agentmem import adapters, fsutil, notes, pipeline, worker  # noqa: E402
+from agentmem import adapters, fsutil, hook, notes, pipeline, worker  # noqa: E402
 from agentmem.manifest import Manifest  # noqa: E402
 from agentmem.redact import contains_secret, redact  # noqa: E402
 from agentmem.search import fallback_search  # noqa: E402
@@ -174,15 +174,15 @@ class Acceptance(Base):
         self.end("claude", "s-dec1", a)
         self.run_worker()
         state1 = notes.get_block(self.project_note(), notes.STATE_BEGIN, notes.STATE_END)
-        self.assertIn("Use SQLite for storage", state1.split("### Superseded")[0])
+        self.assertIn("Use SQLite for storage", state1)
         b = self.claude_session("s-dec2", fx.SWITCH, 30)
         self.end("claude", "s-dec2", b)
         self.run_worker()
         state2 = notes.get_block(self.project_note(), notes.STATE_BEGIN, notes.STATE_END)
-        active, superseded = state2.split("### Superseded decisions")
-        self.assertIn("Postgres", active)
-        self.assertNotIn("Use SQLite for storage", active)
-        self.assertIn("Use SQLite for storage", superseded)
+        self.assertIn("Postgres", state2)
+        self.assertNotIn("Use SQLite for storage", state2)
+        history = self.cfg.projects_dir / "Demo App" / "History.md"
+        self.assertIn("Use SQLite for storage", history.read_text(encoding="utf-8"))
 
     def test_08_retrieval_finds_previous_decisions(self):
         self.end("claude", "s-find", self.claude_session("s-find", fx.SUBSTANTIAL))
@@ -203,7 +203,9 @@ class Acceptance(Base):
         self.assertIn("CURRENT", labels)
         current = [h for h in hits if h["label"] == "CURRENT"][0]
         state = notes.get_block(Path(current["path"]).read_text(encoding="utf-8"), notes.STATE_BEGIN, notes.STATE_END)
-        self.assertIn("superseded", state.lower())
+        self.assertIn("Postgres", state)
+        self.assertNotIn("Use SQLite for storage", state)
+        self.assertIn("superseded", (self.cfg.projects_dir / "Demo App" / "History.md").read_text(encoding="utf-8"))
         hist = [Path(h["path"]).read_text(encoding="utf-8") for h in hits if h["label"] == "HISTORICAL"]
         self.assertTrue(all("Historical record" in t for t in hist))
 
@@ -234,12 +236,20 @@ class Acceptance(Base):
         text = self.project_note()
         self.assertEqual(notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END), good_state, "state untouched by failure")
         self.assertIn("Postgres", notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END))
-        # model comes back: pending reconciliation is applied and cleared; transcript re-read for a real summary
+        # The persisted deterministic summary has no evidence anchors for new status claims.
         res = pipeline.consolidate_pending(self.cfg, self.man, fx.fake_summarize, fx.fake_consolidate)
-        self.assertEqual(res["consolidated"], 1)
+        self.assertEqual(res["consolidated"], 0)
+        self.assertEqual(res['still_pending'], 1)
         text = self.project_note()
-        self.assertIn("Postgres", notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END))
-        self.assertEqual(notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END).strip(), "")
+        self.assertEqual(good_state, notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END))
+        self.assertTrue(any('Postgres' in p.read_text(encoding='utf-8') for p in self.session_notes()))
+        pending = notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)
+        self.assertIn('uncited summary, status not updated', pending)
+        self.assertIn('Postgres', pending)
+        package = hook.startup_package(self.cfg, self.cwd)
+        self.assertIn('1 captured session awaiting consolidation', package)
+        self.assertIn('uncited summary', package)
+        self.assertIn('Postgres', package)
 
     def test_11b_pending_older_update_does_not_overwrite_newer_status(self):
         older = self.claude_session("s-pending-a", fx.SUBSTANTIAL, 120)

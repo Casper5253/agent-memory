@@ -57,6 +57,10 @@ def _health_line(man, max_attempts: int, note=None, pending='') -> str:
         reason = re.search(r'status update pending \(([^;\n)]+)', pending)
         why = reason[1][:100] if reason else 'reconciliation pending'
         parts.append(f"{_plural(backlog, 'captured session')} awaiting consolidation ({why}); see {note or 'project notes'}")
+        preview = next((line for line in pending.splitlines() if 'status update pending' not in line and line.strip()), '')
+        if preview:
+            preview = re.sub(r'^- \[ \] \S+ \[\[[^\]]+\]\]\s*[^\w]*', '', preview)
+            parts.append('pending: ' + preview[:100])
     elif 'status update pending' in pending:
         parts.append(f"status update pending; see {note}")
     return f"Capture health: {', '.join(parts)}" if parts else ""

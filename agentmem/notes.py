@@ -311,7 +311,8 @@ def update_project_note(path: Path, project: str, today: str, *, state=None, pen
     if status_result is not None:
         if not update_key:
             raise ValueError('structured status requires update key')
-        state = status.render(status_result.sections)
+        folder = '4-Archive' if path.parent.parent.name == '4-Archive' else '1-Projects'
+        state = status.render(status_result.sections, f'{folder}/{project}/History')
         records = [dict(key=f'{update_key}:{d.item.id}',
                         text=f'- {today} [{d.section}; {d.reason}] {d.item.text} {d.item.ref}' +
                              (f' (evidence {d.evidence})' if d.evidence else ''))

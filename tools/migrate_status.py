@@ -118,7 +118,8 @@ def build_plan(vault, path, converter, date):
         reason = displaced_reasons.get(entry.id, 'migration')
         records.append(dict(key=f'migration:{source_hash}:{entry.id}',
                             text=f'- {date} [{entry.section}; {reason}; migration:{date}]\n{entry.raw}'))
-    after = notes.set_block(source, notes.STATE_BEGIN, notes.STATE_END, status.render(result.sections))
+    history_link = history.relative_to(vault).with_suffix('').as_posix()
+    after = notes.set_block(source, notes.STATE_BEGIN, notes.STATE_END, status.render(result.sections, history_link))
     joined = after + '\n' + '\n'.join(r['text'] for r in records)
     unaccounted = [e.id for e in entries if e.raw not in joined]
     if unaccounted:
