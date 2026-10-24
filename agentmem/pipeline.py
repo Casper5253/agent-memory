@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import time
 import traceback
 from datetime import datetime
@@ -350,37 +351,69 @@ def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
     normal parsing, gating, privacy, and retry handling decide whether to capture. OpenCode exports
     require a known session id, so they remain hook-bound.
     """
-    now = now or time.time()
+    now = time.time() if now is None else now
     settle_s = cfg.settle_minutes * 60
+    discovery_since = man.discovery_since(now)
     discovered = 0
+    registered = 0
     roots = (("claude", Path(cfg.claude_transcripts_root)), ("codex", Path(cfg.codex_transcripts_root)))
+    candidates = []
     for agent, root in roots:
         if not root.is_dir():
             continue
-        for source in root.rglob("*.jsonl"):
+        paths = root.glob("*/*.jsonl") if agent == "claude" else root.rglob("rollout-*.jsonl")
+        for source in paths:
             try:
                 modified = source.stat().st_mtime
-                if modified > now - settle_s:
+                if agent == "claude":
+                    uuid_pattern = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+                    if not re.fullmatch(uuid_pattern, source.stem):
+                        continue
+                    known_id = source.stem
+                else:
+                    match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", source.name)
+                    known_id = match.group(0) if match else ""
+                if not known_id or modified > now - settle_s:
                     continue
-                match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", source.name)
-                known_id = source.stem if agent == "claude" else (match.group(0) if match else "")
-                known = man.get(agent, known_id) if known_id else None
+                known = man.get(agent, known_id)
                 if known and known["status"] not in ("captured", "skipped"):
                     continue
-                transcript = adapters.read(agent, source.stem, str(source))
-                if not transcript.session_id or not transcript.cwd or not transcript.events:
+                if not known and modified <= discovery_since:
                     continue
-                known = man.get(agent, transcript.session_id)
-                if known:
-                    if known["status"] in ("captured", "skipped") and transcript.end > known["captured_until"]:
-                        discovered += int(man.reopen_for_growth(agent, transcript.session_id, end=transcript.end,
-                            source=str(source), cwd=transcript.cwd, modified=modified))
-                    continue
-                man.touch(agent, transcript.session_id, cwd=transcript.cwd, source=str(source), now=modified)
-                discovered += 1
-            except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+                candidates.append((modified, agent, source, known_id, known))
+            except OSError:
                 continue
+
+    for modified, agent, source, known_id, known in sorted(candidates, key=lambda item: (item[0], str(item[2]))):
+        if known is None and registered >= cfg.discovery_max_per_drain:
+            continue
+        try:
+            transcript = adapters.read(agent, source.stem, str(source))
+            if not transcript.session_id or not transcript.cwd or not transcript.events:
+                continue
+            if _summarizer_cwd(transcript.cwd):
+                continue
+            known = man.get(agent, transcript.session_id)
+            if known:
+                if known["status"] in ("captured", "skipped") and transcript.end > known["captured_until"]:
+                    discovered += int(man.reopen_for_growth(agent, transcript.session_id, end=transcript.end,
+                        source=str(source), cwd=transcript.cwd, modified=modified))
+                continue
+            man.touch(agent, transcript.session_id, cwd=transcript.cwd, source=str(source), now=modified)
+            discovered += 1
+            registered += 1
+        except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+            continue
     return discovered
+
+
+def _summarizer_cwd(cwd: str) -> bool:
+    """Match the neutral cwd used by llm._run without excluding other temp paths."""
+    try:
+        relative = Path(cwd).resolve().relative_to(Path(tempfile.gettempdir()).resolve())
+    except (OSError, ValueError):
+        return False
+    return bool(relative.parts and relative.parts[0].startswith("agentmem-llm-"))
 
 
 def _pending_lines(summary: dict, link: str, date: str) -> list:

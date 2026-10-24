@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS hook_events (
   agent TEXT NOT NULL, session_id TEXT NOT NULL, event TEXT NOT NULL, ts REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS hook_events_session ON hook_events(agent, session_id, id);
+CREATE TABLE IF NOT EXISTS metadata (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 """
 
 
@@ -49,6 +53,14 @@ class Manifest:
 
     def close(self):
         self.db.close()
+
+    def discovery_since(self, now=None):
+        """Return the persisted start time for orphan discovery, initializing it once."""
+        now = time.time() if now is None else float(now)
+        with self.tx() as db:
+            db.execute("INSERT OR IGNORE INTO metadata(key, value) VALUES ('discovery_since', ?)", (str(now),))
+            row = db.execute("SELECT value FROM metadata WHERE key='discovery_since'").fetchone()
+        return float(row["value"])
 
     @contextmanager
     def tx(self):
