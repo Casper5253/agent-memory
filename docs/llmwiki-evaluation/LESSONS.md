@@ -13,6 +13,8 @@ Workers wrote tests against small synthetic fixtures that matched their own assu
 - The vault sweep's fixture placed Git repositories inside the vault. Real repositories live elsewhere and are linked through `projects.json`. On the real vault, all ten fragment projects came out as unproven guesses. The fix was to read repository roots from `projects.json` (commit `4594251`).
 - The majority-match search fix capped each per-term search at eight results. On the 930-session benchmark, common terms match hundreds of notes, so per-term lists rarely overlapped. Queries with any retrieval hit fell from 18 to 12 of 270, a regression from a change meant to raise recall.
 
+- The narrowed stale-line detector passed all 314 tests and crashed on its first run against a vault copy. Some projects map to folders that are not Git repositories, and every fixture project had one.
+
 What helped: making a real-world check part of acceptance. Examples are a read-only dry run on the real vault and a benchmark floor such as "hits must stay at least 18".
 
 ### A self-built imitation of an external system's state kept leaking
@@ -42,6 +44,8 @@ A reviewer from a different model family found real defects in every package rev
 
 None of these were caught by the author's own tests.
 
+The reviewer also found an unfair test harness. The baseline arm captured sessions in-process, outside the Git isolation that only subprocesses received, so its notes lost the recorded commit that the candidate arm kept. Every unit test passed. The asymmetry favored the new system and showed up only when a reviewer compared what each arm's output actually contained.
+
 ### Measuring the baseline surfaced live defects in the current system
 
 Building an honest baseline found bugs that already affect daily use:
@@ -67,6 +71,27 @@ Each issue was cheap to fix once known, and each one cost at least one relaunch 
 ### Specifications had gaps that only implementation exposed
 
 The data contract left the proposal payload, restore semantics, import identity and import scope undefined. The implementer correctly stopped instead of inventing them. Settling them in a short addendum (`docs/llmwiki-blueprint/04a-WP02-CONTRACT-ADDENDUM.md`) worked. Each stop still cost a relaunch until the brief allowed the worker to decide minor gaps and list them as assumptions.
+
+### The evaluation tested the wrong question
+
+The sealed set and set R asked whether retrieved context answers a question. The owner's use is different: a status page pushed into a new session without a question. The knowledge store won the question-answering tests while the status page the owner actually reads kept falling behind. An end-to-end lifecycle audit of real sessions found the causes in an afternoon:
+
+- Status updates longer than 8,000 characters were discarded and parked, and nothing drained them. 92 of 213 captures never reached status.
+- The summarizer treated its own runtime directory as project fact. The next session repeated the invented fact.
+- The work gate counted only edit-tool changes. Codex sessions that changed files and committed through shell commands were skipped, so their decisions were lost, and a later session inherited a decision that had already been reversed.
+
+What helped: a multi-session harness that runs real agents through decide, end, resume, reverse and kill, and scores the page each next session receives.
+
+### Two flaky tests were production bugs
+
+- A status-order test failed about one run in eight. The payment-card detector masked microsecond order timestamps that happened to pass the Luhn check, so an older pending update could overwrite newer status. The fix requires a real card issuer prefix.
+- A sweep rollback test failed intermittently. Git trusted a refreshed index stat and kept a stale blob, so rollback restored LF where the file had CRLF. A deterministic test needs the file mtime set older than the index, or Git rehashes the racily clean entry and hides the bug.
+
+What helped: treating a flake as a defect with a root cause, not a retry.
+
+### Adjusting a test to fit new behaviour hid real defects
+
+Twice an implementer changed an acceptance assertion to match new behaviour, and both times the behaviour was wrong. A retry cleared the pending marker for an uncited summary, so status silently missed a session. Project history notes were labelled CURRENT in search, so old decisions read as current. A reviewer catches this by asking what the user would now see, not whether the test passes.
 
 ## What worked
 
