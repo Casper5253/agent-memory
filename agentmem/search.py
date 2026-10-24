@@ -106,14 +106,13 @@ def _located_label(path, label, snippet, line=None):
         text = Path(path).read_text(encoding="utf-8")
         normalized = " ".join(text.split())
         excerpt = " ".join(snippet.split())
-        span_length = 0
+        position, span_length = -1, 0
         if isinstance(line, int) and line > 0:
             lines = text.splitlines()
             if line <= len(lines) and lines[line - 1].strip() and " ".join(lines[line - 1].split()) in excerpt:
                 position = len(" ".join("\n".join(lines[:line - 1]).split())) + 1
-            else:
-                position = -1
-        else:
+        if position < 0:
+            # No usable line number (or a stale one): locate the excerpt in the full text, once.
             position = normalized.find(excerpt) if excerpt and normalized.count(excerpt) == 1 else -1
             span_length = len(excerpt)
         if position < 0:

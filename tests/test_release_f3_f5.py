@@ -21,6 +21,28 @@ class ReleaseFixTests(StartupBase):
 
         self.assertEqual("UNVERIFIED", label)
 
+    def test_excerpt_in_state_block_is_current_when_hit_line_is_stale(self):
+        self.write_state(status.render({
+            **status.empty(),
+            "working_now": [status.Item("new", "Storage now uses SQLite", "migration:2026-10-24")],
+        }))
+        path = self.cfg.vault / "1-Projects" / "Alpha" / "Alpha.md"
+
+        label = search._located_label(path, "CURRENT", "Storage now uses SQLite", line=1)
+
+        self.assertEqual("CURRENT", label)
+
+    def test_absent_excerpt_with_stale_hit_line_stays_unverified(self):
+        self.write_state(status.render({
+            **status.empty(),
+            "working_now": [status.Item("new", "Storage now uses SQLite", "migration:2026-10-24")],
+        }))
+        path = self.cfg.vault / "1-Projects" / "Alpha" / "Alpha.md"
+
+        label = search._located_label(path, "CURRENT", "Storage still uses the retired backend", line=1)
+
+        self.assertEqual("UNVERIFIED", label)
+
     def test_startup_keeps_first_item_from_every_section_with_health_and_recent_links(self):
         git(self.repo, "init", "-q", "-b", "release-test")
         (self.repo / "seed.txt").write_text("seed", encoding="utf-8")
