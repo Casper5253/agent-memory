@@ -15,8 +15,9 @@ class StructuredStartupTests(StartupBase):
         for n, key in enumerate(status.SECTIONS):
             page[key] = [status.Item(f'i{n}', key + ' ' + 'x' * 250, '[[s#e1]]')]
         self.write_state(status.render(page))
-        package = hook.startup_package(self.cfg, str(self.repo))
-        self.assertLessEqual(len(package), hook.CONTEXT_CAP)
+        with patch.object(hook, 'CONTEXT_CAP', 1500):
+            package = hook.startup_package(self.cfg, str(self.repo))
+        self.assertLessEqual(len(package), 1500)
         self.assertIn('more items in', package)
         self.assertIn('Alpha.md', package)
         self.assertIn('purpose ' + 'x' * 250 + ' [[s#e1]]', package)

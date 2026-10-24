@@ -17,8 +17,10 @@ FORMAT = '<!-- agentmem:status:v2 -->'
 REF = re.compile(r'(?:\[\[[^\[\]\n#|]+#e[1-9][0-9]*\]\]|migration:\d{4}-\d{2}-\d{2})')
 GIT_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
     r'\bon branch\s+\S+', r'\bbranch\s*:\s*\S+', r'\bHEAD\s+(?:is|at|=|:)\s*\S+',
-    r'\b(?:HEAD|at)\s+`?[0-9a-f]{7,40}\b', r'\buncommitted\b',
-    r'\b(?:ahead of|behind)\b', r'\bworking (?:tree|directory)\s+(?:is\s+)?(?:clean|dirty)\b',
+    r'\b(?:HEAD|commit|sha)\s+(?:at\s+|is\s+)?`?[0-9a-f]{7,40}\b',
+    r'\bat\s+`?(?=[0-9a-f]{0,39}[a-f])[0-9a-f]{7,40}\b', r'\buncommitted\b',
+    r'\b(?:ahead(?:\s+of)?|behind)\s+(?:origin/|upstream\b|remote\b|main\b|master\b|by\s+\d+\s+commits?\b)',
+    r'\bworking (?:tree|directory)\s+(?:is\s+)?(?:clean|dirty)\b',
 ))
 
 

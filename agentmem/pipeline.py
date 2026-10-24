@@ -423,7 +423,9 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
     session_line = f"- {date} [[{link}|{summary.get('title') or 'session'}]]"
     consolidated_session_line = f"{session_line} {capture_marker}".rstrip()
     with file_lock(cfg.locks_dir / f"project-{notes.slug(project, 12)}.lock", timeout=cfg.lock_timeout_s):
-        notes.recover_status_update(note_path)
+        refused = notes.recover_status_update(note_path)
+        if refused:
+            log(cfg, 'status-replay-refused', project=project, journal=refused.name)
         if not note_path.exists():
             notes.update_project_note(note_path, project, date, email_allowlist=cfg.privacy_email_allowlist)
         text = notes.ensure_blocks(note_path.read_text(encoding="utf-8"))

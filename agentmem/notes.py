@@ -288,10 +288,22 @@ def recover_status_update(path):
     journal = _status_journal(path)
     if not journal.exists():
         return
-    plan = json.loads(journal.read_text(encoding='utf-8'))
     current = path.read_text(encoding='utf-8') if path.exists() else ''
-    if current not in (plan['before'], plan['after']):
-        raise ValueError('status replay refused: project page changed')
+    try:
+        plan = json.loads(journal.read_text(encoding='utf-8'))
+        if current not in (plan['before'], plan['after']):
+            raise ValueError('project page changed')
+        if (not all(isinstance(plan[key], str) for key in ('before', 'after', 'project', 'date'))
+                or not isinstance(plan['records'], list)):
+            raise ValueError('invalid journal')
+    except (ValueError, KeyError, TypeError) as error:
+        refused = journal.with_name(journal.name + '.refused-' + datetime.now().strftime('%Y%m%dT%H%M%S%f'))
+        journal.rename(refused)
+        text = ensure_blocks(current)
+        pending = get_block(text, PENDING_BEGIN, PENDING_END)
+        line = f'- [ ] status replay refused ({error}); review {refused.name}'
+        atomic_write(path, set_block(text, PENDING_BEGIN, PENDING_END, '\n'.join(filter(None, (pending, line)))))
+        return refused
     append_project_history(project_history_path(path), plan['project'], plan['date'], '', [], '',
                            records=plan['records'])
     atomic_write(path, plan['after'])
