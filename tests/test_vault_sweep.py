@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -1169,6 +1170,79 @@ class SweepApplyCorrectionTests(unittest.TestCase):
             self.assertEqual(before, after_reset, "reset to snapshot must restore exact bytes")
             restored = {p.relative_to(vault).as_posix(): p.read_bytes() for p in file_paths}
             self.assertEqual(snapshot_bytes, restored, "reset to snapshot must restore every tracked file byte for byte")
+        finally:
+            tmp.cleanup()
+
+    def test_crlf_stale_index_stat_snapshot_reset_restores_bytes(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            env = dict(os.environ)
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            config = subprocess.run(
+                ["git", "config", "core.autocrlf", "true"], cwd=vault, env=env,
+                capture_output=True, timeout=10,
+            )
+            self.assertEqual(config.returncode, 0, msg=config.stderr)
+            note = vault / "1-Projects" / "parent" / "parent.md"
+            before = note.read_bytes().replace(b"\n", b"\r\n")
+            note.write_bytes(before)
+            stale_mtime = time.time() - 10
+            os.utime(note, (stale_mtime, stale_mtime))
+            stage = subprocess.run(
+                ["git", "-c", "core.autocrlf=true", "add", "--", "1-Projects/parent/parent.md"], cwd=vault,
+                env=env, capture_output=True, timeout=10,
+            )
+            self.assertEqual(stage.returncode, 0, msg=stage.stderr)
+            committed_blob = subprocess.run(
+                ["git", "rev-parse", "HEAD:1-Projects/parent/parent.md"], cwd=vault,
+                env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(committed_blob.returncode, 0, msg=committed_blob.stderr)
+            indexed_blob = subprocess.run(
+                ["git", "rev-parse", ":1-Projects/parent/parent.md"], cwd=vault,
+                env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(indexed_blob.returncode, 0, msg=indexed_blob.stderr)
+            self.assertEqual(committed_blob.stdout.strip(), indexed_blob.stdout.strip())
+            self.assertEqual(note.read_bytes(), before)
+            other = vault / "0-Sessions" / "s.md"
+            other.write_bytes(b"changed to create the sweep snapshot\n")
+            sha = _load_sweep()._snapshot(vault, "crlf-test")
+            note.write_bytes(b"changed after snapshot\n")
+            reset = subprocess.run(
+                ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false",
+                 "reset", "--hard", sha], cwd=vault, env=env,
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(reset.returncode, 0, msg=reset.stderr)
+            self.assertEqual(note.read_bytes(), before, "reset to snapshot must restore exact CRLF bytes")
+        finally:
+            tmp.cleanup()
+
+    def test_snapshot_initializes_fresh_vault_repo_without_head(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = tmp.path / "fresh-vault"
+            (vault / "1-Projects" / "new-project").mkdir(parents=True)
+            note = vault / "1-Projects" / "new-project" / "new-project.md"
+            note.write_bytes(b"# Fresh vault\r\n")
+            env = dict(os.environ)
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            init = subprocess.run(
+                ["git", "init", "-q", "-b", "main"], cwd=vault, env=env,
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(init.returncode, 0, msg=init.stderr)
+
+            sha = _load_sweep()._snapshot(vault, "fresh-vault")
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=vault, env=env,
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(head.returncode, 0, msg=head.stderr)
+            self.assertEqual(head.stdout.strip(), sha)
+            self.assertEqual(note.read_bytes(), b"# Fresh vault\r\n")
         finally:
             tmp.cleanup()
 
