@@ -1,5 +1,6 @@
 """Structured project status, model boundary validation, and deterministic retention."""
 from dataclasses import dataclass, field
+import copy
 import re
 
 from .grounding import grounded
@@ -64,6 +65,7 @@ class Result:
     sections: dict
     displaced: list = field(default_factory=list)
     events: list = field(default_factory=list)
+    proposal: dict = field(default=None, repr=False, compare=False)
 
 
 def empty():
@@ -185,6 +187,21 @@ def _matches_claim(text, ref, allowed):
     return isinstance(evidence, str) and bool(evidence.strip()) and grounded(text, evidence, evidence)
 
 
+def _entry_problem(entry, allowed):
+    if not isinstance(entry, dict) or set(entry) != {'text', 'ref'}:
+        return 'invalid item shape or incompatible decision evidence'
+    if not valid_text(entry.get('text'), new=True):
+        return 'invalid text: must be nonempty, single-line, at most 280 characters, without HTML markers'
+    ref = entry.get('ref')
+    if not isinstance(ref, str) or not REF.fullmatch(ref):
+        return 'invalid citation syntax'
+    if ref not in allowed:
+        return 'citation not in supplied evidence'
+    if not _matches_claim(entry['text'], ref, allowed):
+        return 'claim unsupported by citation: absent specifics or insufficient shared content'
+    return ''
+
+
 def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
     if (not isinstance(update, dict) or not isinstance(update.get('sections'), dict)
             or set(update['sections']) != set(SECTIONS)
@@ -193,10 +210,10 @@ def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
         raise ValueError('invalid StatusUpdate JSON')
     originals = {i.id: (section, i) for section, items in old.items() for i in items}
     source_orders = source_orders or {}
-    result, handled = Result(empty()), set()
+    result, handled = Result(empty(), proposal=copy.deepcopy(update)), set()
     counter = len(originals)
     for section, items in update['sections'].items():
-        for entry in items:
+        for index, entry in enumerate(items):
             if isinstance(entry, dict) and set(entry) == {'keep'} and isinstance(entry['keep'], str):
                 identity = entry['keep']
                 if identity in originals and identity not in handled:
@@ -207,10 +224,10 @@ def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
                 continue
             if section == 'decisions':
                 entry = _decision_entry(entry, allowed)
-            if (not isinstance(entry, dict) or set(entry) != {'text', 'ref'}
-                    or not valid_text(entry.get('text'), new=True) or not isinstance(entry.get('ref'), str)
-                    or not REF.fullmatch(entry['ref']) or not _matches_claim(entry['text'], entry['ref'], allowed)):
+            problem = _entry_problem(entry, allowed)
+            if problem:
                 result.events.append(('dropped', 'invalid new item'))
+                result.events.append(('rejected', f'{section}[{index}]: {problem}'))
                 continue
             if section == 'decisions' and any(i.text == entry['text'] and i.ref == entry['ref'] for i in result.sections[section]):
                 continue
@@ -258,6 +275,8 @@ def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
 
 def proposed_update(result, old):
     """Revalidate typed model results against the current page and source orders."""
+    if result.proposal is not None:
+        return result.proposal
     originals = {item.id: item for items in old.values() for item in items}
     return dict(sections={section: [dict(keep=item.id) if originals.get(item.id) == item
                                    else dict(text=item.text, ref=item.ref) for item in items]

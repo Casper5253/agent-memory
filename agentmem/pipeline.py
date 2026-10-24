@@ -82,6 +82,13 @@ def _receipt_hash(receipt):
     return _hash(json.dumps({k: v for k, v in receipt.items() if k != "receipt_sha"}, sort_keys=True, ensure_ascii=False))
 
 
+def _note_project(receipt):
+    # A separate note belongs to this capture, even when an older writer copied the prior project's label.
+    if int(receipt.get('note_part', receipt['part'])) == int(receipt['part']):
+        return receipt['project']
+    return receipt.get('note_project', receipt['project'])
+
+
 def _load_receipt(cfg, agent, sid, part, start):
     path = _receipt_path(cfg, agent, sid, part)
     if not path.exists():
@@ -92,13 +99,11 @@ def _load_receipt(cfg, agent, sid, part, start):
                 or r["receipt_sha"] != _receipt_hash(r) or _hash(r["text"]) != r["content_sha"]):
             raise ValueError("receipt identity or hash mismatch")
         note_part = int(r.get("note_part", part))
-        if note_part == part and r.get("note_project", r.get("project")) != r.get("project"):
-            raise ValueError("capture_identity_conflict: initial capture project differs from note project")
         if note_part < part and notes.continuation_project(r["text"], part) != r.get("project"):
             raise ValueError("capture_identity_conflict: continuation project differs from note receipt")
         _validated_path(cfg, r["note_path"])
         _validate_note(r["text"], agent, sid, note_part,
-                       expected_project=r.get("note_project", r.get("project")))
+                       expected_project=_note_project(r))
         return r
     except (ValueError, KeyError, TypeError) as error:
         raise ValueError("capture_identity_conflict: invalid receipt") from error
@@ -255,7 +260,7 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
             text = redact_session_note(text, cfg.privacy_email_allowlist)
             receipt = dict(version=1, agent=agent, session_id=sid, part=part, start=t.start, end=t.end,
                            project=project, summary=summary, digest_sha=d.sha, note_path=path.relative_to(cfg.vault).as_posix(),
-                           note_part=note_part, note_project=previous_fields.get("project", project),
+                           note_part=note_part, note_project=previous_fields["project"] if is_continuation else project,
                            base_content_sha=_hash(previous_text) if is_continuation else None,
                            text=text, content_sha=_hash(text), when=when.isoformat(), summarizer=kind, cost=cost,
                            prefix_sha=t.prefix_sha, evidence="transcript", related_projects=attribution.related_projects,
@@ -293,7 +298,7 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
     if hashlib.sha256(persisted).hexdigest() != receipt["content_sha"]:
         raise ValueError("capture_identity_conflict: persisted note bytes differ")
     _validate_note(persisted.decode("utf-8"), agent, sid, receipt.get("note_part", part),
-                   expected_project=receipt.get("note_project", receipt.get("project")))
+                   expected_project=_note_project(receipt))
     link = _link(cfg, path)
     project, summary, kind = receipt["project"], receipt["summary"], receipt["summarizer"]
     when = _parse_time(receipt["when"])
@@ -452,9 +457,10 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
     note_path = projects.note_path(cfg.vault, project)
     date = f"{when:%Y-%m-%d}"
     capture_marker = f"<!-- agentmem:capture:{capture_id} -->" if capture_id else ""
+    accepted_marker = f"<!-- agentmem:accepted:{_hash(capture_id or link)} -->"
     pending_ref = f"capture-ref:{capture_id}" if capture_id else f"[[{link}]]"
     session_line = f"- {date} [[{link}|{summary.get('title') or 'session'}]]"
-    consolidated_session_line = f"{session_line} {capture_marker}".rstrip()
+    consolidated_session_line = f"{session_line} {capture_marker} {accepted_marker}".rstrip()
     with file_lock(cfg.locks_dir / f"project-{notes.slug(project, 12)}.lock", timeout=cfg.lock_timeout_s):
         refused = notes.recover_status_update(note_path)
         if refused:
@@ -470,7 +476,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         pending_base, pending_order = _pending_marker(pending, link, capture_id)
         session_block = notes.get_block(text, notes.SESS_BEGIN, notes.SESS_END)
         session_marker = capture_marker if capture_id else f"[[{link}|"
-        if (session_marker in session_block
+        if (session_marker in session_block and accepted_marker in session_block
                 and pending_ref not in pending):
             return 0.0, True
         if (summary_kind != "deterministic" and cfg.summarizer != "none"
@@ -490,8 +496,19 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                                    for items in result.sections.values() for item in items}
                 if ksources._privacy_for(cfg, project) == "excluded":
                     return cost, False
+                old_ids = {item.id for items in old.values() for item in items}
+                for displaced in result.displaced:
+                    if displaced.item.id not in old_ids:
+                        result.events.append(('rejected', f'{displaced.section}: new item removed ({displaced.reason})'))
                 for action, item in result.events:
                     log(cfg, 'status-item', project=project, note=link, action=action, item=item)
+                allowed = status.evidence_support(summary, link)
+                accepted = any(item.ref in allowed and status._matches_claim(item.text, item.ref, allowed)
+                               for items in result.sections.values() for item in items)
+                if any(action == 'dropped' for action, _ in result.events) or not accepted:
+                    reason = ('new status item rejected by validation' if any(action == 'dropped' for action, _ in result.events)
+                              else 'no current item cites accepted new evidence (model omission or retention)')
+                    raise llm.LLMError(f'{reason}; new status items not accepted, reconciliation remains pending')
                 notes.update_project_note(note_path, project, date, status_result=result,
                                           update_key=f'{capture_id or link}:{order[0]}:{order[1]}', pending_clear=pending_ref,
                                           session_link=link, session_line=consolidated_session_line,
@@ -522,7 +539,7 @@ def _validate_pending_identity(cfg, man, row, text, summary, receipt=None):
     fields = notes.session_metadata(text, note_type="memory" if memory else "session")
     actual_part = fields.get("part", "1" if memory else None)
     expected_part = int(receipt.get("note_part", row["part"])) if receipt else int(row["part"])
-    expected_project = (receipt.get("note_project", receipt.get("project")) if receipt else row["project"])
+    expected_project = (_note_project(receipt) if receipt else row["project"])
     if (fields.get("agent") != row["agent"] or fields.get("project") != expected_project
             or actual_part != str(expected_part)):
         raise ValueError("capture_identity_conflict: pending note identity or project differs")
