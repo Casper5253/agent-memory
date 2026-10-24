@@ -49,6 +49,7 @@ Keep an old item unchanged with {"keep": "iN"}. Move it between sections if need
 New items are {"text": "one claim, at most 280 characters, no newlines or HTML markers", "ref": "allowed session ref"}.
 To replace text, add a new cited item and displace the exact original with
 {"id": "iN", "reason": "superseded" or "resolved", "ref": "allowed new-session ref", "claim": "resolving or replacing statement"}.
+When the new session states a next step or open item about the same work as an old item, replace the old one the same way: add the new cited item and displace the old id as "superseded".
 Every new item text and displacement claim must contain the exact claim of the evidence id it cites.
 Keep every old item unless the new evidence resolves or contradicts it. Never silently omit an item.
 If evidence is inconclusive, keep both claims and add a cited open question.
@@ -121,6 +122,17 @@ def _sentences(value):
             for part in re.split(r"(?<=[.!?])\s+", value) if part.strip()]
 
 
+def _summary_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        sentences = [item.strip() for item in value if item.strip()]
+        return " ".join(s if s[-1] in ".!?" else s + "." for s in sentences)
+    raise LLMError("summary is not text")
+
+
 def _text_key(value):
     return re.sub(r"\s+", " ", value).strip().lower().rstrip(" .!?;:,")
 
@@ -151,7 +163,7 @@ def summarize(digest_text: str, model: str = "haiku", timeout: int = 180, email_
             used.append(citation)
         return citation is not None
 
-    summary = " ".join(part for part in _sentences(str(data.get("summary") or "")) if supported("summary", part))
+    summary = " ".join(part for part in _sentences(_summary_text(data.get("summary"))) if supported("summary", part))
     if not summary:
         raise LLMError("summary missing digest-cited statements")
     decisions = []
