@@ -139,7 +139,7 @@ def findings(text: str, email_allowlist=None) -> list[Finding]:
                       if _high_entropy(match) == MASK and not is_identity(match.start(), match.end()))
     for category, pattern, validator in (
         ("iban", _IBAN, _valid_iban),
-        ("payment_card", _CARD, lambda value: _luhn(re.sub(r"[ -]", "", value))),
+        ("payment_card", _CARD, lambda value: _payment_card(re.sub(r"[ -]", "", value))),
         ("bsn", _BSN, lambda value: _valid_bsn(value)),
         ("phone", _PHONE, _valid_phone),
     ):
@@ -156,6 +156,22 @@ def findings(text: str, email_allowlist=None) -> list[Finding]:
             continue
         selected.append(item)
     return selected
+
+
+_CARD_ISSUERS = (
+    (re.compile(r"4"), {13, 16, 19}),                                  # Visa
+    (re.compile(r"5[1-5]|222[1-9]|22[3-9]\d|2[3-6]\d\d|27[01]\d|2720"), {16}),  # Mastercard
+    (re.compile(r"3[47]"), {15}),                                      # American Express
+    (re.compile(r"6011|65|64[4-9]"), {16, 17, 18, 19}),                # Discover
+    (re.compile(r"35(?:2[89]|[3-8]\d)"), {16, 17, 18, 19}),            # JCB
+    (re.compile(r"30[0-5]|36|38"), {14, 15, 16}),                      # Diners Club
+    (re.compile(r"62"), {16, 17, 18, 19}),                             # UnionPay
+)
+
+
+def _payment_card(value: str) -> bool:
+    """Luhn-valid and an issuer prefix with a matching length. Bare Luhn also matches 16-digit timestamps."""
+    return any(prefix.match(value) and len(value) in lengths for prefix, lengths in _CARD_ISSUERS) and _luhn(value)
 
 
 def _luhn(value: str) -> bool:
