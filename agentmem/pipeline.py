@@ -381,6 +381,7 @@ def _pending_lines(summary: dict, link: str, date: str) -> list:
     out = [f"- [ ] {date} [[{link}]] — {d['decision']}" for d in summary.get("decisions", [])[:6]]
     out += [f"- [ ] {date} [[{link}]] — fact: {s}" for s in summary.get("facts", [])[:4]]
     out += [f"- [ ] {date} [[{link}]] — next: {s}" for s in summary.get("next_steps", [])[:4]]
+    out += [f"- [ ] {date} [[{link}]] — question: {s}" for s in summary.get("open_questions", [])[:4]]
     return out or [f"- [ ] {date} [[{link}]] — review session for state changes"]
 
 
@@ -420,15 +421,17 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                 and f"[[{link}]]" not in notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)):
             return 0.0, True
         if notes.state_order(text) >= order and notes.state_order(text) != (0, 0):
-            items = _pending_lines(summary, link, date)
-            notes.append_project_history(notes.project_history_path(note_path), project, date, link, items,
-                                         "Superseded pending update", email_allowlist=cfg.privacy_email_allowlist)
-            notes.update_project_note(note_path, project, date, pending_clear=f"[[{link}]]",
-                                      session_link=link, session_line=session_line,
-                                      email_allowlist=cfg.privacy_email_allowlist)
-            log(cfg, "pending-superseded", project=project, note=link,
+            if not pending_order:
+                reason = "newer state exists; reconciliation required"
+                pending_lines = [f"- [ ] {date} [[{link}]] — status update pending ({reason}; "
+                                 f"base={base_revision}; order={order[0]}:{order[1]})"]
+                pending_lines += _pending_lines(summary, link, date)
+                notes.update_project_note(note_path, project, date, pending_add=pending_lines,
+                                          session_link=link, session_line=session_line,
+                                          email_allowlist=cfg.privacy_email_allowlist)
+            log(cfg, "pending-order-conflict", project=project, note=link,
                 base_revision=pending_base or base_revision, order=pending_order or order)
-            return 0.0, True
+            return 0.0, False
         if (summary_kind != "deterministic" and cfg.summarizer != "none"
                 and ksources._privacy_for(cfg, project) not in ("local_only", "excluded")):
             try:
