@@ -56,6 +56,19 @@ class GitGateTests(unittest.TestCase):
         self.assertTrue(digest.substantial, digest.gate_reason)
         self.assertEqual(["one.py", "three.py", "two.py"], digest.files)
 
+    def test_concurrent_commit_in_the_same_directory_does_not_pass_a_trivial_session(self):
+        repo = Path(self._temp.name) / "concurrent"
+        repo.mkdir()
+        git(repo, "init", "-q")
+        child = repo / "project-a"
+        write_at(child / "other.py", self.begin + 20)
+        git(child, "add", "--all")
+        git(child, "commit", "-q", "-m", "Other session work", when=self.begin + 30)
+        chat = [adapters.Event("user", "text", "What time is it?"), adapters.Event("assistant", "text", "Noon.")]
+        digest = extract.build(transcript(child, self.begin, chat), 2, 1500, 45000)
+        self.assertFalse(digest.substantial, digest.gate_reason)
+        self.assertEqual([], digest.files)
+
     def test_commit_from_a_sibling_project_does_not_pass_the_gate(self):
         repo = Path(self._temp.name) / "siblings"
         repo.mkdir()
@@ -70,12 +83,23 @@ class GitGateTests(unittest.TestCase):
         self.assertFalse(digest.substantial, digest.gate_reason)
         self.assertEqual([], digest.files)
 
-        write_at(child / "one.py", self.begin + 30)
+    def test_shell_only_transcript_with_the_commit_output_counts_its_files(self):
+        repo = Path(self._temp.name) / "shell-only"
+        repo.mkdir()
+        git(repo, "init", "-q")
+        child = repo / "project-a"
+        for name in ("one.py", "two.py", "three.py"):
+            write_at(child / name, self.begin + 30)
         git(child, "add", "--all")
         git(child, "commit", "-q", "-m", "Project A work", when=self.begin + 35)
-        digest = extract.build(transcript(child, self.begin, chat), 2, 1500, 45000)
+        short = subprocess.run(["git", "-C", str(child), "rev-parse", "--short=7", "HEAD"], check=True,
+                               capture_output=True, text=True).stdout.strip()
+        shell = [adapters.Event("user", "text", "Save the three files"),
+                 adapters.Event("assistant", "command", "git commit -m 'Project A work'"),
+                 adapters.Event("assistant", "text", f"[main {short}] Project A work\n 3 files changed")]
+        digest = extract.build(transcript(child, self.begin, shell), 2, 1500, 45000)
         self.assertTrue(digest.substantial, digest.gate_reason)
-        self.assertEqual(["one.py"], digest.files)
+        self.assertEqual(["one.py", "three.py", "two.py"], digest.files)
 
     def test_dirty_files_below_the_repository_root_resolve_from_the_toplevel(self):
         repo = Path(self._temp.name) / "subdirectory"

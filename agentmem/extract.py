@@ -126,7 +126,9 @@ def _git_session_evidence(t: Transcript) -> tuple[list, list]:
     """Return commits and still-dirty paths that changed under the session directory during its window.
 
     Git paths are relative to the repository root, so they are resolved from the toplevel and reported relative to
-    the session directory. Each query is scoped to that directory, so sibling projects contribute nothing.
+    the session directory. Each query is scoped to that directory, so sibling projects contribute nothing. A commit
+    counts only when the transcript shows it, by short hash or exact subject, because another session can commit in
+    the same directory during this window.
     """
     if not t.cwd or not t.started:
         return [], []
@@ -135,15 +137,18 @@ def _git_session_evidence(t: Transcript) -> tuple[list, list]:
         return [], []
     top = top.strip()
     commits = _git(t, "log", "--since=" + t.started, "--until=" + (t.ended or t.started),
-                   "--format=@@%H%x09%cI", "--name-only", "--", ".") or ""
+                   "--format=@@%H%x09%cI%x09%s", "--name-only", "--", ".") or ""
     status = _git(t, "status", "--porcelain", "--untracked-files=all", "--", ".") or ""
+    transcript_text = "\n".join(ev.text or "" for ev in t.events)
     commit_ids, committed_paths = [], []
-    current_commit = False
+    attributed = False
     for line in commits.splitlines():
         if line.startswith("@@"):
-            commit_ids.append(line[2:].split("\t", 1)[0])
-            current_commit = True
-        elif line.strip() and current_commit:
+            commit_id, _, subject = line[2:].split("\t", 2)
+            attributed = commit_id[:7] in transcript_text or (bool(subject) and subject in transcript_text)
+            if attributed:
+                commit_ids.append(commit_id)
+        elif line.strip() and attributed:
             committed_paths.append(_norm_path(os.path.join(top, line.strip()), t.cwd))
     window_start = _timestamp(t.started)
     window_end = _timestamp(t.ended) if t.ended else None
