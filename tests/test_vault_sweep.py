@@ -1172,6 +1172,44 @@ class SweepApplyCorrectionTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_crlf_stale_index_stat_snapshot_reset_restores_bytes(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = self._build_minimal_git_vault(tmp.path)
+            env = dict(os.environ)
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            config = subprocess.run(
+                ["git", "config", "core.autocrlf", "true"], cwd=vault, env=env,
+                capture_output=True, timeout=10,
+            )
+            self.assertEqual(config.returncode, 0, msg=config.stderr)
+            note = vault / "1-Projects" / "parent" / "parent.md"
+            before = note.read_bytes().replace(b"\n", b"\r\n")
+            note.write_bytes(before)
+            stage = subprocess.run(
+                ["git", "add", "--", "1-Projects/parent/parent.md"], cwd=vault,
+                env=env, capture_output=True, timeout=10,
+            )
+            self.assertEqual(stage.returncode, 0, msg=stage.stderr)
+            clean = subprocess.run(
+                ["git", "diff-files", "--quiet", "--", "1-Projects/parent/parent.md"],
+                cwd=vault, env=env, capture_output=True, timeout=10,
+            )
+            self.assertEqual(clean.returncode, 0, msg=clean.stderr)
+            self.assertEqual(note.read_bytes(), before)
+            other = vault / "0-Sessions" / "s.md"
+            other.write_bytes(b"changed to create the sweep snapshot\n")
+            sha = _load_sweep()._snapshot(vault, "crlf-test")
+            reset = subprocess.run(
+                ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false",
+                 "reset", "--hard", sha], cwd=vault, env=env,
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(reset.returncode, 0, msg=reset.stderr)
+            self.assertEqual(note.read_bytes(), before, "reset to snapshot must restore exact CRLF bytes")
+        finally:
+            tmp.cleanup()
+
     def test_projects_json_merges_roots_and_aliases(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:

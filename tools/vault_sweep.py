@@ -143,6 +143,7 @@ def _snapshot(vault: Path, date_str: str) -> str:
     emb = _embedded_repos(vault)
     if emb:
         raise RuntimeError(f"embedded repository in vault: {emb[0]}")
+    _git_run(["read-tree", "HEAD"], vault, check=True)
     _git_run(["add", "-A", "--", ":(exclude)_meta/PAUSE"], vault, check=True)
     diff = _git_run(["diff", "--cached", "--stat"], vault, check=True)
     if diff.stdout.strip():
