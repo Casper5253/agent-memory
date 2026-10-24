@@ -102,6 +102,14 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0].raw, raw)
 
+    def test_heading_nested_under_superseded_stays_superseded(self):
+        source = ('### Current state\n- builds green\n\n### Superseded decisions\n- old A\n\n'
+                  '#### Retired\n- old B\n\n### Open questions\n- add FTS?\n\n## Notes\n- later')
+        sections = [(e.raw, e.section) for e in migrate_status.inventory(source)]
+        self.assertEqual(sections, [('- builds green', 'working_now'), ('- old A', 'superseded'),
+                                    ('- old B', 'superseded'), ('- add FTS?', 'questions'),
+                                    ('- later', 'working_now')])
+
     def test_default_conversion_keeps_sections_and_archives_superseded(self):
         source = ('### Current state\n- builds green\n\n### Active decisions\n- 2026-10-17 — use SQLite\n\n'
                   '### Superseded decisions\n- 2026-10-01 — use JSON files\n\n### Open questions and next steps\n- add FTS?')

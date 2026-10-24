@@ -23,7 +23,7 @@ class Entry:
 
 def inventory(source):
     """Top-level bullets own their continuation and nested lines; paragraphs retain line breaks."""
-    entries, current, section = [], [], 'working_now'
+    entries, current, section, superseded_level = [], [], 'working_now', 0
     def flush():
         if current:
             entries.append(Entry(f'i{len(entries) + 1}', '\n'.join(current).rstrip(), section))
@@ -32,7 +32,11 @@ def inventory(source):
     for index, line in enumerate(lines):
         if re.match(r'^#{1,6} ', line):
             flush()
+            level = len(line) - len(line.lstrip('#'))
             heading = line.lstrip('# ').lower()
+            if section == 'superseded' and level > superseded_level:
+                continue
+            superseded_level = level
             section = ('superseded' if 'superseded' in heading else
                        next((key for key, (name, _) in status.SECTIONS.items() if name.lower() == heading),
                             'decisions' if 'decision' in heading else 'questions' if 'question' in heading else 'working_now'))
