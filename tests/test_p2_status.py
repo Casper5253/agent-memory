@@ -36,8 +36,8 @@ class StatusTests(unittest.TestCase):
 
     def test_cited_displacement(self):
         update = self.update()
-        update['displaced'] = [{'id': 'i1', 'reason': 'superseded', 'ref': '[[new#e1]]'}]
-        result = status.reconcile(self.old(), update, {'[[new#e1]]'})
+        update['displaced'] = [{'id': 'i1', 'reason': 'superseded', 'ref': '[[new#e1]]', 'claim': 'Uses JSON'}]
+        result = status.reconcile(self.old(), update, {'[[new#e1]]': 'Uses JSON'})
         self.assertEqual(result.displaced[0].item.text, 'Uses SQLite')
         self.assertFalse(result.sections['working_now'])
 
@@ -58,7 +58,7 @@ class StatusTests(unittest.TestCase):
 
     def test_invalid_new_items_dropped(self):
         for text, ref in [('x', ''), ('x', '[[old#e1]]'), ('x' * 281, '[[new#e1]]'), ('x\ny', '[[new#e1]]'), ('<!-- agentmem:state:begin -->', '[[new#e1]]')]:
-            result = status.reconcile(status.empty(), self.update(active=[{'text': text, 'ref': ref}]), {'[[new#e1]]'})
+            result = status.reconcile(status.empty(), self.update(active=[{'text': text, 'ref': ref}]), {'[[new#e1]]': text})
             self.assertFalse(result.sections['active'])
 
     def test_old_long_item_kept(self):

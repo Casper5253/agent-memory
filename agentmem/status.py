@@ -37,6 +37,7 @@ class Displaced:
     section: str
     reason: str
     evidence: str = ''
+    claim: str = ''
 
 
 @dataclass
@@ -102,8 +103,14 @@ def model_items(sections):
 
 def evidence_refs(summary, link):
     target = link[2:-2] if link.startswith('[[') and link.endswith(']]') else link
-    return {f'[[{target}#e{n}]]' for n, citation in enumerate(summary.get('citations', []), 1)
-            if isinstance(citation, dict)}
+    return {f'[[{target}#e{n}]]': citation['claim'] for n, citation in enumerate(summary.get('citations', []), 1)
+            if isinstance(citation, dict) and isinstance(citation.get('claim'), str) and citation['claim'].strip()}
+
+
+def _matches_claim(text, ref, allowed):
+    claim = allowed.get(ref) if isinstance(allowed, dict) else None
+    return (isinstance(claim, str) and bool(claim.strip())
+            and re.sub(r'\s+', ' ', claim).strip() in re.sub(r'\s+', ' ', text).strip())
 
 
 def reconcile(old, update, allowed):
@@ -125,7 +132,7 @@ def reconcile(old, update, allowed):
                 continue
             if (not isinstance(entry, dict) or set(entry) != {'text', 'ref'}
                     or not valid_text(entry.get('text'), new=True) or not isinstance(entry.get('ref'), str)
-                    or not REF.fullmatch(entry['ref']) or entry['ref'] not in allowed):
+                    or not REF.fullmatch(entry['ref']) or not _matches_claim(entry['text'], entry['ref'], allowed)):
                 result.events.append(('dropped', 'invalid new item'))
                 continue
             counter += 1
@@ -134,10 +141,12 @@ def reconcile(old, update, allowed):
         if not isinstance(entry, dict):
             continue
         identity, reason, ref = entry.get('id'), entry.get('reason'), entry.get('ref')
+        claim = entry.get('claim')
         if (isinstance(identity, str) and identity in originals and identity not in handled
-                and reason in ('superseded', 'resolved') and isinstance(ref, str) and ref in allowed):
+                and reason in ('superseded', 'resolved') and isinstance(ref, str)
+                and valid_text(claim, new=True) and _matches_claim(claim, ref, allowed)):
             section, item = originals[identity]
-            result.displaced.append(Displaced(item, section, reason, ref))
+            result.displaced.append(Displaced(item, section, reason, ref, claim))
             handled.add(identity)
     for identity, (section, item) in originals.items():
         if identity not in handled:

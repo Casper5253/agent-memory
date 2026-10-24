@@ -11,7 +11,7 @@ from agentmem import llm, notes, status
 
 class LLMTests(unittest.TestCase):
     def test_structured_single_call_no_shorten_or_repo_observations(self):
-        summary = {'citations': [{'claim': 'works', 'quote': 'works'}]}
+        summary = {'citations': [{'claim': 'Works', 'quote': 'Works'}]}
         before = copy.deepcopy(summary)
         data = {'sections': {**status.empty(), 'latest': [{'text': 'Works', 'ref': '[[s#e1]]'}]}, 'displaced': []}
         with patch.object(llm, '_run', return_value=data) as run:

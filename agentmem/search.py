@@ -70,11 +70,24 @@ def update_index(cfg: Config, embed: "bool | None" = None) -> dict:
 
 
 def _label(path: str) -> str:
+    if _project_history(path):
+        return 'HISTORICAL'
     rel = path.replace("\\", "/")
     for folder, label in LABEL_BY_FOLDER.items():
         if f"/{folder}/" in f"/{rel}" or rel.startswith(folder + "/"):
             return label
     return "OTHER"
+
+
+def _project_history(path):
+    path = Path(str(path).replace('\\', '/'))
+    return (any(part.casefold() == '1-projects' for part in path.parts[:-1])
+            and path.name.casefold() == notes.project_history_path(path).name.casefold())
+
+
+def _rank_hits(hits, layers=None):
+    hits = [hit for hit in hits if not layers or _label(hit['path']) in layers]
+    return sorted(hits, key=lambda hit: _project_history(hit['path']))
 
 
 def _to_disk(cfg: Config, file_field: str) -> str:
@@ -85,6 +98,8 @@ def _to_disk(cfg: Config, file_field: str) -> str:
 
 
 def _located_label(path, label, snippet, line=None):
+    if _project_history(path):
+        return 'HISTORICAL'
     if label != "CURRENT":
         return label
     try:
@@ -170,14 +185,15 @@ def _majority_merge(per_term_hits, num_terms, n):
 
 
 def search(cfg: Config, terms: str, n: int = 8, layers=None, semantic: bool = False) -> list:
-    collections = [c for c, (_, label, _) in COLLECTIONS.items() if not layers or label in layers]
+    collections = [c for c, (_, label, _) in COLLECTIONS.items() if not layers or label in layers
+                   or (c == 'vault-projects' and 'HISTORICAL' in layers)]
     words = _split_terms(terms)
     if len(words) <= 1:
         try:
             items = _qmd_search(cfg, terms, n, collections, semantic)
         except Exception as e:  # noqa: BLE001 - QMD down: degrade to a bounded scan, say so
             return fallback_search(cfg, terms, n, layers, reason=str(e))
-        return [_build_hit(cfg, it) for it in items]
+        return _rank_hits([_build_hit(cfg, it) for it in items], layers)
     try:
         superset_items = _qmd_search(cfg, terms, n, collections, semantic)
     except FileNotFoundError:
@@ -215,16 +231,19 @@ def search(cfg: Config, terms: str, n: int = 8, layers=None, semantic: bool = Fa
         it.pop("_disk_path", None)
     for it in merged:
         it.pop("_disk_path", None)
-    return hits
+    return _rank_hits(hits, layers)
 
 
 def fallback_search(cfg: Config, terms: str, n: int, layers=None, reason: str = "") -> list:
     words = [w.lower() for w in re.findall(r"\w{3,}", terms)]
     scored = []
     for folder, label in LABEL_BY_FOLDER.items():
-        if layers and label not in layers:
+        if layers and label not in layers and not (folder == '1-Projects' and 'HISTORICAL' in layers):
             continue
         for p in list((cfg.vault / folder).rglob("*.md"))[:3000]:
+            file_label = _label(str(p))
+            if layers and file_label not in layers:
+                continue
             try:
                 text = p.read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -239,9 +258,10 @@ def fallback_search(cfg: Config, terms: str, n: int, layers=None, reason: str = 
             i = min((low.find(w) for w in matched), default=0)
             located_line = low[:i].count("\n") + 1
             snippet = " ".join(text[max(0, i - 120): i + 280].split())
-            scored.append({"label": _located_label(p, label, snippet, located_line), "path": str(p), "title": p.stem, "score": score, "line": located_line,
+            scored.append({"label": _located_label(p, file_label, snippet, located_line), "path": str(p), "title": p.stem, "score": score, "line": located_line,
                            "docid": "", "snippet": " ".join(text[max(0, i - 120): i + 280].split())})
     scored.sort(key=lambda h: -h["score"])
+    scored = _rank_hits(scored, layers)
     for h in scored:
         h["fallback"] = reason[:120] or "qmd unavailable"
     return scored[:n]

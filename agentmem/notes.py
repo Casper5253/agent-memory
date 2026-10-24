@@ -327,7 +327,7 @@ def update_project_note(path: Path, project: str, today: str, *, state=None, pen
         state = status.render(status_result.sections, f'{folder}/{project}/History')
         records = [dict(key=f'{update_key}:{d.item.id}',
                         text=f'- {today} [{d.section}; {d.reason}] {d.item.text} {d.item.ref}' +
-                             (f' (evidence {d.evidence})' if d.evidence else ''))
+                             (f' (evidence {d.evidence}; claim: {d.claim})' if d.evidence else ''))
                    for d in status_result.displaced]
     if state is not None:
         old_state = get_block(text, STATE_BEGIN, STATE_END)

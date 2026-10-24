@@ -206,8 +206,12 @@ class Acceptance(Base):
         self.assertIn("Postgres", state)
         self.assertNotIn("Use SQLite for storage", state)
         self.assertIn("superseded", (self.cfg.projects_dir / "Demo App" / "History.md").read_text(encoding="utf-8"))
-        hist = [Path(h["path"]).read_text(encoding="utf-8") for h in hits if h["label"] == "HISTORICAL"]
-        self.assertTrue(all("Historical record" in t for t in hist))
+        history_path = self.cfg.projects_dir / 'Demo App' / 'History.md'
+        historical = [h for h in hits if h['label'] == 'HISTORICAL']
+        self.assertTrue(any(Path(h['path']) == history_path for h in historical))
+        for hit in historical:
+            text = Path(hit['path']).read_text(encoding='utf-8')
+            self.assertIn('superseded' if Path(hit['path']) == history_path else 'Historical record', text)
 
     def test_10_no_secrets_written_to_vault(self):
         turns = [(f"My key is {fx.SECRET_SAMPLES[0]} and password=hunter2hunter2. Please configure it.",

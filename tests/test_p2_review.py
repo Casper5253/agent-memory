@@ -43,7 +43,7 @@ class ReplayReviewTests(StartupBase):
         update = dict(sections={**status.empty(), 'latest': [{'text': 'New captured claim', 'ref': '[[new#e1]]'}]}, displaced=[])
         converter = Mock(return_value=(update, 0))
         with patch.object(pipeline, 'log') as log:
-            result = pipeline.consolidate_into_project(self.cfg, 'Alpha', {'citations': [{'claim': 'new', 'quote': 'new'}]},
+            result = pipeline.consolidate_into_project(self.cfg, 'Alpha', {'citations': [{'claim': 'New captured claim', 'quote': 'New captured claim'}]},
                         'new', datetime(2026, 10, 24, tzinfo=timezone.utc), 'claude-haiku', converter)
         self.assertEqual(result, (0, True))
         self.assertFalse(journal.exists())

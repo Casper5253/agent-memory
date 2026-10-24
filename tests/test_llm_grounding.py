@@ -67,7 +67,7 @@ class SummaryGroundingTests(unittest.TestCase):
         old = status.empty()
         old["working_now"] = [status.Item("i1", "Existing endpoint remains supported.", "[[old#e1]]")]
         output = dict(sections={**status.empty(), "working_now": [
-            {"keep": "i1"}, {"text": "New endpoint is supported", "ref": "[[session-b#e1]]"}]}, displaced=[])
+            {"keep": "i1"}, {"text": "Added endpoint support.", "ref": "[[session-b#e1]]"}]}, displaced=[])
         summary = {"citations": [{"claim": "Added endpoint support.", "quote": "Added endpoint support."}]}
         with patch.object(llm, "_run", return_value=output):
             result, _ = llm.consolidate(status.render(old), summary, "[[session-b]]", "2026-10-23")

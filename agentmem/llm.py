@@ -47,7 +47,8 @@ Return {"sections": {key: [entry, ...] for every supplied section key}, "displac
 Keep an old item unchanged with {"keep": "iN"}. Move it between sections if needed.
 New items are {"text": "one claim, at most 280 characters, no newlines or HTML markers", "ref": "allowed session ref"}.
 To replace text, add a new cited item and displace the exact original with
-{"id": "iN", "reason": "superseded" or "resolved", "ref": "allowed new-session ref"}.
+{"id": "iN", "reason": "superseded" or "resolved", "ref": "allowed new-session ref", "claim": "resolving or replacing statement"}.
+Every new item text and displacement claim must contain the exact claim of the evidence id it cites.
 Keep every old item unless the new evidence resolves or contradicts it. Never silently omit an item.
 If evidence is inconclusive, keep both claims and add a cited open question.
 Do not write current repository observations such as branch, HEAD, working tree, dirty or ahead/behind state.
