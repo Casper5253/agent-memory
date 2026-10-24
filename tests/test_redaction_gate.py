@@ -1,8 +1,14 @@
 import ast
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from agentmem import notes  # noqa: E402
+
 WRITER_GATES = {
     "agentmem/notes.py": {
         "render_session": {"redact"},
@@ -52,6 +58,16 @@ class RedactionGateTests(unittest.TestCase):
                 if missing:
                     failures.append(f"{relative}:{name} missing {sorted(missing)}")
         self.assertEqual(failures, [])
+
+    def test_state_order_token_survives_project_note_redaction(self):
+        order = (1792799155000000, 1)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Demo App.md"
+            notes.update_project_note(path, "Demo App", "2026-10-24", state="### Current state\n- Use SQLite for storage",
+                                      state_order_value=order)
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("agentmem_state_order: 1792799155000000:1", text)
+        self.assertEqual(notes.state_order(text), order)
 
 
 if __name__ == "__main__":

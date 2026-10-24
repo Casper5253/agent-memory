@@ -37,6 +37,23 @@ class PersonalDataRedactionTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(redact(value), value)
 
+    def test_luhn_valid_numbers_without_an_issuer_prefix_are_preserved(self):
+        samples = [
+            "1792799155000000",
+            "order=1792799155000000:1",
+            "- [ ] 2026-10-24 status update pending (base=abc; order=1792799155000000:1)",
+            "agentmem_state_order: 1792799155000000:1",
+        ]
+        for value in samples:
+            with self.subTest(value=value):
+                self.assertEqual(redact(value), value)
+
+    def test_luhn_valid_issuer_numbers_are_masked(self):
+        samples = ["5555 5555 5555 4444", "3782 822463 10005", "6011 1111 1111 1117"]
+        for value in samples:
+            with self.subTest(value=value):
+                self.assertEqual(redact(value), MASK)
+
     def test_email_allowlist_is_case_insensitive(self):
         value = "Owner@Example.com"
         self.assertEqual(redact(value, email_allowlist=["owner@example.com"]), value)
