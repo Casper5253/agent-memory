@@ -35,11 +35,11 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(status.reconcile(self.old(), update, set()).sections, self.old())
 
     def test_cited_displacement(self):
-        update = self.update()
+        update = self.update(working_now=[{'text': 'Uses JSON', 'ref': '[[new#e1]]'}])
         update['displaced'] = [{'id': 'i1', 'reason': 'superseded', 'ref': '[[new#e1]]', 'claim': 'Uses JSON'}]
         result = status.reconcile(self.old(), update, {'[[new#e1]]': 'Uses JSON'})
         self.assertEqual(result.displaced[0].item.text, 'Uses SQLite')
-        self.assertFalse(result.sections['working_now'])
+        self.assertEqual([i.text for i in result.sections['working_now']], ['Uses JSON'])
 
     def test_limit_oldest(self):
         page = status.empty()
