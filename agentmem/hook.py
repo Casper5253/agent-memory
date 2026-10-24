@@ -118,19 +118,16 @@ def startup_package(cfg, cwd: str) -> str:
         priority = '\n'.join(line for line in (health, pointer, recent) if line)
         room = max(0, CONTEXT_CAP - len(priority) - 1)
         return ('\n'.join(head[:3])[:room] + '\n' + priority)[-CONTEXT_CAP:]
-    lines, selected = list(head), 0
-    for key in status.STARTUP_ORDER:
-        heading = f"### {status.SECTIONS[key][0]}"
-        emitted_heading = False
-        for item in page[key]:
-            if len(item.text) > 280:
-                continue
-            addition = ([heading] if not emitted_heading else []) + [f"- {item.text} {item.ref}"]
-            candidate = '\n'.join(lines + addition)
-            if len(candidate) + len(reserved) + 1 <= CONTEXT_CAP:
-                lines += addition
-                selected += 1
-                emitted_heading = True
+    eligible = {key: [item for item in page[key] if len(item.text) <= 280] for key in status.STARTUP_ORDER}
+    selection = {key: [] for key in status.STARTUP_ORDER}
+    # Round-robin admission: every section gets its first item before any section gets a second.
+    for rank in range(max((len(items) for items in eligible.values()), default=0)):
+        for key in status.STARTUP_ORDER:
+            if rank < len(eligible[key]):
+                trial = {**selection, key: selection[key] + [eligible[key][rank]]}
+                if len('\n'.join(_startup_lines(head, trial))) + len(reserved) + 1 <= CONTEXT_CAP:
+                    selection = trial
+    lines, selected = _startup_lines(head, selection), sum(len(items) for items in selection.values())
     if legacy and len('\n'.join(lines + [legacy])) + len(reserved) + 1 <= CONTEXT_CAP:
         lines.append(legacy)
     if selected < count:
@@ -138,6 +135,24 @@ def startup_package(cfg, cwd: str) -> str:
     if recent:
         lines.append(recent)
     return '\n'.join(lines)
+
+
+def _startup_lines(head, selection):
+    """Section headings in startup order, with compact source refs so each item takes less of the cap."""
+    from . import status
+    lines = list(head)
+    for key in status.STARTUP_ORDER:
+        if selection[key]:
+            lines.append(f"### {status.SECTIONS[key][0]}")
+            lines += [f"- {item.text} {_compact_ref(item.ref)}" for item in selection[key]]
+    return lines
+
+
+def _compact_ref(ref):
+    """Session date and evidence anchor, e.g. (2026-10-17#e2). The project page keeps the full link."""
+    from . import status
+    date, anchor = status._ref_date(ref), re.search(r'#e\d+', ref)
+    return f"({date}{anchor[0]})" if date and anchor else ref
 
 
 def session_start(cfg, agent: str, sid: str, cwd: str) -> dict:
