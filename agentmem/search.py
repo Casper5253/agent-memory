@@ -117,7 +117,7 @@ def _located_label(path, label, snippet, line=None):
             position = normalized.find(excerpt) if excerpt and normalized.count(excerpt) == 1 else -1
             span_length = len(excerpt)
         if position < 0:
-            return label
+            return "UNVERIFIED"
         for begin, end, located in ((notes.STATE_BEGIN, notes.STATE_END, "CURRENT"),
                                    (notes.PENDING_BEGIN, notes.PENDING_END, "PENDING"),
                                    (notes.SESS_BEGIN, notes.SESS_END, "RECENT_SESSION")):
@@ -126,7 +126,7 @@ def _located_label(path, label, snippet, line=None):
                 return located
         return "PROJECT"
     except (OSError, ValueError):
-        return label
+        return "UNVERIFIED"
 
 
 def _build_hit(cfg, it):

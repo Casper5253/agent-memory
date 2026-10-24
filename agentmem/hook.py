@@ -49,6 +49,8 @@ def _health_line(man, max_attempts: int, note=None, pending='') -> str:
     parts = []
     if health["pending"]:
         parts.append(f"{_plural(health['pending'], 'session')} not yet captured")
+    if health["retrying"]:
+        parts.append(f"{_plural(health['retrying'], 'session')} retrying")
     if health["failed"]:
         reason = man.failed(max_attempts)[0]["last_error"] or "unknown error"
         parts.append(f"{health['failed']} failed: {reason[:160]}")
@@ -110,31 +112,65 @@ def startup_package(cfg, cwd: str) -> str:
         man.close()
     count = sum(len(items) for items in page.values())
     pointer = f"{count} more items in {note}" if count else ''
-    reserved = '\n'.join(value for value in (pointer, recent) if value)
     fixed = '\n'.join(head)
-    # Abnormally long configured paths must not consume the health line or omission pointer.
-    if len(fixed) + len(reserved) + 1 > CONTEXT_CAP:
+    eligible = {key: [item for item in page[key] if len(item.text) <= 280] for key in status.STARTUP_ORDER}
+    selection = {key: items[:1] for key, items in eligible.items()}
+
+    def fitted_lines(candidate):
+        lines = _startup_lines(head, candidate)
+        selected = sum(len(items) for items in candidate.values())
+        if legacy and len('\n'.join(lines + [legacy])) + (len(pointer) + 1 if selected < count else 0) <= CONTEXT_CAP:
+            lines.append(legacy)
+        if selected < count:
+            lines.append(f"{count - selected} more items in {note}")
+        return lines
+
+    if len(fixed) > CONTEXT_CAP:
         health = next((line for line in head if line.startswith('Capture health:')), '')
-        priority = '\n'.join(line for line in (health, pointer, recent) if line)
+        priority = '\n'.join(line for line in (health, pointer) if line)
         room = max(0, CONTEXT_CAP - len(priority) - 1)
         return ('\n'.join(head[:3])[:room] + '\n' + priority)[-CONTEXT_CAP:]
-    eligible = {key: [item for item in page[key] if len(item.text) <= 280] for key in status.STARTUP_ORDER}
-    selection = {key: [] for key in status.STARTUP_ORDER}
-    # Round-robin admission: every section gets its first item before any section gets a second.
-    for rank in range(max((len(items) for items in eligible.values()), default=0)):
+    if len('\n'.join(fitted_lines(selection))) > CONTEXT_CAP:
+        health = next((line for line in head if line.startswith('Capture health:')), '')
+        priority = '\n'.join(line for line in (health, pointer) if line)
+        room = max(0, CONTEXT_CAP - len(priority) - 1)
+        return ('\n'.join(head[:3])[:room] + '\n' + priority)[-CONTEXT_CAP:]
+
+    max_items = max((len(items) for items in eligible.values()), default=0)
+    for rank in range(1, max_items):
         for key in status.STARTUP_ORDER:
             if rank < len(eligible[key]):
                 trial = {**selection, key: selection[key] + [eligible[key][rank]]}
-                if len('\n'.join(_startup_lines(head, trial))) + len(reserved) + 1 <= CONTEXT_CAP:
+                if len('\n'.join(fitted_lines(trial))) <= CONTEXT_CAP:
                     selection = trial
-    lines, selected = _startup_lines(head, selection), sum(len(items) for items in selection.values())
-    if legacy and len('\n'.join(lines + [legacy])) + len(reserved) + 1 <= CONTEXT_CAP:
-        lines.append(legacy)
-    if selected < count:
-        lines.append(f"{count - selected} more items in {note}")
+    lines = fitted_lines(selection)
+    recent_budget = CONTEXT_CAP - len('\n'.join(lines)) - (1 if recent else 0)
+    recent = _fit_recent(recent, recent_budget)
     if recent:
         lines.append(recent)
     return '\n'.join(lines)
+
+
+def _fit_recent(recent, budget):
+    prefix = 'Recent sessions: '
+    if not recent.startswith(prefix) or budget < len(prefix):
+        return ''
+    entries = recent[len(prefix):].split('; ')
+    kept = []
+    for entry in entries:
+        candidate = prefix + '; '.join(kept + [entry])
+        if len(candidate) > budget:
+            break
+        kept.append(entry)
+    if len(kept) == len(entries):
+        return prefix + '; '.join(kept)
+    marker = '…'
+    if budget < len(prefix) + len(marker):
+        return ''
+    candidate = prefix + '; '.join(kept + [marker])
+    if len(candidate) <= budget:
+        return candidate
+    return prefix + '; '.join(kept) if kept else prefix + marker
 
 
 def _startup_lines(head, selection):
