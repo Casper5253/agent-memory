@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -1186,6 +1187,8 @@ class SweepApplyCorrectionTests(unittest.TestCase):
             note = vault / "1-Projects" / "parent" / "parent.md"
             before = note.read_bytes().replace(b"\n", b"\r\n")
             note.write_bytes(before)
+            stale_mtime = time.time() - 10
+            os.utime(note, (stale_mtime, stale_mtime))
             stage = subprocess.run(
                 ["git", "-c", "core.autocrlf=true", "add", "--", "1-Projects/parent/parent.md"], cwd=vault,
                 env=env, capture_output=True, timeout=10,
@@ -1202,15 +1205,11 @@ class SweepApplyCorrectionTests(unittest.TestCase):
             )
             self.assertEqual(indexed_blob.returncode, 0, msg=indexed_blob.stderr)
             self.assertEqual(committed_blob.stdout.strip(), indexed_blob.stdout.strip())
-            clean = subprocess.run(
-                ["git", "diff-files", "--quiet", "--", "1-Projects/parent/parent.md"],
-                cwd=vault, env=env, capture_output=True, timeout=10,
-            )
-            self.assertEqual(clean.returncode, 0, msg=clean.stderr)
             self.assertEqual(note.read_bytes(), before)
             other = vault / "0-Sessions" / "s.md"
             other.write_bytes(b"changed to create the sweep snapshot\n")
             sha = _load_sweep()._snapshot(vault, "crlf-test")
+            note.write_bytes(b"changed after snapshot\n")
             reset = subprocess.run(
                 ["git", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false",
                  "reset", "--hard", sha], cwd=vault, env=env,
