@@ -41,28 +41,18 @@ Do not cite a quote that does not support its claim. Omit any claim without a su
 "citations": [{"section": "summary", "claim": "...", "quote": "exact digest text"}, ...].
 Never include secrets, tokens or personal data."""
 
-CONSOLIDATE_SYSTEM = """You maintain the CURRENT-STATE section of a project note in a knowledge vault.
-Input: (1) the existing state section (markdown), (2) a new session's summary JSON with digest citations,
-(3) that session's wikilink and date.
-Reconcile, do not append blindly:
-- Update "Current state" so it describes the project as it is NOW. Remove statements the new session made false.
-- The consolidator's own working directory, environment, machine, and other runtime context are not evidence.
-- Keep every prior fact and decision unless the cited session evidence contradicts it.
-- Every new status bullet must be supported by a cited summary claim and include its source link as
-  [[<session wikilink without brackets>#eN]], where eN is the evidence_id in the summary citation. Do not create a new assertion from an uncited statement.
-- A new decision that replaces an older active decision: move the old one to "Superseded decisions" as
-  "- <old date> — <old decision> → superseded <new date>: <short reason> (<old link>)" and add the new one to "Active decisions".
-- Keep every still-valid decision with its original date and link. Never drop history silently.
-- "Open questions and next steps": drop items the session resolved, add new ones.
-- Attach the session summary's repo_head commit to every repository-state line you write.
-  If repo_head is null or missing, mark that line's repository commit unknown; never invent a commit.
-Return ONLY a JSON object: {"state_markdown": "<markdown>", "changed": true|false}
-state_markdown must contain exactly these four headings, in order, each followed by bullets (or "- none"):
-### Current state
-### Active decisions
-### Superseded decisions
-### Open questions and next steps
-Decision bullets: "- YYYY-MM-DD — <decision> — <rationale> (<session wikilink exactly as given>)". Max 5000 characters. No secrets."""
+CONSOLIDATE_SYSTEM = """Maintain a project status page from cited session evidence. Return only JSON.
+The input has sections of old items with explicit ids, plus the new session summary and allowed refs.
+Return {"sections": {key: [entry, ...] for every supplied section key}, "displaced": [entry, ...]}.
+Keep an old item unchanged with {"keep": "iN"}. Move it between sections if needed.
+New items are {"text": "one claim, at most 280 characters, no newlines or HTML markers", "ref": "allowed session ref"}.
+To replace text, add a new cited item and displace the exact original with
+{"id": "iN", "reason": "superseded" or "resolved", "ref": "allowed new-session ref"}.
+Keep every old item unless the new evidence resolves or contradicts it. Never silently omit an item.
+If evidence is inconclusive, keep both claims and add a cited open question.
+Do not write current repository observations such as branch, HEAD, working tree, dirty or ahead/behind state.
+Separate durable achievements and decisions from current repository observations. Code reads Git live.
+History, rendering and bounds belong to code. Do not write markdown or history links. No secrets."""
 
 
 def _run(system: str, prompt: str, model: str, timeout: int) -> dict:
@@ -183,61 +173,23 @@ def summarize(digest_text: str, model: str = "haiku", timeout: int = 180, email_
     }
 
 
-REQUIRED_HEADINGS = ["### Current state", "### Active decisions", "### Superseded decisions", "### Open questions and next steps"]
-
-
 def consolidate(state_md: str, summary: dict, link: str, date: str, model: str = "haiku", timeout: int = 180,
                 email_allowlist=None) -> tuple:
-    payload = copy.deepcopy({k: v for k, v in summary.items() if not k.startswith("_")})
-    citation_ids = []
-    if isinstance(payload.get("citations"), list):
-        for index, citation in enumerate(payload["citations"], 1):
-            if isinstance(citation, dict):
-                citation["evidence_id"] = f"e{index}"
-                citation_ids.append(f"e{index}")
-    prompt = (f"EXISTING STATE SECTION:\n{state_md or '(empty: this is the first session for the project)'}\n\n"
-              f"NEW SESSION ({date}, link {link}):\n{json.dumps(payload, ensure_ascii=False, indent=1)}")
-
-    def checked_markdown(data):
-        md = str(data.get("state_markdown") or "").strip()
-        pos = [md.find(h) for h in REQUIRED_HEADINGS]
-        if any(p < 0 for p in pos) or pos != sorted(pos):
-            raise LLMError("consolidation output missing required headings")
-        if len(md) > 8000:
-            raise LLMError("consolidation output too long")
-        old_bullets = {line.strip() for line in (state_md or "").splitlines() if line.strip().startswith("-")}
-        output_lines = {line.strip() for line in md.splitlines()}
-        for old_bullet in old_bullets:
-            if old_bullet.lower() not in ("- none", "- none yet") and old_bullet not in output_lines:
-                raise LLMError("existing status item omitted without reconciliation")
-        target = link[2:-2] if link.startswith("[[") and link.endswith("]]") else link
-        citation_claims = {
-            f"[[{target}#{citation.get('evidence_id')}]]": re.sub(r"\s+", " ", citation.get("claim", "")).strip()
-            for citation in payload.get("citations", []) if isinstance(citation, dict)
-            and citation.get("evidence_id") and isinstance(citation.get("claim"), str)
-        }
-        for line in md.splitlines():
-            stripped = line.strip()
-            if not (stripped.startswith("-") and stripped.lower() != "- none" and stripped not in old_bullets):
-                continue
-            refs = re.findall(r"\[\[[^\]]+\]\]", stripped)
-            body = re.sub(r"\[\[[^\]]+\]\]", "", stripped)
-            normalized_body = re.sub(r"\s+", " ", body).strip()
-            if not refs or not any(ref in citation_claims and citation_claims[ref] in normalized_body for ref in refs):
-                raise LLMError("new status statement lacks a matching digest claim citation")
-        return md
-
+    from . import status
     try:
-        data = _run(CONSOLIDATE_SYSTEM, prompt, model, timeout)
-        md = checked_markdown(data)
-    except LLMError as error:
-        if str(error) != "consolidation output too long":
-            raise
-        shortened = prompt + "\n\nThe previous output exceeded 8000 characters. Shorten it to 8000 characters or fewer. " \
-            "Keep prior facts and decisions unless the cited session evidence contradicts them. " \
-            "Do not remove any prior item only because the page is long."
-        data = _run(CONSOLIDATE_SYSTEM, shortened, model, timeout)
-        md = checked_markdown(data)
-    while "[[[[" in md or "]]]]" in md:  # models sometimes re-wrap a link that already has brackets
-        md = md.replace("[[[[", "[[").replace("]]]]", "]]")
-    return redact(md, email_allowlist=email_allowlist), data.get("_cost_usd", 0.0)
+        old = status.live_page(state_md)
+    except ValueError as error:
+        raise LLMError("page not migrated") from error
+    payload = copy.deepcopy({k: v for k, v in summary.items() if not k.startswith("_")})
+    for index, citation in enumerate(payload.get("citations", []), 1):
+        if isinstance(citation, dict):
+            citation["evidence_id"] = f"e{index}"
+    allowed = status.evidence_refs(summary, link)
+    prompt = json.dumps(dict(sections=status.model_items(old), summary=payload,
+                             allowed_refs=sorted(allowed), date=date), ensure_ascii=False)
+    data = _run(CONSOLIDATE_SYSTEM, redact(prompt, email_allowlist=email_allowlist), model, timeout)
+    try:
+        safe = json.loads(redact(json.dumps(data, ensure_ascii=False), email_allowlist=email_allowlist))
+        return status.reconcile(old, safe, allowed), data.get("_cost_usd", 0.0)
+    except (ValueError, TypeError) as error:
+        raise LLMError("invalid StatusUpdate JSON") from error
