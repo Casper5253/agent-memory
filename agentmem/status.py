@@ -72,6 +72,24 @@ def empty():
     return {key: [] for key in SECTIONS}
 
 
+AGENT_PROCESS = tuple(re.compile(pattern, re.I) for pattern in (
+    r'\b(?:stay(?:ing)?|remain(?:ing)?|stand(?:ing)?)\s+(?:idle|by)\b', r'\bidle until\b',
+    r'\b(?:await(?:ing)?|wait(?:ing)?\s+(?:for|on))\b[^.]{0,50}\b(?:review|verdict|reply|brief|response|assignment)s?\b',
+    r'\bget(?:ting)?\s+(?:the\s+|a\s+)?[^.]{0,40}\bverdict\b',
+    r'\breport(?:s|ed|ing)?\s+(?:back\s+)?to\s+(?:dev-|the lead\b|teammate|the team\b)',
+    r'\bassigned\s+(?:a\s+|the\s+)?(?:new\s+)?task\b',
+    r'\bas in progress\b', r'\b(?:run|suite|tests?|job|replay|discovery)\b[^.]{0,40}\bin progress\b',
+    r'\bstarted\s+(?:a|an|the)\s+[^.]{0,40}\brun\b',
+    r'\bran\s+(?:unittest|pytest|python|git|herdr|mem|the\s+(?:full\s+)?(?:test\s+)?suite|tests?|discovery)\b',
+    r'\bobserved\b[^.]{0,60}\bstill\b',
+))
+
+
+def agent_process(text):
+    """Clear agent-process wording (idle, awaiting, routing, runs, commands run). Project facts pass."""
+    return any(pattern.search(text) for pattern in AGENT_PROCESS)
+
+
 def valid_text(text, *, new=False):
     return (isinstance(text, str) and bool(text.strip()) and text == text.strip()
             and not any(c in text for c in ('\n', '\r')) and '<!--' not in text
@@ -202,6 +220,16 @@ def _entry_problem(entry, allowed):
     return ''
 
 
+MOVABLE_SECTIONS = frozenset(('next', 'active', 'questions'))
+
+
+def _keep_destination(original, requested, *, newer):
+    """Where a kept item lands. Only next, active and questions may move, and only among themselves."""
+    if not newer and original in MOVABLE_SECTIONS and requested in MOVABLE_SECTIONS:
+        return requested
+    return original
+
+
 def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
     if (not isinstance(update, dict) or not isinstance(update.get('sections'), dict)
             or set(update['sections']) != set(SECTIONS)
@@ -218,7 +246,9 @@ def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
                 identity = entry['keep']
                 if identity in originals and identity not in handled:
                     original_section, item = originals[identity]
-                    destination = original_section if source_orders.get(item.ref, (0, 0)) > new_order else section
+                    destination = _keep_destination(original_section, section, newer=source_orders.get(item.ref, (0, 0)) > new_order)
+                    if destination != section:
+                        result.events.append(('refused', f'move {identity} to {section}; stays in {destination}'))
                     result.sections[destination].append(item)
                     handled.add(identity)
                 continue
@@ -228,6 +258,9 @@ def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
             if problem:
                 result.events.append(('dropped', 'invalid new item'))
                 result.events.append(('rejected', f'{section}[{index}]: {problem}'))
+                continue
+            if agent_process(entry['text']):
+                result.events.append(('rejected', f'{section}[{index}]: agent process'))
                 continue
             if section == 'decisions' and any(i.text == entry['text'] and i.ref == entry['ref'] for i in result.sections[section]):
                 continue
