@@ -3,11 +3,28 @@ import json
 import re
 import tempfile
 import time
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from agentmem.config import Config
 from agentmem.llm import LLMError
+
+
+_real_agent_transcript_roots = {
+    os.path.normcase(os.path.abspath(str(Path.home() / ".claude" / "projects"))),
+    os.path.normcase(os.path.abspath(str(Path.home() / ".codex" / "sessions"))),
+}
+_path_rglob = Path.rglob
+
+
+def _reject_real_agent_transcript_scan(path, pattern):
+    if os.path.normcase(os.path.abspath(str(path))) in _real_agent_transcript_roots:
+        raise AssertionError(f"test attempted to scan a real agent transcript root: {path}")
+    return _path_rglob(path, pattern)
+
+
+Path.rglob = _reject_real_agent_transcript_scan
 
 SECRET_SAMPLES = [
     "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefGHIJ",
@@ -25,7 +42,12 @@ def make_vault(tmp: Path, **overrides) -> Config:
     (work / "demo-app").mkdir(parents=True, exist_ok=True)
     (vault / "_meta" / "projects.json").write_text(json.dumps({"projects": [
         {"name": "Demo App", "roots": [str(work / "demo-app")], "status": "active"}]}), encoding="utf-8")
-    opts = dict(summarizer="claude-haiku", settle_minutes=20, auto_index=False, embeddings=False)
+    transcripts = tmp / "transcripts"
+    claude_root, codex_root = transcripts / "claude", transcripts / "codex"
+    claude_root.mkdir(parents=True)
+    codex_root.mkdir(parents=True)
+    opts = dict(summarizer="claude-haiku", settle_minutes=20, auto_index=False, embeddings=False,
+                claude_transcripts_root=claude_root, codex_transcripts_root=codex_root)
     opts.update(overrides)
     return Config(vault=vault, **opts)
 

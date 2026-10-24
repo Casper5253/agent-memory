@@ -26,15 +26,6 @@ class Base(unittest.TestCase):
         self.cfg = fx.make_vault(self.tmp)
         self.cwd = str(self.tmp / "work" / "demo-app")
         self.man = Manifest(self.cfg.manifest_path)
-        self.transcript_roots = self.tmp / "orphan-scan"
-        (self.transcript_roots / "claude").mkdir(parents=True)
-        (self.transcript_roots / "codex").mkdir(parents=True)
-        self.scan_env = mock.patch.dict(os.environ, {
-            "AGENTMEM_CLAUDE_TRANSCRIPTS_ROOT": str(self.transcript_roots / "claude"),
-            "AGENTMEM_CODEX_TRANSCRIPTS_ROOT": str(self.transcript_roots / "codex"),
-        })
-        self.scan_env.start()
-        self.addCleanup(self.scan_env.stop)
 
     def tearDown(self):
         self.man.close()
@@ -115,7 +106,14 @@ class Acceptance(Base):
     def test_04_concurrent_sessions_do_not_corrupt_metadata(self):
         home = self.tmp / "rt"
         home.mkdir()
-        (home / "config.json").write_text(json.dumps({"summarizer": "none", "auto_index": False}), encoding="utf-8")
+        scan_roots = home / "transcripts"
+        claude_root, codex_root = scan_roots / "claude", scan_roots / "codex"
+        claude_root.mkdir(parents=True)
+        codex_root.mkdir(parents=True)
+        (home / "config.json").write_text(json.dumps({
+            "summarizer": "none", "auto_index": False,
+            "claude_transcripts_root": str(claude_root), "codex_transcripts_root": str(codex_root),
+        }), encoding="utf-8")
         sids = [f"s-conc-{i}" for i in range(6)]
         for sid in sids:
             self.end("claude", sid, self.claude_session(sid, fx.SUBSTANTIAL))
@@ -259,21 +257,19 @@ class Acceptance(Base):
         self.run_worker()
         state_after_newer = notes.get_block(self.project_note(), notes.STATE_BEGIN, notes.STATE_END)
         self.assertIn("Postgres", state_after_newer)
-        self.assertEqual(self.man.capture("claude", "s-pending-a", 1)["consolidated"], 1,
-                         "each new capture must drain older pending updates")
+        self.assertEqual(self.man.capture("claude", "s-pending-a", 1)["consolidated"], 0,
+                         "a stale pending update must not be retired without reconciliation")
 
         result = pipeline.consolidate_pending(self.cfg, self.man, fx.fake_summarize, fx.fake_consolidate)
         final_note = self.project_note()
         final_state = notes.get_block(final_note, notes.STATE_BEGIN, notes.STATE_END)
         final_pending = notes.get_block(final_note, notes.PENDING_BEGIN, notes.PENDING_END)
         self.assertIn("Postgres", final_state)
-        self.assertEqual(final_pending.strip(), "")
-        self.assertEqual(result["still_pending"], 0)
-        history = self.cfg.projects_dir / "Demo App" / "History.md"
-        history_text = history.read_text(encoding="utf-8")
-        self.assertIn("Use SQLite for storage", history_text)
+        self.assertIn("Use SQLite for storage", final_pending)
+        self.assertIn("status update pending", final_pending)
+        self.assertEqual(result["still_pending"], 1)
         older_link = Path(self.man.capture("claude", "s-pending-a", 1)["note_path"]).with_suffix("").as_posix()
-        self.assertIn(f"[[{older_link}]]", history_text)
+        self.assertIn(f"[[{older_link}]]", final_pending)
 
     def test_11c_displaced_state_items_are_linked_in_project_history(self):
         path = self.cfg.projects_dir / "Demo App" / "Demo App.md"

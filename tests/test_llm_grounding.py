@@ -1,40 +1,42 @@
 import unittest
+import sys
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agentmem import llm
 
 
 class SummaryGroundingTests(unittest.TestCase):
     def test_false_runtime_cwd_conflict_without_digest_citation_is_dropped(self):
-        digest = "Added a parser guard in parser.py after the failing case."
+        digest = "Added a parser guard. The parser.py change passed the failing case."
         model_output = {
             "title": "Parser guard",
             "summary": (
-                "The session added a parser guard. The project cwd conflicts with "
+                "Added a parser guard. The project cwd conflicts with "
                 "C:\\Users\\caspe\\.agents\\memory\\runtime\\tmp."
             ),
-            "what_happened": ["Added a parser guard in parser.py."],
+            "what_happened": ["Added a parser guard."],
             "decisions": [],
             "facts": ["The parser guard is in parser.py."],
             "open_questions": [],
             "next_steps": [],
             "citations": [
-                {"section": "summary", "claim": "The session added a parser guard.",
-                 "quote": "Added a parser guard in parser.py after the failing case."},
-                {"section": "what_happened", "claim": "Added a parser guard in parser.py.",
-                 "quote": "Added a parser guard in parser.py after the failing case."},
+                {"section": "summary", "claim": "Added a parser guard.",
+                 "quote": "Added a parser guard. The parser.py change passed the failing case."},
+                {"section": "what_happened", "claim": "Added a parser guard.",
+                 "quote": "Added a parser guard. The parser.py change passed the failing case."},
                 {"section": "facts", "claim": "The parser guard is in parser.py.",
-                 "quote": "Added a parser guard in parser.py after the failing case."},
+                 "quote": "Added a parser guard. The parser.py change passed the failing case."},
             ],
         }
         with patch.object(llm, "_run", return_value=model_output):
             summary = llm.summarize(digest)
 
-        self.assertEqual(summary["summary"], "The session added a parser guard.")
+        self.assertEqual(summary["summary"], "Added a parser guard.")
         self.assertNotIn("runtime\\tmp", summary["summary"].lower())
-        self.assertEqual(summary["what_happened"], ["Added a parser guard in parser.py."])
+        self.assertEqual(summary["what_happened"], ["Added a parser guard."])
 
     def test_model_runs_in_neutral_temporary_directory(self):
         seen = {}
@@ -62,13 +64,13 @@ class SummaryGroundingTests(unittest.TestCase):
             {"section": "summary", "claim": "Session changed status.", "quote": "Changed status."},
         ]}
         with patch.object(llm, "_run", return_value={"state_markdown": state}):
-            with self.assertRaisesRegex(llm.LLMError, "new status statement missing digest citation"):
-                llm.consolidate("- Existing state", summary, "[[0-Sessions/session-a]]", "2026-10-23")
+            with self.assertRaisesRegex(llm.LLMError, "new status statement lacks a matching digest claim citation"):
+                llm.consolidate("", summary, "[[0-Sessions/session-a]]", "2026-10-23")
 
     def test_existing_facts_are_preserved_and_new_status_links_to_evidence(self):
         old_fact = "- Existing endpoint remains supported."
         output = "\n".join([
-            "### Current state", old_fact + "\n- New endpoint is supported [[0-Sessions/session-b#e1]]", "",
+            "### Current state", old_fact + "\n- Added endpoint support. [[0-Sessions/session-b#e1]]", "",
             "### Active decisions", "- none", "", "### Superseded decisions", "- none", "",
             "### Open questions and next steps", "- none",
         ])
@@ -88,7 +90,7 @@ class SummaryGroundingTests(unittest.TestCase):
             "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
         ])
         shortened = "\n".join([
-            "### Current state", "- compact state", "", "### Active decisions", "- none", "",
+            "### Current state", "- none", "", "### Active decisions", "- none", "",
             "### Superseded decisions", "- none", "", "### Open questions and next steps", "- none",
         ])
         with patch.object(llm, "_run", side_effect=[{"state_markdown": oversized}, {"state_markdown": shortened}]) as invoke:

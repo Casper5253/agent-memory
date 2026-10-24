@@ -12,6 +12,8 @@ CAPTURE_ENV = "AGENTMEM_CAPTURE"  # set inside any process the pipeline launches
 @dataclass
 class Config:
     vault: Path
+    claude_transcripts_root: Path = field(default_factory=lambda: HOME / ".claude" / "projects")
+    codex_transcripts_root: Path = field(default_factory=lambda: HOME / ".codex" / "sessions")
     summarizer: str = "claude-haiku"      # "claude-haiku" | "none"
     settle_minutes: int = 20               # no new transcript bytes for this long == session over
     min_user_prompts: int = 2
@@ -39,6 +41,8 @@ class Config:
 
     def __post_init__(self):
         from .knowledge.policy import enum, integer, uuid_id
+        self.claude_transcripts_root = Path(self.claude_transcripts_root)
+        self.codex_transcripts_root = Path(self.codex_transcripts_root)
         enum(self.knowledge_mode, ("off", "shadow", "active"))
         for name in ("knowledge_input_units", "knowledge_output_tokens", "knowledge_run_captures",
                      "knowledge_run_calls", "knowledge_run_seconds", "knowledge_qmd_timeout_ms"):

@@ -124,7 +124,11 @@ def make_temp_vault(base_tmp, corpus, qmd_index=""):
         "summarizer": "none",
         "auto_index": False,
         "embeddings": False,
+        "claude_transcripts_root": str(base_tmp / "transcripts" / "claude"),
+        "codex_transcripts_root": str(base_tmp / "transcripts" / "codex"),
     }
+    Path(config["claude_transcripts_root"]).mkdir(parents=True, exist_ok=True)
+    Path(config["codex_transcripts_root"]).mkdir(parents=True, exist_ok=True)
     if qmd_index:
         config["qmd_index"] = str(qmd_index)
     (home / "config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -203,6 +207,12 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index,
     from agentmem import worker
 
     knowledge_options = {}
+    transcript_options = {}
+    if "claude_transcripts_root" in Config.__dataclass_fields__:
+        transcript_options = {
+            "claude_transcripts_root": vault / "_meta" / "transcripts" / "claude",
+            "codex_transcripts_root": vault / "_meta" / "transcripts" / "codex",
+        }
     if "project_privacy" in Config.__dataclass_fields__:
         knowledge_options["project_privacy"] = {p["name"]: p["policy"] for p in project_roots.values()}
     if knowledge:
@@ -215,7 +225,11 @@ def run_pipeline_for_corpus(vault, work, home, corpus, project_roots, qmd_index,
         embeddings=False,
         qmd_index=str(qmd_index) if qmd_index else "",
         **knowledge_options,
+        **transcript_options,
     )
+    if transcript_options:
+        cfg.claude_transcripts_root.mkdir(parents=True, exist_ok=True)
+        cfg.codex_transcripts_root.mkdir(parents=True, exist_ok=True)
 
     transcripts_dir = Path(corpus.get("_transcripts_dir", ""))
     if not transcripts_dir.is_dir():
@@ -376,6 +390,8 @@ def isolated_environment(vault, home, cache_dir=None):
         "XDG_CACHE_HOME": cache, "XDG_CONFIG_HOME": base / "config", "XDG_DATA_HOME": base / "data",
         "QMD_CONFIG_DIR": base / "config/qmd", "TMP": base / "tmp", "TEMP": base / "tmp", "TMPDIR": base / "tmp",
         "NODE_COMPILE_CACHE": cache / "node", "HF_HOME": cache / "huggingface",
+        "AGENTMEM_CLAUDE_TRANSCRIPTS_ROOT": base / "os-home/.claude/projects",
+        "AGENTMEM_CODEX_TRANSCRIPTS_ROOT": base / "os-home/.codex/sessions",
     }
     env = dict(os.environ)
     for key, path in directories.items():

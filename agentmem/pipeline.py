@@ -24,8 +24,6 @@ from .logutil import log
 from .manifest import Manifest
 from .redact import redact, redact_session_note
 
-CLAUDE_TRANSCRIPTS_ROOT = Path.home() / ".claude" / "projects"
-CODEX_TRANSCRIPTS_ROOT = Path.home() / ".codex" / "sessions"
 
 
 def _parse_time(value: str) -> datetime:
@@ -344,15 +342,14 @@ def _redact_values(value, email_allowlist=None):
 def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
     """Register aged Claude and Codex JSONL transcripts before the ordinary settle-window drain.
 
-    The next capture drain scans ~/.claude/projects and ~/.codex/sessions. It uses file modification
-    time for the existing settle rule and then lets normal parsing, gating, privacy, and retry handling
-    decide whether to capture. OpenCode exports require a known session id, so they remain hook-bound.
+    It uses the configured roots and file modification time for the existing settle rule, then lets
+    normal parsing, gating, privacy, and retry handling decide whether to capture. OpenCode exports
+    require a known session id, so they remain hook-bound.
     """
     now = now or time.time()
     settle_s = cfg.settle_minutes * 60
     discovered = 0
-    roots = (("claude", Path(os.environ.get("AGENTMEM_CLAUDE_TRANSCRIPTS_ROOT", CLAUDE_TRANSCRIPTS_ROOT))),
-             ("codex", Path(os.environ.get("AGENTMEM_CODEX_TRANSCRIPTS_ROOT", CODEX_TRANSCRIPTS_ROOT))))
+    roots = (("claude", Path(cfg.claude_transcripts_root)), ("codex", Path(cfg.codex_transcripts_root)))
     for agent, root in roots:
         if not root.is_dir():
             continue
@@ -381,6 +378,7 @@ def _pending_lines(summary: dict, link: str, date: str) -> list:
     out = [f"- [ ] {date} [[{link}]] — {d['decision']}" for d in summary.get("decisions", [])[:6]]
     out += [f"- [ ] {date} [[{link}]] — fact: {s}" for s in summary.get("facts", [])[:4]]
     out += [f"- [ ] {date} [[{link}]] — next: {s}" for s in summary.get("next_steps", [])[:4]]
+    out += [f"- [ ] {date} [[{link}]] — question: {s}" for s in summary.get("open_questions", [])[:4]]
     return out or [f"- [ ] {date} [[{link}]] — review session for state changes"]
 
 
@@ -419,16 +417,18 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         if (session_marker in notes.get_block(text, notes.SESS_BEGIN, notes.SESS_END)
                 and f"[[{link}]]" not in notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)):
             return 0.0, True
-        if notes.state_order(text) > order:
-            items = _pending_lines(summary, link, date)
-            notes.append_project_history(notes.project_history_path(note_path), project, date, link, items,
-                                         "Superseded pending update", email_allowlist=cfg.privacy_email_allowlist)
-            notes.update_project_note(note_path, project, date, pending_clear=f"[[{link}]]",
-                                      session_link=link, session_line=session_line,
-                                      email_allowlist=cfg.privacy_email_allowlist)
-            log(cfg, "pending-superseded", project=project, note=link,
+        if notes.state_order(text) >= order and notes.state_order(text) != (0, 0):
+            if not pending_order:
+                reason = "newer state exists; reconciliation required"
+                pending_lines = [f"- [ ] {date} [[{link}]] — status update pending ({reason}; "
+                                 f"base={base_revision}; order={order[0]}:{order[1]})"]
+                pending_lines += _pending_lines(summary, link, date)
+                notes.update_project_note(note_path, project, date, pending_add=pending_lines,
+                                          session_link=link, session_line=session_line,
+                                          email_allowlist=cfg.privacy_email_allowlist)
+            log(cfg, "pending-order-conflict", project=project, note=link,
                 base_revision=pending_base or base_revision, order=pending_order or order)
-            return 0.0, True
+            return 0.0, False
         if (summary_kind != "deterministic" and cfg.summarizer != "none"
                 and ksources._privacy_for(cfg, project) not in ("local_only", "excluded")):
             try:
