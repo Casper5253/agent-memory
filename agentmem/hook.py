@@ -5,12 +5,13 @@ Every event also kicks a detached worker. Output is always valid hook JSON ({} u
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
 from .config import CAPTURE_ENV
 
-CONTEXT_CAP = 1500
+CONTEXT_CAP = 4000
 GIT_TIMEOUT_S = 2
 STATE_CAP = 600
 
@@ -43,7 +44,7 @@ def _git_line(cwd: str) -> str:
     return line
 
 
-def _health_line(man, max_attempts: int) -> str:
+def _health_line(man, max_attempts: int, note=None, pending='') -> str:
     health = man.health(max_attempts)
     parts = []
     if health["pending"]:
@@ -51,42 +52,92 @@ def _health_line(man, max_attempts: int) -> str:
     if health["failed"]:
         reason = man.failed(max_attempts)[0]["last_error"] or "unknown error"
         parts.append(f"{health['failed']} failed: {reason[:160]}")
+    backlog = len(man.unconsolidated())
+    reason = re.search(r'status update pending \(([^;\n)]+)', pending)
+    if backlog:
+        why = reason[1][:100] if reason else 'reconciliation pending'
+        parts.append(f"{_plural(backlog, 'captured session')} awaiting consolidation ({why}); see {note or 'project notes'}")
+        preview = next((line for line in pending.splitlines() if 'status update pending' not in line and line.strip()), '')
+        if preview:
+            preview = re.sub(r'^- \[ \] \S+ \[\[[^\]]+\]\]\s*[^\w]*', '', preview)
+            parts.append('pending: ' + preview[:100])
+    elif 'status update pending' in pending:
+        why = f' ({reason[1][:100]})' if reason else ''
+        parts.append(f"status update pending{why}; see {note}")
+    if 'status replay refused' in pending:
+        parts.append(f'status replay refused; see {note}')
     return f"Capture health: {', '.join(parts)}" if parts else ""
 
 
 def startup_package(cfg, cwd: str) -> str:
-    """Bounded startup context: header, project, live Git, capture health, current state, recent sessions."""
-    from . import notes, projects
+    """Reserve health and omission pointer first, then admit complete status items in priority order."""
+    from . import notes, projects, status
     from .manifest import Manifest
     project = projects.resolve_session(cwd, cfg.projects_map, create=False)
     head = [f"Agent memory: Obsidian vault at {cfg.vault}. Session notes (0-Sessions) are HISTORICAL; project notes (1-Projects) are CURRENT state.",
-            "When asked what was previously decided, implemented or configured, search the vault first: "
+            'When asked what was previously decided, implemented or configured, search the vault first: '
             '`mem search "<terms>"` (memory skill), never guess.']
-    state_text, tail = "", []
+    page, pending, note, legacy, recent = status.empty(), '', None, '', ''
     man = Manifest(cfg.manifest_path)
     try:
         if project != projects.UNSORTED:
             note = projects.note_path(cfg.vault, project)
-            head.append(f"Project: {project} — {note}")
+            head.append(f"Project: {project} - {note}")
             if note.exists():
                 try:
-                    state = notes.get_block(note.read_text(encoding="utf-8"), notes.STATE_BEGIN, notes.STATE_END)
-                    cur = state.split("### Active decisions")[0].replace("### Current state", "").strip()
-                    if cur and cur != "- none yet":
-                        state_text = "Current state:\n" + cur[:STATE_CAP]
+                    text = note.read_text(encoding='utf-8')
+                    pending = notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)
+                    block = notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END)
+                    try:
+                        page = status.live_page(block)
+                    except ValueError:
+                        current = re.search(r'(?ms)^### Current state\s*\n(.*?)(?=^### |\Z)', block)
+                        if current:
+                            legacy = 'Legacy current state (page not migrated):\n' + current[1].strip()[:STATE_CAP]
+                        pending += ' status update pending (page not migrated)'
                 except (ValueError, OSError):
-                    pass
-            recent = man.query_captures(project=project, limit=3)
-            if recent:
-                tail.append("Recent sessions: " + "; ".join(f"{r['date']} {r['title']}" for r in recent))
-        head += [line for line in (_git_line(cwd), _health_line(man, cfg.max_attempts)) if line]
+                    pending += ' status update pending (page not migrated)'
+            entries = []
+            for row in man.query_captures(project=project, limit=3):
+                title = ' '.join(row['title'].split())[:80]
+                link = row['note_path'].removesuffix('.md')
+                source = f'[[{link}|{title}]]' if len(link) <= 220 and not re.search(r'[\r\n\[\]|]', link) else title
+                entries.append(f"{row['date'][:10]} {source}")
+            if entries:
+                recent = 'Recent sessions: ' + '; '.join(entries)
+        head += [line for line in (_git_line(cwd), _health_line(man, cfg.max_attempts, note, pending)) if line]
     finally:
         man.close()
-    fixed = "\n".join([*head, *tail])
-    room = CONTEXT_CAP - len(fixed) - 1
-    if state_text and room > len("Current state:\n"):
-        return "\n".join([*head, state_text[:room], *tail])[:CONTEXT_CAP]
-    return fixed[:CONTEXT_CAP]
+    count = sum(len(items) for items in page.values())
+    pointer = f"{count} more items in {note}" if count else ''
+    reserved = '\n'.join(value for value in (pointer, recent) if value)
+    fixed = '\n'.join(head)
+    # Abnormally long configured paths must not consume the health line or omission pointer.
+    if len(fixed) + len(reserved) + 1 > CONTEXT_CAP:
+        health = next((line for line in head if line.startswith('Capture health:')), '')
+        priority = '\n'.join(line for line in (health, pointer, recent) if line)
+        room = max(0, CONTEXT_CAP - len(priority) - 1)
+        return ('\n'.join(head[:3])[:room] + '\n' + priority)[-CONTEXT_CAP:]
+    lines, selected = list(head), 0
+    for key in status.STARTUP_ORDER:
+        heading = f"### {status.SECTIONS[key][0]}"
+        emitted_heading = False
+        for item in page[key]:
+            if len(item.text) > 280:
+                continue
+            addition = ([heading] if not emitted_heading else []) + [f"- {item.text} {item.ref}"]
+            candidate = '\n'.join(lines + addition)
+            if len(candidate) + len(reserved) + 1 <= CONTEXT_CAP:
+                lines += addition
+                selected += 1
+                emitted_heading = True
+    if legacy and len('\n'.join(lines + [legacy])) + len(reserved) + 1 <= CONTEXT_CAP:
+        lines.append(legacy)
+    if selected < count:
+        lines.append(f"{count - selected} more items in {note}")
+    if recent:
+        lines.append(recent)
+    return '\n'.join(lines)
 
 
 def session_start(cfg, agent: str, sid: str, cwd: str) -> dict:

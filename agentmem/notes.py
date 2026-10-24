@@ -257,7 +257,7 @@ def touch_state_order(text: str, order: tuple) -> str:
 
 
 def append_project_history(path: Path, project: str, date: str, session_link: str, items, reason: str,
-                           email_allowlist=None) -> None:
+                           email_allowlist=None, records=None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text(encoding="utf-8") if path.exists() else f"# {project} history\n"
     suffix = f"[[{session_link}]]" if session_link else "session evidence unavailable"
@@ -271,15 +271,64 @@ def append_project_history(path: Path, project: str, date: str, session_link: st
             entry += "\n" + "\n".join(f"  {line}" for line in lines[1:])
         entries.append(entry)
     additions = [entry for entry in entries if entry not in text]
+    for record in records or []:
+        marker = '<!-- agentmem:history:' + hashlib.sha256(record['key'].encode('utf-8')).hexdigest() + ' -->'
+        if marker not in text and not any(marker in entry for entry in additions):
+            additions.append(marker + '\n' + redact(record['text'], email_allowlist=email_allowlist))
     if additions:
         atomic_write(path, text.rstrip("\n") + "\n\n" + "\n".join(additions) + "\n")
 
 
+def _status_journal(path):
+    return path.with_name('.' + path.name + '.status-update.json')
+
+
+def recover_status_update(path):
+    """Caller holds the project lock. Finish the recorded page without another model call."""
+    journal = _status_journal(path)
+    if not journal.exists():
+        return
+    current = path.read_text(encoding='utf-8') if path.exists() else ''
+    try:
+        plan = json.loads(journal.read_text(encoding='utf-8'))
+        if current not in (plan['before'], plan['after']):
+            raise ValueError('project page changed')
+        if (not all(isinstance(plan[key], str) for key in ('before', 'after', 'project', 'date'))
+                or not isinstance(plan['records'], list)):
+            raise ValueError('invalid journal')
+    except (ValueError, KeyError, TypeError) as error:
+        refused = journal.with_name(journal.name + '.refused-' + datetime.now().strftime('%Y%m%dT%H%M%S%f'))
+        journal.rename(refused)
+        text = ensure_blocks(current)
+        pending = get_block(text, PENDING_BEGIN, PENDING_END)
+        line = f'- [ ] status replay refused ({error}); review {refused.name}'
+        atomic_write(path, set_block(text, PENDING_BEGIN, PENDING_END, '\n'.join(filter(None, (pending, line)))))
+        return refused
+    append_project_history(project_history_path(path), plan['project'], plan['date'], '', [], '',
+                           records=plan['records'])
+    atomic_write(path, plan['after'])
+    journal.unlink()
+
+
 def update_project_note(path: Path, project: str, today: str, *, state=None, pending_add=None, pending_clear=None,
-                        session_link=None, session_line=None, state_order_value=None, email_allowlist=None) -> None:
+                        session_link=None, session_line=None, state_order_value=None, email_allowlist=None,
+                        status_result=None, update_key=None) -> None:
     """Caller holds the project lock. Re-reads the note, edits only managed blocks, writes atomically."""
-    text = path.read_text(encoding="utf-8") if path.exists() else new_project_note(project, today)
+    from . import status
+    recover_status_update(path)
+    before = path.read_text(encoding='utf-8') if path.exists() else ''
+    text = before or new_project_note(project, today)
     text = ensure_blocks(text)
+    records = []
+    if status_result is not None:
+        if not update_key:
+            raise ValueError('structured status requires update key')
+        folder = '4-Archive' if path.parent.parent.name == '4-Archive' else '1-Projects'
+        state = status.render(status_result.sections, f'{folder}/{project}/History')
+        records = [dict(key=f'{update_key}:{d.item.id}',
+                        text=f'- {today} [{d.section}; {d.reason}] {d.item.text} {d.item.ref}' +
+                             (f' (evidence {d.evidence}; claim: {d.claim})' if d.evidence else ''))
+                   for d in status_result.displaced]
     if state is not None:
         old_state = get_block(text, STATE_BEGIN, STATE_END)
         old_bullets = []
@@ -301,7 +350,7 @@ def update_project_note(path: Path, project: str, today: str, *, state=None, pen
         new_bullets = {line.strip()[2:] for line in state.splitlines()
                        if line.strip().startswith("- ") and line.strip().lower() not in ("- none", "- none yet")}
         displaced = [item for item in old_bullets if item not in new_bullets]
-        if displaced:
+        if displaced and status_result is None:
             append_project_history(project_history_path(path), project, today, session_link or "", displaced,
                                    "Displaced status item", email_allowlist=email_allowlist)
         text = set_block(text, STATE_BEGIN, STATE_END, state)
@@ -317,4 +366,10 @@ def update_project_note(path: Path, project: str, today: str, *, state=None, pen
         lines = [l for l in get_block(text, SESS_BEGIN, SESS_END).splitlines() if l.strip() and session_link not in l]
         text = set_block(text, SESS_BEGIN, SESS_END, "\n".join(([session_line] + lines)[:15]))
     text = redact(text, email_allowlist=email_allowlist)
-    atomic_write(path, touch_updated(text, today))
+    after = touch_updated(text, today)
+    if status_result is not None:
+        plan = dict(before=before, after=after, records=records, project=project, date=today)
+        atomic_write(_status_journal(path), json.dumps(plan, ensure_ascii=False))
+        recover_status_update(path)
+    else:
+        atomic_write(path, after)

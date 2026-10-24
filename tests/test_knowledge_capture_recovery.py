@@ -456,9 +456,9 @@ class DirectionATests(CaptureBase):
         self.assertIn('repo_head: "' + head + '"', text)
         self.assertIn('attribution_method:', text)
 
-    def test_consolidation_prompt_requires_recorded_commit(self):
-        self.assertIn('repo_head', llm.CONSOLIDATE_SYSTEM)
-        self.assertIn('repository-state', llm.CONSOLIDATE_SYSTEM)
+    def test_consolidation_prompt_forbids_stored_git_observations(self):
+        self.assertNotIn('repo_head', llm.CONSOLIDATE_SYSTEM)
+        self.assertIn('Do not write current repository observations', llm.CONSOLIDATE_SYSTEM)
 
     def test_search_labels_located_pending_state_and_sessions(self):
         path = self.cfg.vault / '1-Projects/Demo App/Demo App.md'

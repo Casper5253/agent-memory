@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from agentmem import llm, notes, pipeline, projects
+from agentmem import llm, notes, pipeline, projects, status
 from agentmem.config import Config
 
 
@@ -25,7 +25,9 @@ class PendingReconciliationReviewTests(unittest.TestCase):
         (self.vault / "_meta/locks").mkdir(parents=True)
         self.cfg = Config(self.vault)
         self.note = projects.note_path(self.vault, "Synthetic")
-        notes.update_project_note(self.note, "Synthetic", "2026-10-23", state=state("- Seed backend JSON."))
+        seed = status.empty()
+        seed['working_now'] = [status.Item('i1', 'Seed backend JSON.', '[[old#e1]]')]
+        notes.update_project_note(self.note, "Synthetic", "2026-10-23", state=status.render(seed))
         self.when = datetime(2026, 10, 23, 10, tzinfo=timezone.utc)
 
     def test_older_disjoint_pending_update_and_open_question_survive_newer_success(self):
@@ -36,10 +38,12 @@ class PendingReconciliationReviewTests(unittest.TestCase):
         def outage(*args, **kwargs):
             raise llm.LLMError("temporary outage")
 
-        newer = lambda *args, **kwargs: (state("- Parser is faster."), 0)
+        newer = lambda *args, **kwargs: (dict(sections={**status.empty(), 'latest': [
+            dict(text='Parser is faster.', ref='[[0-Sessions/B#e1]]')]}, displaced=[]), 0)
         self.assertFalse(pipeline.consolidate_into_project(self.cfg, "Synthetic", older, "0-Sessions/A",
                                                             self.when, "claude-haiku", outage)[1])
-        self.assertTrue(pipeline.consolidate_into_project(self.cfg, "Synthetic", {"summary": "Parser is faster."},
+        self.assertTrue(pipeline.consolidate_into_project(self.cfg, "Synthetic", {"summary": "Parser is faster.",
+                                                           "citations": [dict(claim='Parser is faster.', quote='Parser is faster.')]},
                                                            "0-Sessions/B", self.when + timedelta(seconds=1),
                                                            "claude-haiku", newer)[1])
         ok = pipeline.consolidate_into_project(self.cfg, "Synthetic", older, "0-Sessions/A", self.when,
@@ -76,14 +80,15 @@ class PendingReconciliationReviewTests(unittest.TestCase):
         self.assertIn("Use e.g. SQLite for local mode.", result["summary"])
 
     def test_consolidation_cannot_drop_prior_fact_without_evidence(self):
-        output = state("- none")
+        old = status.empty()
+        old['working_now'] = [status.Item('i1', 'Existing endpoint remains supported.', '[[old#e1]]')]
         summary = {"summary": "Parser guard added.", "citations": [
             {"section": "summary", "claim": "Parser guard added.", "quote": "Parser guard added."},
         ]}
-        with patch.object(llm, "_run", return_value={"state_markdown": output}):
-            with self.assertRaisesRegex(llm.LLMError, "existing status item omitted"):
-                llm.consolidate(state("- Existing endpoint remains supported."), summary,
-                                "[[0-Sessions/B]]", "2026-10-23")
+        with patch.object(llm, "_run", return_value=dict(sections=status.empty(), displaced=[])):
+            result, _ = llm.consolidate(status.render(old), summary, "[[0-Sessions/B]]", "2026-10-23")
+        self.assertEqual(result.sections, old)
+        self.assertIn(('restored', 'i1'), result.events)
 
     def test_displaced_bullet_history_keeps_indented_continuation(self):
         old_state = state("- Keep local mode.", "  CANARY_CRITICAL_RATIONALE: works while offline.")

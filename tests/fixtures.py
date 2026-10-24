@@ -142,9 +142,15 @@ def fake_summarize(digest: str, timeout=0) -> dict:
     elif "use SQLite for storage" in digest:
         decisions.append({"decision": "Use SQLite for storage", "rationale": "the app is local only"})
     first = re.search(r"--- USER 1:\n(.+)", digest)
-    return {"title": (first.group(1)[:40] if first else "session"), "summary": "Fake summary of the session.",
+    result = {"title": (first.group(1)[:40] if first else "session"), "summary": "Fake summary of the session.",
             "what_happened": ["did work"], "decisions": decisions, "facts": ["tests pass"],
-            "open_questions": [], "next_steps": ["deploy"], "_cost_usd": 0.001}
+            "open_questions": [], "next_steps": ["deploy"],
+            "citations": [dict(section="summary", claim="Fake summary of the session.", quote="synthetic fixture evidence")],
+            "_cost_usd": 0.001}
+    for section in ("facts", "next_steps"):
+        result["citations"] += [dict(section=section, claim=text, quote=text) for text in result[section]]
+    result["citations"] += [dict(section="decision", claim=d["decision"], quote=d["decision"]) for d in decisions]
+    return result
 
 
 def failing_llm(*a, **k):
@@ -152,24 +158,30 @@ def failing_llm(*a, **k):
 
 
 def fake_consolidate(state: str, summary: dict, link: str, date: str, timeout=0):
-    def section(name, nxt):
-        m = re.search(rf"### {name}\n(.*?)(?=\n### {nxt}|\Z)", state or "", re.S)
-        return [l for l in (m.group(1).splitlines() if m else []) if l.strip().startswith("-") and l.strip() != "- none"]
-    active = section("Active decisions", "Superseded decisions")
-    superseded = section("Superseded decisions", "Open questions and next steps")
-    for d in summary.get("decisions", []):
-        m = re.search(r"instead of (\w+)", d["decision"])
-        if m:
-            for a in list(active):
-                if m.group(1).lower() in a.lower():
-                    active.remove(a)
-                    superseded.append(f"{a} → superseded {date}: {d['decision']}")
-        active.append(f"- {date} — {d['decision']} — {d['rationale']} ({link})")
-    current = "- " + (summary["decisions"][-1]["decision"] if summary.get("decisions") else "work in progress")
-    md = (f"### Current state\n{current}\n\n### Active decisions\n" + ("\n".join(active) or "- none") +
-          "\n\n### Superseded decisions\n" + ("\n".join(superseded) or "- none") +
-          "\n\n### Open questions and next steps\n- deploy")
-    return md, 0.002
+    from agentmem import status
+    old = status.live_page(state)
+    sections = {key: [{"keep": item.id} for item in items] for key, items in old.items()}
+    displaced = []
+    allowed = status.evidence_refs(summary, link)
+    def ref_for(text):
+        return next((ref for ref, claim in allowed.items() if re.sub(r"\s+", " ", claim).strip() in text), "")
+    if allowed:
+        for decision in summary.get("decisions", []):
+            ref = ref_for(decision["decision"])
+            replaced = re.search(r"instead of (\w+)", decision["decision"])
+            if replaced:
+                for key, items in old.items():
+                    for item in items:
+                        if replaced[1].lower() in item.text.lower():
+                            sections[key] = [entry for entry in sections[key] if entry.get("keep") != item.id]
+                            displaced.append(dict(id=item.id, reason="superseded", ref=ref, claim=decision["decision"]))
+            sections["decisions"].append(dict(text=decision["decision"] + " because " + decision["rationale"], ref=ref))
+        current = summary["decisions"][-1]["decision"] if summary.get("decisions") else summary.get("summary", "")
+        sections["latest"].append(dict(text=current, ref=ref_for(current)))
+        for item in summary.get("facts", []):
+            if len(item) <= 280 and "\n" not in item:
+                sections["working_now"].append(dict(text=item, ref=ref_for(item)))
+    return dict(sections=sections, displaced=displaced), 0.002
 
 
 def tmpdir():

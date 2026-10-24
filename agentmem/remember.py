@@ -36,6 +36,10 @@ def _summary(text: str, kind: str, rationale: str) -> dict:
         s["next_steps"] = [text]
     else:
         s["facts"] = [text if kind == "fact" else f"Preference: {text}"]
+    s['citations'] = [dict(section='decision' if kind == 'decision' else 'next_steps' if kind == 'next' else 'facts',
+                           claim=text, quote=text)]
+    if rationale:
+        s['citations'].append(dict(section='rationale', claim=rationale, quote=rationale))
     return s
 
 
@@ -54,6 +58,9 @@ def _evidence_note(cfg: Config, *, when, agent, project, kind, text, rationale, 
         "## Statement", "", text, "",
         *(["## Rationale", "", rationale, ""] if rationale else []),
     ])
+    body += '\n## Evidence\n\n' + '\n'.join(
+        f"### E{index}\n\n- Claim: {citation['claim']}\n- Digest span: {citation['quote']}\n"
+        for index, citation in enumerate(_summary(text, kind, rationale)['citations'], 1))
     create_once(path, redact_session_note(body, cfg.privacy_email_allowlist))
     return path
 
