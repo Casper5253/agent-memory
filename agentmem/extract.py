@@ -182,7 +182,8 @@ def _render(t: Transcript, d: Digest, cap: int) -> str:
     tail = ["", "FILES MODIFIED:"] + [f"- {f}" for f in d.files[:80]]
     if d.git_commits:
         tail += ["", "GIT COMMITS DURING SESSION:"] + [f"- {commit}" for commit in d.git_commits[:20]]
-    tail += ["", "COMMANDS (first 40):"] + [f"- {c}" for c in d.commands[:40]]
+    commands = f"COMMANDS (first 40 of {len(d.commands)})" if len(d.commands) > 40 else "COMMANDS"
+    tail += ["", commands] + [f"- {c}" for c in d.commands[:40]]
     turns = []
     answers = iter(d.answers)
     for i, p in enumerate(d.prompts, 1):
