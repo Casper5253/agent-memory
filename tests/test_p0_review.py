@@ -3,6 +3,7 @@ import unittest
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -49,3 +50,27 @@ class PendingReconciliationReviewTests(unittest.TestCase):
         self.assertIn("Keep offline support", pending)
         self.assertIn("CANARY_ROLLOUT_BLOCKER remains unresolved", pending)
         self.assertIn("Parser is faster", notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END))
+
+    def test_grounding_keeps_supported_decisions_whitespace_and_abbreviations(self):
+        digest = "Parser guard added. Use SQLite. Atomic updates. Use SQLite\nfor atomic updates. " \
+                 "Use e.g. SQLite for local mode."
+        data = {
+            "summary": "Parser guard added. Use e.g. SQLite for local mode.",
+            "decisions": [{"decision": "Use SQLite.", "rationale": "Atomic updates."}],
+            "facts": ["Use SQLite for atomic updates."],
+            "citations": [
+                {"section": "summary", "claim": "Parser guard added.", "quote": "Parser guard added."},
+                {"section": "decisions", "claim": "Use SQLite.", "quote": "Use SQLite."},
+                {"section": "decisions", "claim": "Atomic updates.", "quote": "Atomic updates."},
+                {"section": "facts", "claim": "Use SQLite for atomic updates.",
+                 "quote": "Use SQLite for atomic updates."},
+                {"section": "summary", "claim": "Use e.g. SQLite for local mode.",
+                 "quote": "Use e.g. SQLite for local mode."},
+            ],
+        }
+        with patch.object(llm, "_run", return_value=data):
+            result = llm.summarize(digest)
+
+        self.assertEqual(result["decisions"], [{"decision": "Use SQLite.", "rationale": "Atomic updates."}])
+        self.assertEqual(result["facts"], ["Use SQLite for atomic updates."])
+        self.assertIn("Use e.g. SQLite for local mode.", result["summary"])
