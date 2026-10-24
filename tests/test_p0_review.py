@@ -74,3 +74,13 @@ class PendingReconciliationReviewTests(unittest.TestCase):
         self.assertEqual(result["decisions"], [{"decision": "Use SQLite.", "rationale": "Atomic updates."}])
         self.assertEqual(result["facts"], ["Use SQLite for atomic updates."])
         self.assertIn("Use e.g. SQLite for local mode.", result["summary"])
+
+    def test_consolidation_cannot_drop_prior_fact_without_evidence(self):
+        output = state("- none")
+        summary = {"summary": "Parser guard added.", "citations": [
+            {"section": "summary", "claim": "Parser guard added.", "quote": "Parser guard added."},
+        ]}
+        with patch.object(llm, "_run", return_value={"state_markdown": output}):
+            with self.assertRaisesRegex(llm.LLMError, "existing status item omitted"):
+                llm.consolidate(state("- Existing endpoint remains supported."), summary,
+                                "[[0-Sessions/B]]", "2026-10-23")

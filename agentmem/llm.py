@@ -206,6 +206,10 @@ def consolidate(state_md: str, summary: dict, link: str, date: str, model: str =
         if len(md) > 8000:
             raise LLMError("consolidation output too long")
         old_bullets = {line.strip() for line in (state_md or "").splitlines() if line.strip().startswith("-")}
+        output_lines = {line.strip() for line in md.splitlines()}
+        for old_bullet in old_bullets:
+            if old_bullet.lower() not in ("- none", "- none yet") and old_bullet not in output_lines:
+                raise LLMError("existing status item omitted without reconciliation")
         target = link[2:-2] if link.startswith("[[") and link.endswith("]]") else link
         citation_claims = {
             f"[[{target}#{citation.get('evidence_id')}]]": re.sub(r"\s+", " ", citation.get("claim", "")).strip()
