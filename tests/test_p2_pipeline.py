@@ -32,13 +32,13 @@ class PipelineStatusTests(StartupBase):
             self.assertEqual(notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END), state)
             self.assertIn('page not migrated', notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END))
 
-    def test_old_drop_succeeds_and_logs_restoration(self):
+    def test_old_drop_restores_but_no_new_item_stays_pending(self):
         page = status.empty()
         page['purpose'] = [status.Item('i1', 'old exact claim', '[[old#e1]]')]
         self.write_state(status.render(page))
         converter = Mock(return_value=({'sections': status.empty(), 'displaced': []}, 0))
         with patch.object(pipeline, 'log') as log:
-            self.assertEqual(self.update(converter), (0, True))
+            self.assertEqual(self.update(converter), (0.0, False))
         self.assertTrue(any(call.kwargs.get('action') == 'restored' for call in log.call_args_list))
         text = (self.cfg.projects_dir / 'Alpha' / 'Alpha.md').read_text(encoding='utf-8')
         self.assertIn('old exact claim', text)
