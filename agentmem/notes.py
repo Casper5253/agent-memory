@@ -81,6 +81,22 @@ def summary_from_session(text):
                 open_questions=bullets("Open questions and next steps"), next_steps=[])
 
 
+def evidence_end(text):
+    return max((int(value) for value in re.findall(r'(?m)^#{3,4} E([1-9][0-9]*)\s*$', text)), default=0)
+
+
+def _evidence_lines(summary, level, email_allowlist):
+    lines = []
+    for index, citation in enumerate(summary.get('citations', []), 1 + summary.get('_evidence_offset', 0)):
+        if not isinstance(citation, dict):
+            continue
+        claim = redact(str(citation.get('claim') or ''), email_allowlist=email_allowlist)
+        quote = redact(str(citation.get('quote') or ''), email_allowlist=email_allowlist)
+        if claim and quote:
+            lines += [f'{"#" * level} E{index}', '', f'- Claim: {claim}', f'- Digest span: {quote}', '']
+    return lines
+
+
 def render_session(*, agent, session_id, project, part, when, started, ended, source, start, end, summarizer,
                    summary, files, commands, gate_reason, prev_link=None, project_note=None,
                    repo_head=None, attribution=None, source_hash="", email_allowlist=None) -> str:
@@ -126,16 +142,9 @@ def render_session(*, agent, session_id, project, part, when, started, ended, so
     if source_hash:
         body.append(f"- SHA-256: `{source_hash}`")
     body += [f"- Captured by agentmem ({summarizer}); quality gate: {gate_reason}", ""]
-    citations = summary.get("citations", [])
-    if citations:
-        body += ["## Evidence", ""]
-        for index, citation in enumerate(citations, 1):
-            if not isinstance(citation, dict):
-                continue
-            claim = redact(str(citation.get("claim") or ""), email_allowlist=email_allowlist)
-            quote = redact(str(citation.get("quote") or ""), email_allowlist=email_allowlist)
-            if claim and quote:
-                body += [f"### E{index}", "", f"- Claim: {claim}", f"- Digest span: {quote}", ""]
+    evidence = _evidence_lines(summary, 3, email_allowlist)
+    if evidence:
+        body += ["## Evidence", "", *evidence]
     return "\n".join(fm + body)
 
 
@@ -168,6 +177,7 @@ def append_session_continuation(text, *, when, source, start, end, source_hash, 
     add("Open questions and next steps", "\n".join(f"- {redact(v, email_allowlist=email_allowlist)}"
                    for v in summary.get("open_questions", []) + [f"Next: {v}" for v in summary.get("next_steps", [])]
                    if str(v).strip()))
+    add('Evidence', '\n'.join(_evidence_lines(summary, 4, email_allowlist)))
     receipt = (f"- Capture part: {capture_part}\n- Project: {redact(project, email_allowlist=email_allowlist)}\n"
                f"- Transcript range: `{start}–{end}`\n- SHA-256: `{source_hash}`\n- Source: `{source}`\n"
                f"- Captured by agentmem ({summarizer}); quality gate: {gate_reason}")
