@@ -16,6 +16,7 @@ class Config:
     codex_transcripts_root: Path = field(default_factory=lambda: HOME / ".codex" / "sessions")
     summarizer: str = "claude-haiku"      # "claude-haiku" | "none"
     settle_minutes: int = 20               # no new transcript bytes for this long == session over
+    discovery_max_per_drain: int = 5
     min_user_prompts: int = 2
     min_assistant_chars: int = 1500
     digest_char_cap: int = 45_000          # ~12k tokens fed to the summarizer, never the raw transcript
@@ -45,7 +46,8 @@ class Config:
         self.codex_transcripts_root = Path(self.codex_transcripts_root)
         enum(self.knowledge_mode, ("off", "shadow", "active"))
         for name in ("knowledge_input_units", "knowledge_output_tokens", "knowledge_run_captures",
-                     "knowledge_run_calls", "knowledge_run_seconds", "knowledge_qmd_timeout_ms"):
+                     "knowledge_run_calls", "knowledge_run_seconds", "knowledge_qmd_timeout_ms",
+                     "discovery_max_per_drain"):
             integer(getattr(self, name), 1)
         for name in ("knowledge_db", "knowledge_backup_dir"):
             value = getattr(self, name)

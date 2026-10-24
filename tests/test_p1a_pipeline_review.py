@@ -66,8 +66,8 @@ class PipelineReview(unittest.TestCase):
         self.assertIn("Postgres", state)
 
     def test_discovery_reopens_only_when_source_grows_past_cursor(self):
-        sid = "discovered-growth"
-        source = self.tmp / "transcripts" / "claude" / f"{sid}.jsonl"
+        sid = "40000000-0000-4000-8000-000000000001"
+        source = self.tmp / "transcripts" / "claude" / "C--synthetic-project" / f"{sid}.jsonl"
         fx.write_jsonl(source, fx.claude_lines(sid, self.cwd, fx.SUBSTANTIAL))
         self.man.touch("claude", sid, source=str(source), cwd=self.cwd, end=True)
         pipeline.finalize(self.cfg, self.man, self.man.get("claude", sid), fx.fake_summarize, fx.fake_consolidate)
@@ -90,8 +90,8 @@ class PipelineReview(unittest.TestCase):
         self.assertEqual(pipeline._discover_orphan_transcripts(self.cfg, self.man, now=time.time()), 0)
 
     def test_discovery_reopens_skipped_session_after_substantive_growth(self):
-        sid = "skipped-growth"
-        source = self.tmp / "transcripts" / "claude" / f"{sid}.jsonl"
+        sid = "40000000-0000-4000-8000-000000000002"
+        source = self.tmp / "transcripts" / "claude" / "C--synthetic-project" / f"{sid}.jsonl"
         fx.write_jsonl(source, fx.claude_lines(sid, self.cwd, fx.TRIVIAL))
         self.man.touch("claude", sid, source=str(source), cwd=self.cwd, end=True)
         pipeline.finalize(self.cfg, self.man, self.man.get("claude", sid), fx.fake_summarize, fx.fake_consolidate)
