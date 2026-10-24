@@ -237,5 +237,9 @@ def update_project_note(path: Path, project: str, today: str, *, state=None, pen
     if session_line:
         lines = [l for l in get_block(text, SESS_BEGIN, SESS_END).splitlines() if l.strip() and session_link not in l]
         text = set_block(text, SESS_BEGIN, SESS_END, "\n".join(([session_line] + lines)[:15]))
-    text = redact(text, email_allowlist=email_allowlist)
+    # The order token is a microsecond timestamp the card check can mask, which blinds state_order().
+    orders = iter(re.findall(r"(?m)^agentmem_state_order: \d+:\d+$", text))
+    text = redact(re.sub(r"(?m)^agentmem_state_order: \d+:\d+$", "agentmem_state_order: __order__", text),
+                  email_allowlist=email_allowlist)
+    text = re.sub(r"(?m)^agentmem_state_order: __order__$", lambda _: next(orders, "agentmem_state_order: __order__"), text)
     atomic_write(path, touch_updated(text, today))
