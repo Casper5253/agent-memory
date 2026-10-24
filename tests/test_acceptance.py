@@ -271,19 +271,19 @@ class Acceptance(Base):
         self.run_worker()
         state_after_newer = notes.get_block(self.project_note(), notes.STATE_BEGIN, notes.STATE_END)
         self.assertIn("Postgres", state_after_newer)
-        self.assertEqual(self.man.capture("claude", "s-pending-a", 1)["consolidated"], 0,
-                         "a stale pending update must not be retired without reconciliation")
+        self.assertEqual(self.man.capture("claude", "s-pending-a", 1)["consolidated"], 1,
+                         "an older pending update must reconcile against the newer page")
 
         result = pipeline.consolidate_pending(self.cfg, self.man, fx.fake_summarize, fx.fake_consolidate)
         final_note = self.project_note()
         final_state = notes.get_block(final_note, notes.STATE_BEGIN, notes.STATE_END)
         final_pending = notes.get_block(final_note, notes.PENDING_BEGIN, notes.PENDING_END)
         self.assertIn("Postgres", final_state)
-        self.assertIn("Use SQLite for storage", final_pending)
-        self.assertIn("status update pending", final_pending)
-        self.assertEqual(result["still_pending"], 1)
+        self.assertIn("Use SQLite for storage", final_state)
+        self.assertNotIn("status update pending", final_pending)
+        self.assertEqual(result["still_pending"], 0)
         older_link = Path(self.man.capture("claude", "s-pending-a", 1)["note_path"]).with_suffix("").as_posix()
-        self.assertIn(f"[[{older_link}]]", final_pending)
+        self.assertIn(f"[[{older_link}#e", final_state)
 
     def test_11c_displaced_state_items_are_linked_in_project_history(self):
         path = self.cfg.projects_dir / "Demo App" / "Demo App.md"

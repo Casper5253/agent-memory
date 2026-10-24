@@ -49,7 +49,17 @@ Keep an old item unchanged with {"keep": "iN"}. Move it between sections if need
 New items are {"text": "one claim, at most 280 characters, no newlines or HTML markers", "ref": "allowed session ref"}.
 To replace text, add a new cited item and displace the exact original with
 {"id": "iN", "reason": "superseded" or "resolved", "ref": "allowed new-session ref", "claim": "resolving or replacing statement"}.
-When the new session states a next step or open item about the same work as an old item, replace the old one the same way: add the new cited item and displace the old id as "superseded".
+Superseded requires a new cited replacement in a compatible section, using the same ref as the displacement.
+Decisions replace only decisions. Next steps, active work and questions may replace each other.
+When a new next step or open item about the same work replaces an old next step, active item or question,
+add the new cited item and displace the old id as "superseded".
+What works now, latest progress and purpose items are replaced only within their own section.
+A next step about the same work does not supersede the decision behind that work. Keep that decision.
+Resolved removes only questions, next steps or active work, using a new cited result with the same ref.
+Questions may be answered by decisions, latest progress or working_now; tasks by latest progress or working_now.
+Never resolve decisions, purpose, working_now or latest progress.
+In decisions, write the decision text, optionally followed by "; reason". Never write its rationale alone.
+Use the decision citation for a decision item, not a rationale or next-step citation.
 Every new item text and displacement claim must contain the exact claim of the evidence id it cites.
 Keep every old item unless the new evidence resolves or contradicts it. Never silently omit an item.
 If evidence is inconclusive, keep both claims and add a cited open question.

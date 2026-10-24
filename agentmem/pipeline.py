@@ -473,18 +473,6 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         if (session_marker in session_block
                 and pending_ref not in pending):
             return 0.0, True
-        if notes.state_order(text) >= order and notes.state_order(text) != (0, 0):
-            if not pending_order:
-                reason = "newer state exists; reconciliation required"
-                pending_lines = [f"- [ ] {date} [[{link}]] {pending_ref} — status update pending ({reason}; "
-                                 f"base={base_revision}; order={order[0]}:{order[1]})"]
-                pending_lines += [f"{line} {pending_ref}" for line in _pending_lines(summary, link, date)]
-                notes.update_project_note(note_path, project, date, pending_add=pending_lines,
-                                          session_link=link, session_line=session_line,
-                                          email_allowlist=cfg.privacy_email_allowlist, touch=not retry)
-            log(cfg, "pending-order-conflict", project=project, note=link,
-                base_revision=pending_base or base_revision, order=pending_order or order)
-            return 0.0, False
         if (summary_kind != "deterministic" and cfg.summarizer != "none"
                 and ksources._privacy_for(cfg, project) not in ("local_only", "excluded")):
             try:
@@ -493,8 +481,13 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                     raise llm.LLMError('uncited summary, status not updated')
                 result, cost = consolidator(current_state, summary,
                                            f"[[{link}]]", date, timeout=cfg.llm_timeout_s)
-                if not isinstance(result, status.Result):
-                    result = status.reconcile(old, result, status.evidence_support(summary, link))
+                source_orders = notes.evidence_orders(text, old)
+                if isinstance(result, status.Result):
+                    result = status.proposed_update(result, old)
+                result = status.reconcile(old, result, status.evidence_support(summary, link),
+                                          source_orders=source_orders, new_order=order)
+                retained_orders = {item.ref: source_orders.get(item.ref, order)
+                                   for items in result.sections.values() for item in items}
                 if ksources._privacy_for(cfg, project) == "excluded":
                     return cost, False
                 for action, item in result.events:
@@ -502,7 +495,8 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                 notes.update_project_note(note_path, project, date, status_result=result,
                                           update_key=f'{capture_id or link}:{order[0]}:{order[1]}', pending_clear=pending_ref,
                                           session_link=link, session_line=consolidated_session_line,
-                                          state_order_value=order,
+                                          state_order_value=max(notes.state_order(text), order),
+                                          evidence_order_values=retained_orders,
                                           email_allowlist=cfg.privacy_email_allowlist)
                 return cost, True
             except (llm.LLMError, ValueError) as e:
