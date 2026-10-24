@@ -24,8 +24,6 @@ from .logutil import log
 from .manifest import Manifest
 from .redact import redact, redact_session_note
 
-CLAUDE_TRANSCRIPTS_ROOT = Path.home() / ".claude" / "projects"
-CODEX_TRANSCRIPTS_ROOT = Path.home() / ".codex" / "sessions"
 
 
 def _parse_time(value: str) -> datetime:
@@ -344,15 +342,14 @@ def _redact_values(value, email_allowlist=None):
 def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
     """Register aged Claude and Codex JSONL transcripts before the ordinary settle-window drain.
 
-    The next capture drain scans ~/.claude/projects and ~/.codex/sessions. It uses file modification
-    time for the existing settle rule and then lets normal parsing, gating, privacy, and retry handling
-    decide whether to capture. OpenCode exports require a known session id, so they remain hook-bound.
+    It uses the configured roots and file modification time for the existing settle rule, then lets
+    normal parsing, gating, privacy, and retry handling decide whether to capture. OpenCode exports
+    require a known session id, so they remain hook-bound.
     """
     now = now or time.time()
     settle_s = cfg.settle_minutes * 60
     discovered = 0
-    roots = (("claude", Path(os.environ.get("AGENTMEM_CLAUDE_TRANSCRIPTS_ROOT", CLAUDE_TRANSCRIPTS_ROOT))),
-             ("codex", Path(os.environ.get("AGENTMEM_CODEX_TRANSCRIPTS_ROOT", CODEX_TRANSCRIPTS_ROOT))))
+    roots = (("claude", Path(cfg.claude_transcripts_root)), ("codex", Path(cfg.codex_transcripts_root)))
     for agent, root in roots:
         if not root.is_dir():
             continue

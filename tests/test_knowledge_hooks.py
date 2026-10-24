@@ -64,7 +64,13 @@ class KnowledgeHooks(unittest.TestCase):
                 directory.mkdir(parents=True, exist_ok=True)
             (vault / "_meta/projects.json").write_text(json.dumps({"projects": [
                 {"name": "Alpha", "roots": [str(work / "alpha")], "status": "active"}]}))
-            (home / "config.json").write_text(json.dumps({"summarizer": "none", "auto_index": False}))
+            claude_root, codex_root = base / "transcripts" / "claude", base / "transcripts" / "codex"
+            claude_root.mkdir(parents=True)
+            codex_root.mkdir(parents=True)
+            (home / "config.json").write_text(json.dumps({
+                "summarizer": "none", "auto_index": False,
+                "claude_transcripts_root": str(claude_root), "codex_transcripts_root": str(codex_root),
+            }))
             if spec.get("pause"):
                 (vault / "_meta/PAUSE").write_text("paused")
             environment = dict(os.environ, OBSIDIAN_VAULT_PATH=str(vault), AGENTMEM_HOME=str(home),
