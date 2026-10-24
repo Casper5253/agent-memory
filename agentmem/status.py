@@ -72,6 +72,25 @@ def empty():
     return {key: [] for key in SECTIONS}
 
 
+AGENT_PROCESS = tuple(re.compile(pattern, re.I) for pattern in (
+    r'\b(?:stay(?:ing)?|remain(?:ing)?|stand(?:ing)?)\s+(?:idle|by)\b', r'\bidle until\b',
+    r'\b(?:await(?:ing)?|wait(?:ing)?\s+(?:for|on))\b[^.]{0,50}\b(?:review|verdict|reply|brief|response|assignment)s?\b',
+    r'\bget(?:ting)?\s+(?:the\s+|a\s+)?[^.]{0,40}\bverdict\b',
+    r'\breport(?:s|ed|ing)?\s+(?:back\s+)?to\s+(?:dev-|the lead\b|teammate|the team\b)',
+    r'\bdev-(?:claude|codex|opencode|haiku|luna|sol)\b',
+    r'\bassigned\s+(?:a\s+|the\s+)?(?:new\s+)?task\b',
+    r'\bas in progress\b', r'\b(?:run|suite|tests?|job|replay|discovery)\b[^.]{0,40}\bin progress\b',
+    r'\bstarted\s+(?:a|an|the)\s+[^.]{0,40}\brun\b',
+    r'\bran\s+(?:unittest|pytest|python|git|herdr|mem|the\s+(?:full\s+)?(?:test\s+)?suite|tests?|discovery)\b',
+    r'\bobserved\b[^.]{0,60}\bstill\b',
+))
+
+
+def agent_process(text):
+    """Clear agent-process wording (idle, awaiting, routing, runs, commands run). Project facts pass."""
+    return any(pattern.search(text) for pattern in AGENT_PROCESS)
+
+
 def valid_text(text, *, new=False):
     return (isinstance(text, str) and bool(text.strip()) and text == text.strip()
             and not any(c in text for c in ('\n', '\r')) and '<!--' not in text
@@ -228,6 +247,9 @@ def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
             if problem:
                 result.events.append(('dropped', 'invalid new item'))
                 result.events.append(('rejected', f'{section}[{index}]: {problem}'))
+                continue
+            if agent_process(entry['text']):
+                result.events.append(('rejected', f'{section}[{index}]: agent process'))
                 continue
             if section == 'decisions' and any(i.text == entry['text'] and i.ref == entry['ref'] for i in result.sections[section]):
                 continue

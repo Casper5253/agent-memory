@@ -40,6 +40,7 @@ versions). Every statement in summary, what_happened, decisions, facts, open_que
 must have a citation object with the same section and exact claim text, plus an exact quote copied from the digest.
 Do not cite a quote that does not support its claim. Omit any claim without a supporting digest span. Return
 "citations": [{"section": "summary", "claim": "...", "quote": "exact digest text"}, ...].
+The summary states project facts only: what exists and works, decisions and their reasons, real blockers, open questions, and next steps for the project. Never record agent process: being idle or waiting, awaiting a review or reply, reporting to someone, a run in progress, a command that was run or observed, or routing between teammates. Keep "Run the full suite before release" as a next step; drop "Stay idle until dev-claude assigns a new task" and "Ran unittest discovery for test_x.py".
 Never include secrets, tokens or personal data."""
 
 CONSOLIDATE_SYSTEM = """Maintain a project status page from cited session evidence. Return only JSON.
@@ -65,6 +66,7 @@ Keep every old item unless the new evidence resolves or contradicts it. Never si
 If evidence is inconclusive, keep both claims and add a cited open question.
 Do not write current repository observations such as branch, HEAD, working tree, dirty or ahead/behind state.
 Separate durable achievements and decisions from current repository observations. Code reads Git live.
+The page states project facts only: what exists and works, decisions and their reasons, real blockers, open product questions, and next steps for the project. Never record agent process: being idle or waiting, awaiting a review or reply, reporting to someone, a run in progress, a command that was run or observed, or routing between teammates. Keep "Run the full suite before release" as a project next step. Drop "Stay idle until dev-claude assigns a new task", "Ran unittest discovery for test_x.py", "Get the review verdict from Haiku" and "Observed the replay still advancing".
 History, rendering and bounds belong to code. Do not write markdown or history links. No secrets."""
 
 
