@@ -50,6 +50,8 @@ class Manifest:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=30000")
         self.db.executescript(SCHEMA)
+        if "retry_hold" not in {row["name"] for row in self.db.execute("PRAGMA table_info(captures)")}:
+            self.db.execute("ALTER TABLE captures ADD COLUMN retry_hold TEXT")
 
     def close(self):
         self.db.close()
@@ -179,7 +181,9 @@ class Manifest:
                 if tuple(existing[k] for k in evidence) != expected:
                     raise ValueError("capture_identity_conflict: manifest evidence differs")
                 return
-            db.execute("INSERT INTO captures VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            db.execute("INSERT INTO captures(agent, session_id, part, note_path, project, title, date, start_offset,"
+                       " end_offset, summarizer, consolidated, cost_usd, digest_sha, captured_at, summary_json)"
+                       " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (agent, session_id, part, note_path, project, title, date, start, end, summarizer,
                         int(consolidated), cost, sha, now, summary_json))
             db.execute("UPDATE sessions SET status='captured', captured_until=?, parts=?, project=?, attempts=0, skip_reason=NULL,"
@@ -204,6 +208,17 @@ class Manifest:
     def unconsolidated(self):
         return self.db.execute("SELECT * FROM captures WHERE consolidated=0 AND project IS NOT NULL"
                                " AND project != '' ORDER BY captured_at").fetchall()
+
+    def retryable(self):
+        """Unconsolidated captures that automatic retries still attempt; held rows stay in unconsolidated()."""
+        return self.db.execute("SELECT * FROM captures WHERE consolidated=0 AND retry_hold IS NULL"
+                               " AND project IS NOT NULL AND project != '' ORDER BY captured_at").fetchall()
+
+    def hold_retry(self, agent, session_id, part, reason):
+        """Stop automatic retries for a capture that can never reconcile. The row, note and receipt are kept."""
+        with self.tx() as db:
+            db.execute("UPDATE captures SET retry_hold=? WHERE agent=? AND session_id=? AND part=?",
+                       (reason[:200], agent, session_id, part))
 
     def query_captures(self, project=None, agent=None, since=None, until=None, limit=50):
         sql, args = "SELECT * FROM captures WHERE 1=1", []
