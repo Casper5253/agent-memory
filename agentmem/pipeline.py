@@ -26,6 +26,10 @@ from .manifest import Manifest
 from .redact import redact, redact_session_note
 
 
+class NoProgress(llm.LLMError):
+    """The model answered, but nothing new was accepted. Retrying the same input cannot change that."""
+
+
 
 def _parse_time(value: str) -> datetime:
     if value:
@@ -446,7 +450,7 @@ def _capture_identity(agent, sid, part):
 
 def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str, when: datetime,
                              summary_kind: str, consolidator=None, order_override=None, order_part: int = 1,
-                             capture_id=None, retry: bool = False) -> tuple:
+                             capture_id=None, retry: bool = False, held: list = None) -> tuple:
     """Reconcile one session into its project note. Returns (cost, consolidated?)."""
     from . import status
     if consolidator is None:
@@ -508,7 +512,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                 if any(action == 'dropped' for action, _ in result.events) or not accepted:
                     reason = ('new status item rejected by validation' if any(action == 'dropped' for action, _ in result.events)
                               else 'no current item cites accepted new evidence (model omission or retention)')
-                    raise llm.LLMError(f'{reason}; new status items not accepted, reconciliation remains pending')
+                    raise NoProgress(f'{reason}; new status items not accepted, reconciliation remains pending')
                 notes.update_project_note(note_path, project, date, status_result=result,
                                           update_key=f'{capture_id or link}:{order[0]}:{order[1]}', pending_clear=pending_ref,
                                           session_link=link, session_line=consolidated_session_line,
@@ -518,6 +522,8 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                 return cost, True
             except (llm.LLMError, ValueError) as e:
                 log(cfg, "llm-fallback", step="consolidate", project=project, note=link, error=str(e))
+                if isinstance(e, NoProgress) and held is not None:
+                    held.append(str(e))
                 reason = str(e)
         else:
             reason = "summary is deterministic or project consolidation is unavailable"
@@ -613,16 +619,20 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
         session_when = _parse_time(fields.get("started")) if fields.get("started") else _parse_time(row["date"])
         capture_id = (None if row["summarizer"] == "remember" else
                       _capture_identity(row["agent"], row["session_id"], row["part"]))
+        held = []
         cost, ok = consolidate_into_project(cfg, row["project"], summary, link, session_when, kind, consolidator,
                                             order_override=int(session_when.timestamp() * 1_000_000),
-                                            order_part=int(row["part"]), capture_id=capture_id, retry=True)
+                                            order_part=int(row["part"]), capture_id=capture_id, retry=True, held=held)
         if ok:
             man.set_consolidated(row["agent"], row["session_id"], row["part"], 1, cost)
             done += 1
         else:
             failed += 1
+            if held:
+                man.hold_retry(row["agent"], row["session_id"], row["part"], "no new item accepted")
+                log(cfg, "pending-retry-held", session=row["session_id"], part=row["part"], reason="no new item accepted")
             # An uncited summary fails the same way on every retry, so hold it instead of letting it fill the batch.
-            if (kind != "deterministic" and ksources._privacy_for(cfg, row["project"]) != "local_only"
+            elif (kind != "deterministic" and ksources._privacy_for(cfg, row["project"]) != "local_only"
                     and not status.evidence_refs(summary, link)):
                 man.hold_retry(row["agent"], row["session_id"], row["part"], "uncited summary")
                 log(cfg, "pending-retry-held", session=row["session_id"], part=row["part"], reason="uncited summary")
