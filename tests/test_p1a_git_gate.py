@@ -31,7 +31,8 @@ class GitSubstantiveGateTests(unittest.TestCase):
                             "--date", stamp], check=True, env=dict(env, GIT_COMMITTER_DATE=stamp))
             transcript = adapters.Transcript(agent="codex", session_id="p4-shell-only-session", source="synthetic",
                 cwd=str(repo), started=datetime.fromtimestamp(start, timezone.utc).isoformat(),
-                ended=datetime.fromtimestamp(start + 25, timezone.utc).isoformat(), events=[])
+                ended=datetime.fromtimestamp(start + 25, timezone.utc).isoformat(),
+                events=[adapters.Event("assistant", "text", "[main 1234567] P4 shell-only decision")])
             digest = extract.build(transcript, 2, 1500, 45000)
             self.assertTrue(digest.substantial, digest.gate_reason)
             self.assertCountEqual(["decision.txt", "status.txt", "next.txt"], digest.files)

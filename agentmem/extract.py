@@ -113,26 +113,43 @@ def _gate(d: Digest, min_prompts: int, min_chars: int) -> tuple:
     return False, f"trivial ({len(d.prompts)} prompts, {d.tool_calls} tool calls, {len(d.files)} files)"
 
 
+def _git(t: Transcript, *args: str) -> str | None:
+    """Output of a git command run in the session directory, or None when git cannot answer (e.g. no commits yet)."""
+    try:
+        result = subprocess.run(["git", "-C", t.cwd, *args], capture_output=True, text=True, timeout=4)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
 def _git_session_evidence(t: Transcript) -> tuple[list, list]:
-    """Return committed and still-dirty paths proven to have changed during this session window."""
+    """Return commits and still-dirty paths that changed under the session directory during its window.
+
+    Git paths are relative to the repository root, so they are resolved from the toplevel and reported relative to
+    the session directory. Each query is scoped to that directory, so sibling projects contribute nothing. A commit
+    counts only when the transcript shows it, by short hash or exact subject, because another session can commit in
+    the same directory during this window.
+    """
     if not t.cwd or not t.started:
         return [], []
-    try:
-        commits = subprocess.run(["git", "-C", t.cwd, "log", "--since=" + t.started,
-                                  "--until=" + (t.ended or t.started), "--format=@@%H%x09%cI", "--name-only"],
-                                 capture_output=True, text=True, timeout=4, check=True).stdout
-        status = subprocess.run(["git", "-C", t.cwd, "status", "--porcelain", "--untracked-files=all"],
-                                capture_output=True, text=True, timeout=4, check=True).stdout
-    except (OSError, subprocess.SubprocessError):
+    top = _git(t, "rev-parse", "--show-toplevel")
+    if top is None:
         return [], []
+    top = top.strip()
+    commits = _git(t, "log", "--since=" + t.started, "--until=" + (t.ended or t.started),
+                   "--format=@@%H%x09%cI%x09%s", "--name-only", "--", ".") or ""
+    status = _git(t, "status", "--porcelain", "--untracked-files=all", "--", ".") or ""
+    transcript_text = "\n".join(ev.text or "" for ev in t.events)
     commit_ids, committed_paths = [], []
-    current_commit = False
+    attributed = False
     for line in commits.splitlines():
         if line.startswith("@@"):
-            commit_ids.append(line[2:].split("\t", 1)[0])
-            current_commit = True
-        elif line.strip() and current_commit:
-            committed_paths.append(line.strip().replace("\\", "/"))
+            commit_id, _, subject = line[2:].split("\t", 2)
+            attributed = commit_id[:7] in transcript_text or (bool(subject) and subject in transcript_text)
+            if attributed:
+                commit_ids.append(commit_id)
+        elif line.strip() and attributed:
+            committed_paths.append(_norm_path(os.path.join(top, line.strip()), t.cwd))
     window_start = _timestamp(t.started)
     window_end = _timestamp(t.ended) if t.ended else None
     dirty_paths = []
@@ -140,13 +157,13 @@ def _git_session_evidence(t: Transcript) -> tuple[list, list]:
         if len(line) < 4:
             continue
         path = line[3:].split(" -> ")[-1].strip().strip('"')
-        candidate = os.path.join(t.cwd, path)
+        candidate = os.path.join(top, path)
         try:
             modified = os.path.getmtime(candidate)
         except OSError:
             continue
         if modified >= window_start and (window_end is None or modified <= window_end):
-            dirty_paths.append(path.replace("\\", "/"))
+            dirty_paths.append(_norm_path(candidate, t.cwd))
     files = list(dict.fromkeys(committed_paths + dirty_paths))
     return commit_ids, files
 
