@@ -211,7 +211,7 @@ def consolidate(state_md: str, summary: dict, link: str, date: str, model: str =
     except ValueError as error:
         raise LLMError("page not migrated") from error
     payload = copy.deepcopy({k: v for k, v in summary.items() if not k.startswith("_")})
-    for index, citation in enumerate(payload.get("citations", []), 1):
+    for index, citation in enumerate(payload.get("citations", []), 1 + summary.get('_evidence_offset', 0)):
         if isinstance(citation, dict):
             citation["evidence_id"] = f"e{index}"
     allowed = status.evidence_support(summary, link)

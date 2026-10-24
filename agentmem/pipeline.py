@@ -246,6 +246,14 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
             previous_text = previous_path.read_text(encoding="utf-8") if previous_path and previous_path.exists() else ""
             previous_fields = notes.session_metadata(previous_text) if previous_text else {}
             is_continuation = previous_fields.get("logical_session") == "true"
+            if is_continuation:
+                # Reserve even legacy continuation ids whose evidence headings were never rendered.
+                prior_summaries = [json.loads(row['summary_json'] or '{}') for row in man.db.execute(
+                    'SELECT summary_json FROM captures WHERE agent=? AND session_id=? AND note_path=?',
+                    (agent, sid, previous['note_path']))]
+                summary['_evidence_offset'] = max(notes.evidence_end(previous_text),
+                    max((item.get('_evidence_offset', 0) + len(item.get('citations', []))
+                         for item in prior_summaries), default=0))
             note_part = int(previous_fields.get("part", "1")) if is_continuation else part
             path = previous_path if is_continuation else notes.session_note_path(
                 cfg.sessions_dir, when, agent, summary.get("title") or t.title or "session", sid, part)
@@ -310,7 +318,8 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
     if project != projects.UNSORTED:
         capture_id = _capture_identity(agent, sid, part)
         extra_cost, consolidated = consolidate_into_project(cfg, project, summary, link, when, kind, consolidator,
-                                                            order_part=part, capture_id=capture_id)
+            order_part=part, capture_id=capture_id,
+            evidence_available=receipt.get('note_part', part) == part or '_evidence_offset' in summary)
         cost += extra_cost
     for related in receipt["related_projects"]:
         note_path = projects.note_path(cfg.vault, related)
@@ -450,7 +459,7 @@ def _capture_identity(agent, sid, part):
 
 def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str, when: datetime,
                              summary_kind: str, consolidator=None, order_override=None, order_part: int = 1,
-                             capture_id=None, retry: bool = False, held: list = None) -> tuple:
+                             capture_id=None, retry: bool = False, held: list = None, evidence_available=True) -> tuple:
     """Reconcile one session into its project note. Returns (cost, consolidated?)."""
     from . import status
     if consolidator is None:
@@ -480,13 +489,15 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         pending_base, pending_order = _pending_marker(pending, link, capture_id)
         session_block = notes.get_block(text, notes.SESS_BEGIN, notes.SESS_END)
         session_marker = capture_marker if capture_id else f"[[{link}|"
-        if (session_marker in session_block and accepted_marker in session_block
+        if (evidence_available and session_marker in session_block and accepted_marker in session_block
                 and pending_ref not in pending):
             return 0.0, True
         if (summary_kind != "deterministic" and cfg.summarizer != "none"
                 and ksources._privacy_for(cfg, project) not in ("local_only", "excluded")):
             try:
                 old = status.live_page(current_state)
+                if not evidence_available:
+                    raise NoProgress('legacy continuation lacks distinct evidence anchors; manual evidence repair required')
                 if not status.evidence_refs(summary, link):
                     raise llm.LLMError('uncited summary, status not updated')
                 result, cost = consolidator(current_state, summary,
@@ -622,7 +633,9 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
         held = []
         cost, ok = consolidate_into_project(cfg, row["project"], summary, link, session_when, kind, consolidator,
                                             order_override=int(session_when.timestamp() * 1_000_000),
-                                            order_part=int(row["part"]), capture_id=capture_id, retry=True, held=held)
+                                            order_part=int(row["part"]), capture_id=capture_id, retry=True, held=held,
+                                            evidence_available=int(fields.get('part', row['part'])) == row['part']
+                                            or '_evidence_offset' in summary)
         if ok:
             man.set_consolidated(row["agent"], row["session_id"], row["part"], 1, cost)
             done += 1

@@ -124,13 +124,19 @@ def model_items(sections):
 
 def evidence_refs(summary, link):
     target = link[2:-2] if link.startswith('[[') and link.endswith(']]') else link
-    return {f'[[{target}#e{n}]]': citation['claim'] for n, citation in enumerate(summary.get('citations', []), 1)
+    offset = summary.get('_evidence_offset', 0)
+    if type(offset) is not int or offset < 0:
+        raise ValueError('invalid evidence offset')
+    return {f'[[{target}#e{n}]]': citation['claim'] for n, citation in enumerate(summary.get('citations', []), offset + 1)
             if isinstance(citation, dict) and isinstance(citation.get('claim'), str) and citation['claim'].strip()}
 
 
 def evidence_support(summary, link):
     target = link[2:-2] if link.startswith('[[') and link.endswith(']]') else link
-    citations = [(f'[[{target}#e{n}]]', citation) for n, citation in enumerate(summary.get('citations', []), 1)
+    offset = summary.get('_evidence_offset', 0)
+    if type(offset) is not int or offset < 0:
+        raise ValueError('invalid evidence offset')
+    citations = [(f'[[{target}#e{n}]]', citation) for n, citation in enumerate(summary.get('citations', []), offset + 1)
                  if isinstance(citation, dict) and isinstance(citation.get('claim'), str) and citation['claim'].strip()]
     decisions, reasons = {}, {}
     for decision in summary.get('decisions') or []:
