@@ -204,6 +204,44 @@ class LifecycleHarness(unittest.TestCase):
         score = e2e.evaluate_step(dict(kind="kill"), sandbox.truth, obs, snap, snap)
         self.assertFalse(score["killed_before_first_stop"])
 
+    def test_taskkill_race_requires_verified_process_exit(self):
+        for taskkill_code, exited in ((128, True), (0, True), (128, False), (0, False)):
+            with self.subTest(taskkill_code=taskkill_code, exited=exited):
+                case = self.path / f"kill-{taskkill_code}-{exited}"
+                case.mkdir()
+                sandbox = FakeSandbox(case, self.scenario)
+                sandbox.environment = lambda *args: {}
+                for name in ("interrupted-status.txt", "interrupted-decision.txt", "interrupted-next.txt"):
+                    (sandbox.project / name).write_text("interrupted test-plan work remains unfinished")
+                directory = case / "session"
+                event = dict(event="SessionStart", status="forwarded", payload=dict(session_id="synthetic"))
+                process = mock.Mock(pid=12345)
+                process.poll.side_effect = [None, -9 if exited else None]
+                process.wait.side_effect = None if exited else subprocess.TimeoutExpired("synthetic", 15)
+                process.wait.return_value = -9
+
+                def start(*args, **kwargs):
+                    e2e.write_json(directory / "hooks/start.json", event)
+                    return process
+
+                def taskkill(command, **kwargs):
+                    result = subprocess.CompletedProcess(command, taskkill_code, b"", b"")
+                    if kwargs.get("check"):
+                        result.check_returncode()
+                    return result
+
+                with mock.patch.object(e2e.os, "name", "nt"), mock.patch.object(e2e.subprocess, "Popen", side_effect=start), mock.patch.object(e2e.subprocess, "run", side_effect=taskkill):
+                    backend = e2e.NativeAgent(codex="fake")
+                    if exited:
+                        observation = backend.run(sandbox, self.scenario["steps"][6], "codex", directory)
+                        self.assertTrue(observation.killed)
+                        self.assertEqual(observation.returncode, -9)
+                    else:
+                        failure = subprocess.CalledProcessError if taskkill_code else subprocess.TimeoutExpired
+                        with self.assertRaises(failure):
+                            backend.run(sandbox, self.scenario["steps"][6], "codex", directory)
+                process.wait.assert_called_with(timeout=15)
+
     def test_live_guard_reads_only_synthetic_fixture_and_finds_contamination(self):
         vault = self.path / "live"
         (vault / "_meta").mkdir(parents=True)
