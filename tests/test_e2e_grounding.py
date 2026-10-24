@@ -13,7 +13,7 @@ DIGEST = "Added a parser guard. The parser.py change passed the failing case."
 class GroundingRuleTests(unittest.TestCase):
     def grounded(self, claim, quote, digest=DIGEST):
         data = {"citations": [{"section": "summary", "claim": claim, "quote": quote}]}
-        _, citations = llm._grounded_statements(data, digest)
+        citations = llm._grounded_statements(data, digest)
         return bool(citations)
 
     def test_paraphrased_claim_with_matching_quote_is_accepted(self):
@@ -60,6 +60,36 @@ class GroundingRuleTests(unittest.TestCase):
             result, _ = llm.consolidate(notes.EMPTY_STATE, summary, "[[s]]", "2026-10-24")
         self.assertEqual([item.text for item in result.sections["latest"]],
                          ["Session cache now runs on Redis after the outage."])
+
+
+class SentenceSupportTests(unittest.TestCase):
+    DIGEST = "Set up SQLite storage for the demo app. Created db.py and wired migrations."
+
+    def summarize(self, summary, citations, what_happened=()):
+        output = {"title": "Demo storage", "summary": summary, "what_happened": list(what_happened),
+                  "decisions": [], "facts": [], "open_questions": [], "next_steps": [], "citations": citations}
+        with patch.object(llm, "_run", return_value=output):
+            return llm.summarize(self.DIGEST)
+
+    def test_one_claim_covering_the_whole_two_sentence_summary_is_kept(self):
+        summary = "Set up SQLite storage for the demo app. Created db.py and wired migrations."
+        result = self.summarize(summary, [{"section": "summary", "claim": summary, "quote": self.DIGEST}])
+        self.assertEqual(result["summary"], summary)
+
+    def test_claim_without_final_period_supports_sentence(self):
+        result = self.summarize("Set up SQLite storage for the demo app.",
+                                [{"section": "summary", "claim": "Set up SQLite storage for the demo app",
+                                  "quote": self.DIGEST}])
+        self.assertEqual(result["summary"], "Set up SQLite storage for the demo app.")
+
+    def test_list_item_matches_claim_ignoring_case_and_trailing_punctuation(self):
+        result = self.summarize("Set up SQLite storage for the demo app.",
+                                [{"section": "summary", "claim": "Set up SQLite storage for the demo app.",
+                                  "quote": self.DIGEST},
+                                 {"section": "what_happened", "claim": "SET UP SQLITE STORAGE FOR THE DEMO APP!",
+                                  "quote": self.DIGEST}],
+                                what_happened=["Set up SQLite storage for the demo app"])
+        self.assertEqual(result["what_happened"], ["Set up SQLite storage for the demo app"])
 
 
 if __name__ == "__main__":
