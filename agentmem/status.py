@@ -15,6 +15,10 @@ SECTIONS = {
     'next': ('Next steps', 5),
 }
 STARTUP_ORDER = ('purpose', 'active', 'next', 'working_now', 'decisions', 'questions', 'latest')
+SUPERSEDE_SECTIONS = {
+    key: frozenset(('next', 'active', 'questions')) if key in ('next', 'active', 'questions') else frozenset((key,))
+    for key in SECTIONS
+}
 FORMAT = '<!-- agentmem:status:v2 -->'
 REF = re.compile(r'(?:\[\[[^\[\]\n#|]+#e[1-9][0-9]*\]\]|migration:\d{4}-\d{2}-\d{2})')
 GIT_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
@@ -31,6 +35,14 @@ class Item:
     id: str
     text: str
     ref: str
+
+
+@dataclass(frozen=True)
+class Evidence:
+    text: str
+    section: str
+    decision: str = ''
+    decision_ref: str = ''
 
 
 @dataclass(frozen=True)
@@ -111,13 +123,60 @@ def evidence_refs(summary, link):
 
 def evidence_support(summary, link):
     target = link[2:-2] if link.startswith('[[') and link.endswith(']]') else link
-    return {f'[[{target}#e{n}]]': f"{citation['claim']} {citation.get('quote') if isinstance(citation.get('quote'), str) else ''}".strip()
-            for n, citation in enumerate(summary.get('citations', []), 1)
-            if isinstance(citation, dict) and isinstance(citation.get('claim'), str) and citation['claim'].strip()}
+    citations = [(f'[[{target}#e{n}]]', citation) for n, citation in enumerate(summary.get('citations', []), 1)
+                 if isinstance(citation, dict) and isinstance(citation.get('claim'), str) and citation['claim'].strip()]
+    decisions, reasons = {}, {}
+    for decision in summary.get('decisions') or []:
+        if not isinstance(decision, dict) or not isinstance(decision.get('decision'), str):
+            continue
+        text = decision['decision'].strip()
+        ref = next((ref for ref, citation in citations if citation.get('section') in ('decision', 'decisions')
+                    and _claim_key(citation['claim']) == _claim_key(text)), '')
+        if not text or not ref:
+            continue
+        decisions[_claim_key(text)] = (text, ref)
+        reason = decision.get('rationale')
+        if isinstance(reason, str) and reason.strip():
+            reasons.setdefault(_claim_key(reason), set()).add((text, ref))
+    result = {}
+    for ref, citation in citations:
+        section = citation.get('section', '')
+        key = _claim_key(citation['claim'])
+        pair = decisions.get(key, ('', '')) if section in ('decision', 'decisions') else ('', '')
+        if not pair[0] and section in ('decision', 'decisions', 'rationale') and key in reasons:
+            section = 'rationale'
+            matches = reasons[key]
+            pair = next(iter(matches)) if len(matches) == 1 else ('', '')
+        quote = citation.get('quote')
+        text = f"{citation['claim']} {quote if isinstance(quote, str) else ''}".strip()
+        result[ref] = Evidence(text, section, *pair)
+    return result
+
+
+def _claim_key(text):
+    return re.sub(r'\s+', ' ', text).strip().casefold().rstrip('.!?')
+
+
+def _decision_entry(entry, allowed):
+    if not isinstance(entry, dict) or set(entry) != {'text', 'ref'}:
+        return entry
+    if not valid_text(entry['text'], new=True):
+        return entry
+    evidence = allowed.get(entry['ref']) if isinstance(allowed, dict) and isinstance(entry['ref'], str) else None
+    if not isinstance(evidence, Evidence):
+        return entry
+    if evidence.section and evidence.section not in ('decision', 'decisions', 'rationale'):
+        return None
+    if evidence.decision and (evidence.section == 'rationale'
+                              or _claim_key(evidence.decision) not in _claim_key(entry['text'])):
+        return dict(text=evidence.decision, ref=evidence.decision_ref)
+    return None if evidence.section == 'rationale' else entry
 
 
 def _matches_claim(text, ref, allowed):
     evidence = allowed.get(ref) if isinstance(allowed, dict) else None
+    if isinstance(evidence, Evidence):
+        evidence = evidence.text
     return isinstance(evidence, str) and bool(evidence.strip()) and grounded(text, evidence, evidence)
 
 
@@ -138,10 +197,14 @@ def reconcile(old, update, allowed):
                     result.sections[section].append(originals[identity][1])
                     handled.add(identity)
                 continue
+            if section == 'decisions':
+                entry = _decision_entry(entry, allowed)
             if (not isinstance(entry, dict) or set(entry) != {'text', 'ref'}
                     or not valid_text(entry.get('text'), new=True) or not isinstance(entry.get('ref'), str)
                     or not REF.fullmatch(entry['ref']) or not _matches_claim(entry['text'], entry['ref'], allowed)):
                 result.events.append(('dropped', 'invalid new item'))
+                continue
+            if section == 'decisions' and any(i.text == entry['text'] and i.ref == entry['ref'] for i in result.sections[section]):
                 continue
             counter += 1
             result.sections[section].append(Item(f'i{counter}', entry['text'], entry['ref']))
@@ -154,6 +217,12 @@ def reconcile(old, update, allowed):
                 and reason in ('superseded', 'resolved') and isinstance(ref, str)
                 and valid_text(claim, new=True) and _matches_claim(claim, ref, allowed)):
             section, item = originals[identity]
+            if reason == 'superseded' and not any(
+                    replacement.ref == ref and replacement.id not in originals
+                    and not any(pattern.search(replacement.text) for pattern in GIT_PATTERNS)
+                    for compatible in SUPERSEDE_SECTIONS[section] for replacement in result.sections[compatible]):
+                result.events.append(('refused', f'incompatible supersession: {identity}'))
+                continue
             result.displaced.append(Displaced(item, section, reason, ref, claim))
             handled.add(identity)
     for identity, (section, item) in originals.items():
