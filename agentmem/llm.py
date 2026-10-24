@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 
 from .config import CAPTURE_ENV
+from .grounding import grounded
 from .redact import redact
 
 
@@ -96,7 +97,7 @@ def _strings(v, limit, email_allowlist=None):
     return [redact(str(x), email_allowlist=email_allowlist).strip() for x in (v or []) if str(x).strip()][:limit] if isinstance(v, list) else []
 
 
-def _grounded_statements(data: dict, digest_text: str) -> tuple:
+def _grounded_statements(data: dict, digest_text: str) -> list:
     normalize = lambda value: re.sub(r"\s+", " ", value).strip()
     digest = normalize(digest_text)
     citations = []
@@ -107,10 +108,10 @@ def _grounded_statements(data: dict, digest_text: str) -> tuple:
         if not all(isinstance(value, str) and value.strip() for value in (section, claim, quote)):
             continue
         claim_text, quote_text = normalize(claim), normalize(quote)
-        if quote_text in digest and claim_text in quote_text:
+        if quote_text in digest and grounded(claim_text, quote_text, digest):
             canonical = {"decisions": "decision"}.get(section.strip(), section.strip())
             citations.append({"section": canonical, "claim": claim_text, "quote": quote_text})
-    return {(c["section"], c["claim"]): c for c in citations}, citations
+    return citations
 
 
 def _sentences(value):
@@ -120,19 +121,37 @@ def _sentences(value):
             for part in re.split(r"(?<=[.!?])\s+", value) if part.strip()]
 
 
-def _claim_key(section, claim):
-    section = {"decisions": "decision"}.get(section, section)
-    return section, re.sub(r"\s+", " ", claim).strip()
+def _text_key(value):
+    return re.sub(r"\s+", " ", value).strip().lower().rstrip(" .!?;:,")
+
+
+def _cover(section, text, citations, digest_text):
+    """The grounded citation of this section that supports text, or None.
+
+    A claim may cover several sentences, so either text contains the claim or the claim contains text."""
+    key = _text_key(text)
+    if not key:
+        return None
+    for citation in citations:
+        claim = _text_key(citation["claim"])
+        if citation["section"] == section and (key == claim or key in claim or claim in key) \
+                and grounded(text, citation["quote"], digest_text):
+            return citation
+    return None
 
 
 def summarize(digest_text: str, model: str = "haiku", timeout: int = 180, email_allowlist=None) -> dict:
     data = _run(SUMMARY_SYSTEM, "SESSION DIGEST:\n\n" + digest_text, model, timeout)
-    grounded, citations = _grounded_statements(data, digest_text)
+    citations = _grounded_statements(data, digest_text)
+    used = []
 
-    def keep(section, value):
-        return [part for part in _sentences(value) if _claim_key(section, part) in grounded]
+    def supported(section, text):
+        citation = _cover(section, text, citations, digest_text)
+        if citation is not None and citation not in used:
+            used.append(citation)
+        return citation is not None
 
-    summary = " ".join(keep("summary", str(data.get("summary") or "")))
+    summary = " ".join(part for part in _sentences(str(data.get("summary") or "")) if supported("summary", part))
     if not summary:
         raise LLMError("summary missing digest-cited statements")
     decisions = []
@@ -141,35 +160,23 @@ def summarize(digest_text: str, model: str = "haiku", timeout: int = 180, email_
             continue
         decision = str(d.get("decision", "")).strip()
         rationale = str(d.get("rationale", "")).strip()
-        if decision and _claim_key("decision", decision) in grounded:
+        if decision and supported("decision", decision):
             decisions.append({"decision": redact(decision, email_allowlist=email_allowlist),
                               "rationale": redact(rationale, email_allowlist=email_allowlist)
-                              if rationale and (_claim_key("rationale", rationale) in grounded
-                                                or _claim_key("decision", rationale) in grounded) else ""})
+                              if rationale and (supported("rationale", rationale) or supported("decision", rationale))
+                              else ""})
     grounded_lists = {
-        "what_happened": [claim for claim in _strings(data.get("what_happened"), 10) if _claim_key("what_happened", claim) in grounded],
-        "facts": [claim for claim in _strings(data.get("facts"), 12) if _claim_key("facts", claim) in grounded],
-        "open_questions": [claim for claim in _strings(data.get("open_questions"), 8) if _claim_key("open_questions", claim) in grounded],
-        "next_steps": [claim for claim in _strings(data.get("next_steps"), 8) if _claim_key("next_steps", claim) in grounded],
+        key: [claim for claim in _strings(data.get(key), limit) if supported(key, claim)]
+        for key, limit in (("what_happened", 10), ("facts", 12), ("open_questions", 8), ("next_steps", 8))
     }
     title = str(data.get("title") or "").strip()
-    title = title if _claim_key("title", title) in grounded else ""
-    used = {(section, claim) for section, claim in grounded if section == "summary" and claim in summary}
-    used.update(("title", title) for _ in [0] if title)
-    for key, values in grounded_lists.items():
-        used.update((key, value) for value in values)
-    for decision in decisions:
-        used.add(("decision", decision["decision"]))
-        if decision["rationale"]:
-            used.add(("rationale", decision["rationale"]))
-            used.add(("decision", decision["rationale"]))
-    used_claims = {claim for _, claim in used}
+    title = title if supported("title", title) else ""
     return {
         "title": redact(title, email_allowlist=email_allowlist)[:80],
         "summary": redact(summary, email_allowlist=email_allowlist),
         **{key: _strings(values, len(values), email_allowlist) for key, values in grounded_lists.items()},
         "decisions": decisions[:12],
-        "citations": [c for c in citations if (c["section"], c["claim"]) in used or c["claim"] in used_claims],
+        "citations": [citation for citation in citations if citation in used],
         "_cost_usd": data.get("_cost_usd", 0.0),
     }
 
@@ -185,7 +192,7 @@ def consolidate(state_md: str, summary: dict, link: str, date: str, model: str =
     for index, citation in enumerate(payload.get("citations", []), 1):
         if isinstance(citation, dict):
             citation["evidence_id"] = f"e{index}"
-    allowed = status.evidence_refs(summary, link)
+    allowed = status.evidence_support(summary, link)
     prompt = json.dumps(dict(sections=status.model_items(old), summary=payload,
                              allowed_refs=sorted(allowed), date=date), ensure_ascii=False)
     data = _run(CONSOLIDATE_SYSTEM, redact(prompt, email_allowlist=email_allowlist), model, timeout)
