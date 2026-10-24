@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agentmem import llm, notes, status
+from agentmem import grounding, llm, notes, status
 
 
 DIGEST = "Added a parser guard. The parser.py change passed the failing case."
@@ -60,6 +60,19 @@ class GroundingRuleTests(unittest.TestCase):
             result, _ = llm.consolidate(notes.EMPTY_STATE, summary, "[[s]]", "2026-10-24")
         self.assertEqual([item.text for item in result.sections["latest"]],
                          ["Session cache now runs on Redis after the outage."])
+
+
+class SpecificsAndStemTests(unittest.TestCase):
+    def test_ss_words_stem_consistently_so_passing_matches_pass(self):
+        self.assertTrue(grounding.grounded("12 passing tests", "all 12 tests pass", "all 12 tests pass"))
+
+    def test_path_at_sentence_end_matches_digest_without_the_period(self):
+        digest = r"Runs in C:\Users\caspe\demo-app now."
+        self.assertTrue(grounding.grounded(r"Runs in C:\Users\caspe\demo-app.", r"Runs in C:\Users\caspe\demo-app", digest))
+
+    def test_absent_path_at_sentence_end_is_still_rejected(self):
+        digest = r"Runs in C:\Users\caspe\demo-app now."
+        self.assertFalse(grounding.grounded(r"Runs in C:\Users\caspe\other-app.", r"Runs in C:\Users\caspe\demo-app", digest))
 
 
 class SentenceSupportTests(unittest.TestCase):

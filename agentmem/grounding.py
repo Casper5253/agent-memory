@@ -15,6 +15,7 @@ VERSION = re.compile(r"\bv?\d+(?:\.\d+)+\b|\bv\d+\b")
 HEX = re.compile(r"\b[0-9a-fA-F]{7,}\b")
 NUMBER = re.compile(r"\b\d{2,}\b")
 SPAN = re.compile(r"`([^`]+)`")
+TRAILING = ".,;:)!"
 
 
 def _normal(value):
@@ -22,9 +23,9 @@ def _normal(value):
 
 
 def _specifics(statement):
-    found = {_normal(span) for span in SPAN.findall(statement)}
-    found |= {_normal(path) for path in PATH.findall(statement)}
-    found |= {_normal(name) for name in FILE.findall(statement)}
+    found = {_normal(span).rstrip(TRAILING) for span in SPAN.findall(statement)}
+    found |= {_normal(path).rstrip(TRAILING) for path in PATH.findall(statement)}
+    found |= {_normal(name).rstrip(TRAILING) for name in FILE.findall(statement)}
     found |= {_normal(token) for token in IDENTIFIER.findall(statement)
               if "_" in token or "." in token or "::" in token}
     found |= {_normal(version) for version in VERSION.findall(statement)}
@@ -40,6 +41,8 @@ def _present(specific, evidence):
 def _stem(word):
     for suffix in ("ing", "ed", "es", "s"):
         if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            if suffix == "s" and word.endswith("ss"):
+                return word
             return word[:-len(suffix)]
     return word
 
