@@ -412,7 +412,12 @@ class NativeAgent:
                 kill_ready = all((sandbox.project / n).exists() for n in ("interrupted-status.txt", "interrupted-decision.txt", "interrupted-next.txt"))
                 if step["kind"] == "kill" and kill_ready and any(e["event"] == "SessionStart" and e.get("status") == "forwarded" for e in events):
                     if os.name == "nt":
-                        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=True)
+                        stopped = subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)
+                        try:
+                            process.wait(timeout=15)
+                        except subprocess.TimeoutExpired:
+                            stopped.check_returncode()
+                            raise
                     else:
                         process.kill()
                     killed = True
