@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 
 from .config import CAPTURE_ENV
+from .grounding import grounded
 from .redact import redact
 
 
@@ -107,7 +108,7 @@ def _grounded_statements(data: dict, digest_text: str) -> tuple:
         if not all(isinstance(value, str) and value.strip() for value in (section, claim, quote)):
             continue
         claim_text, quote_text = normalize(claim), normalize(quote)
-        if quote_text in digest and claim_text in quote_text:
+        if quote_text in digest and grounded(claim_text, quote_text, digest):
             canonical = {"decisions": "decision"}.get(section.strip(), section.strip())
             citations.append({"section": canonical, "claim": claim_text, "quote": quote_text})
     return {(c["section"], c["claim"]): c for c in citations}, citations
@@ -185,7 +186,7 @@ def consolidate(state_md: str, summary: dict, link: str, date: str, model: str =
     for index, citation in enumerate(payload.get("citations", []), 1):
         if isinstance(citation, dict):
             citation["evidence_id"] = f"e{index}"
-    allowed = status.evidence_refs(summary, link)
+    allowed = status.evidence_support(summary, link)
     prompt = json.dumps(dict(sections=status.model_items(old), summary=payload,
                              allowed_refs=sorted(allowed), date=date), ensure_ascii=False)
     data = _run(CONSOLIDATE_SYSTEM, redact(prompt, email_allowlist=email_allowlist), model, timeout)

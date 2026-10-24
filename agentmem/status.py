@@ -2,6 +2,8 @@
 from dataclasses import dataclass, field
 import re
 
+from .grounding import grounded
+
 
 SECTIONS = {
     'purpose': ('Purpose and direction', 3),
@@ -107,10 +109,16 @@ def evidence_refs(summary, link):
             if isinstance(citation, dict) and isinstance(citation.get('claim'), str) and citation['claim'].strip()}
 
 
+def evidence_support(summary, link):
+    target = link[2:-2] if link.startswith('[[') and link.endswith(']]') else link
+    return {f'[[{target}#e{n}]]': f"{citation['claim']} {citation.get('quote') if isinstance(citation.get('quote'), str) else ''}".strip()
+            for n, citation in enumerate(summary.get('citations', []), 1)
+            if isinstance(citation, dict) and isinstance(citation.get('claim'), str) and citation['claim'].strip()}
+
+
 def _matches_claim(text, ref, allowed):
-    claim = allowed.get(ref) if isinstance(allowed, dict) else None
-    return (isinstance(claim, str) and bool(claim.strip())
-            and re.sub(r'\s+', ' ', claim).strip() in re.sub(r'\s+', ' ', text).strip())
+    evidence = allowed.get(ref) if isinstance(allowed, dict) else None
+    return isinstance(evidence, str) and bool(evidence.strip()) and grounded(text, evidence, evidence)
 
 
 def reconcile(old, update, allowed):

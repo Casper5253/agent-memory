@@ -494,7 +494,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                 result, cost = consolidator(current_state, summary,
                                            f"[[{link}]]", date, timeout=cfg.llm_timeout_s)
                 if not isinstance(result, status.Result):
-                    result = status.reconcile(old, result, status.evidence_refs(summary, link))
+                    result = status.reconcile(old, result, status.evidence_support(summary, link))
                 if ksources._privacy_for(cfg, project) == "excluded":
                     return cost, False
                 for action, item in result.events:
