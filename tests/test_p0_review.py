@@ -84,3 +84,11 @@ class PendingReconciliationReviewTests(unittest.TestCase):
             with self.assertRaisesRegex(llm.LLMError, "existing status item omitted"):
                 llm.consolidate(state("- Existing endpoint remains supported."), summary,
                                 "[[0-Sessions/B]]", "2026-10-23")
+
+    def test_displaced_bullet_history_keeps_indented_continuation(self):
+        old_state = state("- Keep local mode.", "  CANARY_CRITICAL_RATIONALE: works while offline.")
+        notes.update_project_note(self.note, "Synthetic", "2026-10-23", state=old_state)
+        notes.update_project_note(self.note, "Synthetic", "2026-10-24", state=state("- Remote mode."),
+                                  session_link="0-Sessions/B")
+        history = notes.project_history_path(self.note).read_text(encoding="utf-8")
+        self.assertIn("CANARY_CRITICAL_RATIONALE: works while offline.", history)

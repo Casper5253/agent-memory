@@ -261,8 +261,15 @@ def append_project_history(path: Path, project: str, date: str, session_link: st
     path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text(encoding="utf-8") if path.exists() else f"# {project} history\n"
     suffix = f"[[{session_link}]]" if session_link else "session evidence unavailable"
-    entries = [f"- {date} {reason}: {redact(item.strip(), email_allowlist=email_allowlist)} ({suffix})" for item in items
-               if item and item.strip() and item.strip().lower() not in ("- none", "- none yet")]
+    entries = []
+    for item in items:
+        if not item or not item.strip() or item.strip().lower() in ("- none", "- none yet"):
+            continue
+        lines = redact(item.strip(), email_allowlist=email_allowlist).splitlines()
+        entry = f"- {date} {reason}: {lines[0]} ({suffix})"
+        if len(lines) > 1:
+            entry += "\n" + "\n".join(f"  {line}" for line in lines[1:])
+        entries.append(entry)
     additions = [entry for entry in entries if entry not in text]
     if additions:
         atomic_write(path, text.rstrip("\n") + "\n\n" + "\n".join(additions) + "\n")
@@ -275,8 +282,22 @@ def update_project_note(path: Path, project: str, today: str, *, state=None, pen
     text = ensure_blocks(text)
     if state is not None:
         old_state = get_block(text, STATE_BEGIN, STATE_END)
-        old_bullets = [line.strip()[2:] for line in old_state.splitlines()
-                       if line.strip().startswith("- ") and line.strip().lower() not in ("- none", "- none yet")]
+        old_bullets = []
+        item_lines = []
+        for line in old_state.splitlines():
+            if line.startswith("- "):
+                if item_lines:
+                    old_bullets.append("\n".join(item_lines))
+                item_lines = [line[2:]]
+            elif item_lines and (line.startswith((" ", "\t")) or not line.strip()):
+                if line.strip():
+                    item_lines.append(line.strip())
+            elif item_lines:
+                old_bullets.append("\n".join(item_lines))
+                item_lines = []
+        if item_lines:
+            old_bullets.append("\n".join(item_lines))
+        old_bullets = [item for item in old_bullets if item.strip().lower() not in ("none", "none yet")]
         new_bullets = {line.strip()[2:] for line in state.splitlines()
                        if line.strip().startswith("- ") and line.strip().lower() not in ("- none", "- none yet")}
         displaced = [item for item in old_bullets if item not in new_bullets]
