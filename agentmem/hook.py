@@ -43,7 +43,7 @@ def _git_line(cwd: str) -> str:
     return line
 
 
-def _health_line(man, max_attempts: int) -> str:
+def _health_line(man, max_attempts: int, note=None, pending='') -> str:
     health = man.health(max_attempts)
     parts = []
     if health["pending"]:
@@ -51,42 +51,66 @@ def _health_line(man, max_attempts: int) -> str:
     if health["failed"]:
         reason = man.failed(max_attempts)[0]["last_error"] or "unknown error"
         parts.append(f"{health['failed']} failed: {reason[:160]}")
+    backlog = len(man.unconsolidated())
+    if backlog:
+        import re
+        reason = re.search(r'status update pending \(([^;\n)]+)', pending)
+        why = reason[1][:100] if reason else 'reconciliation pending'
+        parts.append(f"{_plural(backlog, 'captured session')} awaiting consolidation ({why}); see {note or 'project notes'}")
+    elif 'status update pending' in pending:
+        parts.append(f"status update pending; see {note}")
     return f"Capture health: {', '.join(parts)}" if parts else ""
 
 
 def startup_package(cfg, cwd: str) -> str:
-    """Bounded startup context: header, project, live Git, capture health, current state, recent sessions."""
-    from . import notes, projects
+    """Reserve health and omission pointer first, then admit complete status items in priority order."""
+    from . import notes, projects, status
     from .manifest import Manifest
     project = projects.resolve_session(cwd, cfg.projects_map, create=False)
     head = [f"Agent memory: Obsidian vault at {cfg.vault}. Session notes (0-Sessions) are HISTORICAL; project notes (1-Projects) are CURRENT state.",
-            "When asked what was previously decided, implemented or configured, search the vault first: "
+            'When asked what was previously decided, implemented or configured, search the vault first: '
             '`mem search "<terms>"` (memory skill), never guess.']
-    state_text, tail = "", []
+    page, pending, note = status.empty(), '', None
     man = Manifest(cfg.manifest_path)
     try:
         if project != projects.UNSORTED:
             note = projects.note_path(cfg.vault, project)
-            head.append(f"Project: {project} — {note}")
+            head.append(f"Project: {project} - {note}")
             if note.exists():
                 try:
-                    state = notes.get_block(note.read_text(encoding="utf-8"), notes.STATE_BEGIN, notes.STATE_END)
-                    cur = state.split("### Active decisions")[0].replace("### Current state", "").strip()
-                    if cur and cur != "- none yet":
-                        state_text = "Current state:\n" + cur[:STATE_CAP]
+                    text = note.read_text(encoding='utf-8')
+                    pending = notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)
+                    page = status.live_page(notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END))
                 except (ValueError, OSError):
-                    pass
-            recent = man.query_captures(project=project, limit=3)
-            if recent:
-                tail.append("Recent sessions: " + "; ".join(f"{r['date']} {r['title']}" for r in recent))
-        head += [line for line in (_git_line(cwd), _health_line(man, cfg.max_attempts)) if line]
+                    pending += ' status update pending (page not migrated)'
+        head += [line for line in (_git_line(cwd), _health_line(man, cfg.max_attempts, note, pending)) if line]
     finally:
         man.close()
-    fixed = "\n".join([*head, *tail])
-    room = CONTEXT_CAP - len(fixed) - 1
-    if state_text and room > len("Current state:\n"):
-        return "\n".join([*head, state_text[:room], *tail])[:CONTEXT_CAP]
-    return fixed[:CONTEXT_CAP]
+    count = sum(len(items) for items in page.values())
+    pointer = f"{count} more items in {note}" if count else ''
+    fixed = '\n'.join(head)
+    # Abnormally long configured paths must not consume the health line or omission pointer.
+    if len(fixed) + len(pointer) + 1 > CONTEXT_CAP:
+        health = next((line for line in head if line.startswith('Capture health:')), '')
+        priority = '\n'.join(line for line in (health, pointer) if line)
+        room = max(0, CONTEXT_CAP - len(priority) - 1)
+        return ('\n'.join(head[:3])[:room] + '\n' + priority)[-CONTEXT_CAP:]
+    lines, selected = list(head), 0
+    for key in status.STARTUP_ORDER:
+        heading = f"### {status.SECTIONS[key][0]}"
+        emitted_heading = False
+        for item in page[key]:
+            if len(item.text) > 280:
+                continue
+            addition = ([heading] if not emitted_heading else []) + [f"- {item.text} {item.ref}"]
+            candidate = '\n'.join(lines + addition)
+            if len(candidate) + len(pointer) + 1 <= CONTEXT_CAP:
+                lines += addition
+                selected += 1
+                emitted_heading = True
+    if selected < count:
+        lines.append(f"{count - selected} more items in {note}")
+    return '\n'.join(lines)
 
 
 def session_start(cfg, agent: str, sid: str, cwd: str) -> dict:
