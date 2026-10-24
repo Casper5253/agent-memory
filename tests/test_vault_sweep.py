@@ -1187,10 +1187,21 @@ class SweepApplyCorrectionTests(unittest.TestCase):
             before = note.read_bytes().replace(b"\n", b"\r\n")
             note.write_bytes(before)
             stage = subprocess.run(
-                ["git", "add", "--", "1-Projects/parent/parent.md"], cwd=vault,
+                ["git", "-c", "core.autocrlf=true", "add", "--", "1-Projects/parent/parent.md"], cwd=vault,
                 env=env, capture_output=True, timeout=10,
             )
             self.assertEqual(stage.returncode, 0, msg=stage.stderr)
+            committed_blob = subprocess.run(
+                ["git", "rev-parse", "HEAD:1-Projects/parent/parent.md"], cwd=vault,
+                env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(committed_blob.returncode, 0, msg=committed_blob.stderr)
+            indexed_blob = subprocess.run(
+                ["git", "rev-parse", ":1-Projects/parent/parent.md"], cwd=vault,
+                env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(indexed_blob.returncode, 0, msg=indexed_blob.stderr)
+            self.assertEqual(committed_blob.stdout.strip(), indexed_blob.stdout.strip())
             clean = subprocess.run(
                 ["git", "diff-files", "--quiet", "--", "1-Projects/parent/parent.md"],
                 cwd=vault, env=env, capture_output=True, timeout=10,
@@ -1207,6 +1218,32 @@ class SweepApplyCorrectionTests(unittest.TestCase):
             )
             self.assertEqual(reset.returncode, 0, msg=reset.stderr)
             self.assertEqual(note.read_bytes(), before, "reset to snapshot must restore exact CRLF bytes")
+        finally:
+            tmp.cleanup()
+
+    def test_snapshot_initializes_fresh_vault_repo_without_head(self):
+        tmp = _Tmp(ROOT / ".audit" / "tmp")
+        try:
+            vault = tmp.path / "fresh-vault"
+            (vault / "1-Projects" / "new-project").mkdir(parents=True)
+            note = vault / "1-Projects" / "new-project" / "new-project.md"
+            note.write_bytes(b"# Fresh vault\r\n")
+            env = dict(os.environ)
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            init = subprocess.run(
+                ["git", "init", "-q", "-b", "main"], cwd=vault, env=env,
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(init.returncode, 0, msg=init.stderr)
+
+            sha = _load_sweep()._snapshot(vault, "fresh-vault")
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=vault, env=env,
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(head.returncode, 0, msg=head.stderr)
+            self.assertEqual(head.stdout.strip(), sha)
+            self.assertEqual(note.read_bytes(), b"# Fresh vault\r\n")
         finally:
             tmp.cleanup()
 
