@@ -226,7 +226,13 @@ def set_block(text: str, begin: str, end: str, content: str) -> str:
 
 
 def touch_updated(text: str, today: str) -> str:
-    return re.sub(r"(?m)^updated: .*$", f"updated: {today}", text, count=1) if text.startswith("---") else text
+    """Stamp `updated` with today, but never move an existing ISO date backwards."""
+    if not text.startswith("---"):
+        return text
+    current = re.search(r"(?m)^updated: (\d{4}-\d{2}-\d{2})\s*$", text)
+    if current and current[1] > today:
+        return text
+    return re.sub(r"(?m)^updated: .*$", f"updated: {today}", text, count=1)
 
 
 def project_history_path(path: Path) -> Path:
@@ -312,8 +318,10 @@ def recover_status_update(path):
 
 def update_project_note(path: Path, project: str, today: str, *, state=None, pending_add=None, pending_clear=None,
                         session_link=None, session_line=None, state_order_value=None, email_allowlist=None,
-                        status_result=None, update_key=None) -> None:
-    """Caller holds the project lock. Re-reads the note, edits only managed blocks, writes atomically."""
+                        status_result=None, update_key=None, touch=True) -> None:
+    """Caller holds the project lock. Re-reads the note, edits only managed blocks, writes atomically.
+
+    touch=False leaves the `updated` stamp alone, for writes that did not change the note's content."""
     from . import status
     recover_status_update(path)
     before = path.read_text(encoding='utf-8') if path.exists() else ''
@@ -366,7 +374,7 @@ def update_project_note(path: Path, project: str, today: str, *, state=None, pen
         lines = [l for l in get_block(text, SESS_BEGIN, SESS_END).splitlines() if l.strip() and session_link not in l]
         text = set_block(text, SESS_BEGIN, SESS_END, "\n".join(([session_line] + lines)[:15]))
     text = redact(text, email_allowlist=email_allowlist)
-    after = touch_updated(text, today)
+    after = touch_updated(text, today) if touch else text
     if status_result is not None:
         plan = dict(before=before, after=after, records=records, project=project, date=today)
         atomic_write(_status_journal(path), json.dumps(plan, ensure_ascii=False))

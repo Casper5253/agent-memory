@@ -441,7 +441,7 @@ def _capture_identity(agent, sid, part):
 
 def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str, when: datetime,
                              summary_kind: str, consolidator=None, order_override=None, order_part: int = 1,
-                             capture_id=None) -> tuple:
+                             capture_id=None, retry: bool = False) -> tuple:
     """Reconcile one session into its project note. Returns (cost, consolidated?)."""
     from . import status
     if consolidator is None:
@@ -481,7 +481,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                 pending_lines += [f"{line} {pending_ref}" for line in _pending_lines(summary, link, date)]
                 notes.update_project_note(note_path, project, date, pending_add=pending_lines,
                                           session_link=link, session_line=session_line,
-                                          email_allowlist=cfg.privacy_email_allowlist)
+                                          email_allowlist=cfg.privacy_email_allowlist, touch=not retry)
             log(cfg, "pending-order-conflict", project=project, note=link,
                 base_revision=pending_base or base_revision, order=pending_order or order)
             return 0.0, False
@@ -519,7 +519,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
         notes.update_project_note(note_path, project, date, pending_clear=pending_ref,
                                   pending_add=pending_lines,
                                   session_link=link, session_line=session_line,
-                                  email_allowlist=cfg.privacy_email_allowlist)
+                                  email_allowlist=cfg.privacy_email_allowlist, touch=not retry)
         return 0.0, False
 
 
@@ -567,9 +567,10 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
     if summarizer is None:
         summarizer = lambda digest, timeout: llm.summarize(
             digest, timeout=timeout, email_allowlist=cfg.privacy_email_allowlist)
+    from . import status
     done = failed = 0
     excluded = exclude or set()
-    rows = [row for row in man.unconsolidated() if (row["agent"], row["session_id"], row["part"]) not in excluded]
+    rows = [row for row in man.retryable() if (row["agent"], row["session_id"], row["part"]) not in excluded]
     for row in rows[:limit]:
         if ksources._privacy_for(cfg, row["project"]) == "excluded":
             failed += 1
@@ -603,12 +604,17 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
                       _capture_identity(row["agent"], row["session_id"], row["part"]))
         cost, ok = consolidate_into_project(cfg, row["project"], summary, link, session_when, kind, consolidator,
                                             order_override=int(session_when.timestamp() * 1_000_000),
-                                            order_part=int(row["part"]), capture_id=capture_id)
+                                            order_part=int(row["part"]), capture_id=capture_id, retry=True)
         if ok:
             man.set_consolidated(row["agent"], row["session_id"], row["part"], 1, cost)
             done += 1
         else:
             failed += 1
+            # An uncited summary fails the same way on every retry, so hold it instead of letting it fill the batch.
+            if (kind != "deterministic" and ksources._privacy_for(cfg, row["project"]) != "local_only"
+                    and not status.evidence_refs(summary, link)):
+                man.hold_retry(row["agent"], row["session_id"], row["part"], "uncited summary")
+                log(cfg, "pending-retry-held", session=row["session_id"], part=row["part"], reason="uncited summary")
     return {"consolidated": done, "still_pending": failed}
 
 
