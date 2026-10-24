@@ -473,7 +473,7 @@ class DirectionATests(CaptureBase):
         import subprocess
         with patch.object(search, '_qmd', return_value=subprocess.CompletedProcess([], 0, json.dumps(hits).encode(), b'')):
             got = search.search(self.cfg, 'marker')
-        self.assertEqual(['CURRENT', 'PENDING', 'RECENT_SESSION', 'CURRENT'], [h['label'] for h in got])
+        self.assertEqual(['CURRENT', 'PENDING', 'RECENT_SESSION', 'UNVERIFIED'], [h['label'] for h in got])
         self.assertEqual({'label', 'path', 'title', 'score', 'line', 'docid', 'snippet'}, set(got[0]))
         fallback = search.fallback_search(self.cfg, 'unreconciledneedle', 8)
         self.assertEqual('PENDING', fallback[0]['label'])

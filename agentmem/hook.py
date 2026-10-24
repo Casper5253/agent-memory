@@ -131,15 +131,17 @@ def startup_package(cfg, cwd: str) -> str:
         room = max(0, CONTEXT_CAP - len(priority) - 1)
         return ('\n'.join(head[:3])[:room] + '\n' + priority)[-CONTEXT_CAP:]
     if len('\n'.join(fitted_lines(selection))) > CONTEXT_CAP:
-        health = next((line for line in head if line.startswith('Capture health:')), '')
-        priority = '\n'.join(line for line in (health, pointer) if line)
-        room = max(0, CONTEXT_CAP - len(priority) - 1)
-        return ('\n'.join(head[:3])[:room] + '\n' + priority)[-CONTEXT_CAP:]
+        # Not every section's first item fits: admit first items in startup order while they fit.
+        selection = {key: [] for key in eligible}
+        for key in status.STARTUP_ORDER:
+            trial = {**selection, key: eligible[key][:1]}
+            if eligible[key] and len('\n'.join(fitted_lines(trial))) <= CONTEXT_CAP:
+                selection = trial
 
     max_items = max((len(items) for items in eligible.values()), default=0)
     for rank in range(1, max_items):
         for key in status.STARTUP_ORDER:
-            if rank < len(eligible[key]):
+            if rank < len(eligible[key]) and len(selection[key]) == rank:
                 trial = {**selection, key: selection[key] + [eligible[key][rank]]}
                 if len('\n'.join(fitted_lines(trial))) <= CONTEXT_CAP:
                     selection = trial
