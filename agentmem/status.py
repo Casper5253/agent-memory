@@ -77,7 +77,6 @@ AGENT_PROCESS = tuple(re.compile(pattern, re.I) for pattern in (
     r'\b(?:await(?:ing)?|wait(?:ing)?\s+(?:for|on))\b[^.]{0,50}\b(?:review|verdict|reply|brief|response|assignment)s?\b',
     r'\bget(?:ting)?\s+(?:the\s+|a\s+)?[^.]{0,40}\bverdict\b',
     r'\breport(?:s|ed|ing)?\s+(?:back\s+)?to\s+(?:dev-|the lead\b|teammate|the team\b)',
-    r'\bdev-(?:claude|codex|opencode|haiku|luna|sol)\b',
     r'\bassigned\s+(?:a\s+|the\s+)?(?:new\s+)?task\b',
     r'\bas in progress\b', r'\b(?:run|suite|tests?|job|replay|discovery)\b[^.]{0,40}\bin progress\b',
     r'\bstarted\s+(?:a|an|the)\s+[^.]{0,40}\brun\b',
@@ -221,6 +220,16 @@ def _entry_problem(entry, allowed):
     return ''
 
 
+MOVABLE_SECTIONS = frozenset(('next', 'active', 'questions'))
+
+
+def _keep_destination(original, requested, *, newer):
+    """Where a kept item lands. Only next, active and questions may move, and only among themselves."""
+    if not newer and original in MOVABLE_SECTIONS and requested in MOVABLE_SECTIONS:
+        return requested
+    return original
+
+
 def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
     if (not isinstance(update, dict) or not isinstance(update.get('sections'), dict)
             or set(update['sections']) != set(SECTIONS)
@@ -237,7 +246,9 @@ def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
                 identity = entry['keep']
                 if identity in originals and identity not in handled:
                     original_section, item = originals[identity]
-                    destination = original_section if source_orders.get(item.ref, (0, 0)) > new_order else section
+                    destination = _keep_destination(original_section, section, newer=source_orders.get(item.ref, (0, 0)) > new_order)
+                    if destination != section:
+                        result.events.append(('refused', f'move {identity} to {section}; stays in {destination}'))
                     result.sections[destination].append(item)
                     handled.add(identity)
                 continue

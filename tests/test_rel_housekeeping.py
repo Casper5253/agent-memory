@@ -55,6 +55,50 @@ class AgentProcessFilterTests(unittest.TestCase):
         self.assertEqual(result.events, [])
 
 
+class TeamRoleFactTests(unittest.TestCase):
+    def test_team_role_name_is_a_kept_project_fact(self):
+        update = dict(sections={**status.empty(), 'purpose': [dict(text='dev-claude is the default lead', ref='[[s#e1]]')]},
+                      displaced=[])
+        result = status.reconcile(status.empty(), update, {'[[s#e1]]': 'dev-claude is the default lead'})
+        self.assertEqual([i.text for i in result.sections['purpose']], ['dev-claude is the default lead'])
+        self.assertEqual(result.events, [])
+
+
+class KeepDestinationTests(unittest.TestCase):
+    def test_decision_moved_to_next_then_superseded_by_next_stays_a_decision(self):
+        old = status.empty()
+        old['decisions'] = [status.Item('i1', 'Use SQLite for storage', '[[old#e1]]')]
+        first = status.reconcile(old, dict(sections={**status.empty(), 'next': [dict(keep='i1')]}, displaced=[]), {})
+        self.assertEqual([i.text for i in first.sections['decisions']], ['Use SQLite for storage'])
+        self.assertEqual(first.sections['next'], [])
+        self.assertEqual(first.events, [('refused', 'move i1 to next; stays in decisions')])
+
+        claim = 'P7 design first: define how storage fits together.'
+        second = status.reconcile(first.sections, dict(
+            sections={**status.empty(), 'next': [dict(text=claim, ref='[[next#e1]]')]},
+            displaced=[dict(id='i1', reason='superseded', ref='[[next#e1]]', claim=claim)]), {'[[next#e1]]': claim})
+        self.assertEqual(second.sections['decisions'], [status.Item('i1', 'Use SQLite for storage', '[[old#e1]]')])
+        self.assertEqual(second.displaced, [])
+        self.assertEqual([i.text for i in second.sections['next']], [claim])
+        self.assertIn(('refused', 'incompatible superseded: i1'), second.events)
+
+    def test_questions_move_among_next_active_and_questions(self):
+        old = status.empty()
+        old['questions'] = [status.Item('i1', 'Which backend should the status page use?', '[[old#e1]]')]
+        result = status.reconcile(old, dict(sections={**status.empty(), 'next': [dict(keep='i1')]}, displaced=[]), {})
+        self.assertEqual([i.text for i in result.sections['next']], ['Which backend should the status page use?'])
+        self.assertEqual(result.sections['questions'], [])
+        self.assertEqual(result.events, [])
+
+    def test_working_now_and_latest_stay_in_place(self):
+        old = status.empty()
+        old['working_now'] = [status.Item('i1', 'Startup context fits every section', '[[old#e1]]')]
+        result = status.reconcile(old, dict(sections={**status.empty(), 'latest': [dict(keep='i1')]}, displaced=[]), {})
+        self.assertEqual([i.text for i in result.sections['working_now']], ['Startup context fits every section'])
+        self.assertEqual(result.sections['latest'], [])
+        self.assertEqual(result.events, [('refused', 'move i1 to latest; stays in working_now')])
+
+
 class AgentProcessPromptTests(unittest.TestCase):
     def test_consolidation_and_summary_prompts_state_the_rule(self):
         for prompt in (llm.CONSOLIDATE_SYSTEM, llm.SUMMARY_SYSTEM):
