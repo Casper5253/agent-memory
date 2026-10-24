@@ -52,6 +52,9 @@ class Manifest:
         self.db.executescript(SCHEMA)
         if "retry_hold" not in {row["name"] for row in self.db.execute("PRAGMA table_info(captures)")}:
             self.db.execute("ALTER TABLE captures ADD COLUMN retry_hold TEXT")
+        # captured_until is the scan watermark; deferred_start keeps the start of scanned but uncaptured content.
+        if "deferred_start" not in {row["name"] for row in self.db.execute("PRAGMA table_info(sessions)")}:
+            self.db.execute("ALTER TABLE sessions ADD COLUMN deferred_start INTEGER")
 
     def close(self):
         self.db.close()
@@ -187,6 +190,7 @@ class Manifest:
                        (agent, session_id, part, note_path, project, title, date, start, end, summarizer,
                         int(consolidated), cost, sha, now, summary_json))
             db.execute("UPDATE sessions SET status='captured', captured_until=?, parts=?, project=?, attempts=0, skip_reason=NULL,"
+                       " deferred_start=NULL,"
                        " next_try=0, last_error=?, end_seen=0, updated=? WHERE agent=? AND session_id=?",
                        (end, part, project, error, now, agent, session_id))
 

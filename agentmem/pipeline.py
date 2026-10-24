@@ -165,14 +165,16 @@ def finalize(cfg: Config, man: Manifest, row, summarizer=None, consolidator=None
 
 def _finalize_locked(cfg, man, row, summarizer, consolidator):
     agent, sid, part = row["agent"], row["session_id"], row["parts"] + 1
-    receipt = _load_receipt(cfg, agent, sid, part, row["captured_until"])
+    # Content judged trivial earlier is re-judged together with what followed it.
+    range_start = row["deferred_start"] if row["deferred_start"] is not None else row["captured_until"]
+    receipt = _load_receipt(cfg, agent, sid, part, range_start)
     if receipt is None:
         legacy = _legacy_evidence(cfg, agent, sid, part)
         if legacy:
             path, text, fields = legacy
             summary = notes.summary_from_session(text)
             start, end = notes.source_range(text)
-            if start != row["captured_until"]:
+            if start != range_start:
                 raise ValueError("capture_identity_conflict: legacy range mismatch")
             receipt = dict(version=1, agent=agent, session_id=sid, part=part, start=start, end=end,
                            project=fields["project"], summary=summary, digest_sha=_hash(text),
@@ -186,16 +188,16 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
             if row["parts"] and agent == "opencode":
                 previous = _load_receipt(cfg, agent, sid, part - 1, man.capture(agent, sid, part - 1)["start_offset"])
                 if previous and previous.get("prefix_sha"):
-                    prefix = adapters.read(agent, sid, source, end=row["captured_until"])
+                    prefix = adapters.read(agent, sid, source, end=previous.get("end", range_start))
                     if prefix.prefix_sha != previous["prefix_sha"]:
                         raise ValueError("source_change: earlier OpenCode messages mutated")
             original_messages = None
             if agent == "opencode" and cfg.knowledge_mode != "off":
                 exported = adapters.export_opencode(sid)
-                t = adapters.read_opencode(sid, start=row["captured_until"], data=exported)
+                t = adapters.read_opencode(sid, start=range_start, data=exported)
                 original_messages = exported.get("messages") or []
             else:
-                t = adapters.read(agent, sid, source, start=row["captured_until"])
+                t = adapters.read(agent, sid, source, start=range_start)
             source_error = _source_error(t.warnings)
             for warning in t.warnings:
                 log(cfg, "capture-source-warning", agent=agent, session=sid, **warning)
@@ -209,21 +211,28 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                          last_error=source_error)
                 return "no-new-content"
             if _excluded(cfg, cwd):
-                man.mark(agent, sid, status="skipped", captured_until=t.end, end_seen=0, skip_reason="excluded directory")
+                man.mark(agent, sid, status="skipped", captured_until=t.end, end_seen=0, skip_reason="excluded directory",
+                         deferred_start=None)
+                log(cfg, "capture-skipped", agent=agent, session=sid, reason="excluded directory",
+                    start=range_start, end=t.end)
                 return "excluded"
             d = extract.build(t, cfg.min_user_prompts, cfg.min_assistant_chars, cfg.digest_char_cap,
                               email_allowlist=cfg.privacy_email_allowlist)
             if not d.substantial:
                 man.mark(agent, sid, status=done_status, captured_until=t.end, end_seen=0,
                          skip_reason=d.gate_reason, cwd=cwd,
-                         last_error=source_error)
+                         last_error=source_error, deferred_start=range_start)
+                log(cfg, "capture-deferred", agent=agent, session=sid, reason=d.gate_reason,
+                    start=range_start, end=t.end, parts=row["parts"])
                 return "trivial"
             edited = [p for ev in t.events if ev.kind == "edit" for p in ev.paths]
             attribution = projects.attribute(cwd, cfg.projects_map, files=edited, text="\n".join(d.prompts))
             project = attribution.project
             if ksources._privacy_for(cfg, project) == "excluded":
                 man.mark(agent, sid, status="skipped", captured_until=t.end, end_seen=0,
-                         project=project, skip_reason="project excluded")
+                         project=project, skip_reason="project excluded", deferred_start=None)
+                log(cfg, "capture-skipped", agent=agent, session=sid, reason="project excluded",
+                    start=range_start, end=t.end)
                 return "excluded"
             repo_head = projects.repo_head(cwd)
             when = _parse_time(t.started)
@@ -286,13 +295,15 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                 except Exception:
                     log(cfg, "knowledge-packet-error", agent=agent, session=sid, part=part)
         if ksources._privacy_for(cfg, receipt["project"]) == "excluded":
-            man.mark(agent, sid, status="skipped", end_seen=0, project=receipt["project"], skip_reason="project excluded")
+            man.mark(agent, sid, status="skipped", end_seen=0, project=receipt["project"], skip_reason="project excluded",
+                     deferred_start=None)
             return "excluded"
         receipt["receipt_sha"] = _receipt_hash(receipt)
         create_once(_receipt_path(cfg, agent, sid, part), json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
-        receipt = _load_receipt(cfg, agent, sid, part, row["captured_until"])
+        receipt = _load_receipt(cfg, agent, sid, part, range_start)
     if ksources._privacy_for(cfg, receipt["project"]) == "excluded":
-        man.mark(agent, sid, status="skipped", end_seen=0, project=receipt["project"], skip_reason="project excluded")
+        man.mark(agent, sid, status="skipped", end_seen=0, project=receipt["project"], skip_reason="project excluded",
+                     deferred_start=None)
         return "excluded"
     path = _validated_path(cfg, receipt["note_path"])
     base_sha = receipt.get("base_content_sha")
