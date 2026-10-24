@@ -101,3 +101,16 @@ class MigrationTests(unittest.TestCase):
         entries = migrate_status.inventory(raw)
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0].raw, raw)
+
+    def test_default_conversion_keeps_sections_and_archives_superseded(self):
+        source = ('### Current state\n- builds green\n\n### Active decisions\n- 2026-10-17 — use SQLite\n\n'
+                  '### Superseded decisions\n- 2026-10-01 — use JSON files\n\n### Open questions and next steps\n- add FTS?')
+        notes.update_project_note(self.path, 'Demo App', '2026-10-24', state=source)
+        report = migrate_status.plan_vault(self.cfg.vault, self.root / 'out', date='2026-10-24')
+        plan = json.loads((self.root / 'out' / report[0]['plan']).read_text(encoding='utf-8'))
+        page = status.parse(notes.get_block(plan['after'], notes.STATE_BEGIN, notes.STATE_END))
+        self.assertEqual([i.text for i in page['working_now']], ['builds green'])
+        self.assertEqual([i.text for i in page['decisions']], ['2026-10-17 — use SQLite'])
+        self.assertEqual([i.text for i in page['questions']], ['add FTS?'])
+        self.assertEqual(plan['records'], [{'key': f"migration:{plan['source_hash']}:i3",
+                                            'text': '- 2026-10-24 [superseded; migration; migration:2026-10-24]\n- 2026-10-01 — use JSON files'}])

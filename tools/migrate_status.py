@@ -10,7 +10,7 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agentmem import llm, notes, status
+from agentmem import notes, status
 from agentmem.fsutil import atomic_write, file_lock
 
 
@@ -33,8 +33,9 @@ def inventory(source):
         if re.match(r'^#{1,6} ', line):
             flush()
             heading = line.lstrip('# ').lower()
-            section = next((key for key, (name, _) in status.SECTIONS.items() if name.lower() == heading),
-                           'decisions' if 'decision' in heading else 'questions' if 'question' in heading else 'working_now')
+            section = ('superseded' if 'superseded' in heading else
+                       next((key for key, (name, _) in status.SECTIONS.items() if name.lower() == heading),
+                            'decisions' if 'decision' in heading else 'questions' if 'question' in heading else 'working_now'))
         elif re.match(r'^[-*+] ', line) or re.match(r'^\d+[.)] ', line):
             flush()
             current.append(line)
@@ -51,14 +52,13 @@ def inventory(source):
 
 
 def _convert(entries, date):
-    prompt = json.dumps(dict(entries=[dict(id=e.id, raw=e.raw, section=e.section) for e in entries], date=date,
-                             sections=list(status.SECTIONS)), ensure_ascii=False)
-    return llm._run(
-        'Classify every source occurrence into status sections. Return JSON with sections mapping every supplied '
-        'section key to a list of {"keep":"iN"}, and displaced as an empty list. Keep an occurrence only if '
-        'its exact original is a single clear status claim. Do not rewrite any text or invent evidence. '
-        'Omit uncertain, multiline or historical occurrences; code archives exact originals with migration provenance.',
-        prompt, 'haiku', 180)
+    """Keep each occurrence in its own section; code applies the caps, git-live and text checks.
+    Superseded occurrences are never placed, so they reach history only."""
+    sections = status.empty()
+    for entry in entries:
+        if entry.section in sections:
+            sections[entry.section].append({'keep': entry.id})
+    return dict(sections=sections, displaced=[])
 
 
 def _hash(path):
@@ -158,7 +158,7 @@ def plan_vault(vault, out, *, converter=None, date=None):
                     atomic_write(out / (name + '.history.md'), '\n\n'.join(r['text'] for r in plan['records']) + '\n')
                     row.update({key: plan[key] for key in ('old_entries', 'placed', 'unaccounted', 'displaced', 'restored')})
                     row['plan'] = name
-            except (ValueError, llm.LLMError) as error:
+            except ValueError as error:
                 row['skipped'] = str(error)
         report.append(row)
     atomic_write(out / 'report.json', json.dumps(report, ensure_ascii=False, indent=2) + '\n')
