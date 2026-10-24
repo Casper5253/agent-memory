@@ -70,7 +70,7 @@ Each issue was cheap to fix once known, and each one cost at least one relaunch 
 
 ### Specifications had gaps that only implementation exposed
 
-The data contract left the proposal payload, restore semantics, import identity and import scope undefined. The implementer correctly stopped instead of inventing them. Settling them in a short addendum (`docs/llmwiki-blueprint/04a-WP02-CONTRACT-ADDENDUM.md`) worked. Each stop still cost a relaunch until the brief allowed the worker to decide minor gaps and list them as assumptions.
+The data contract left the proposal payload, restore semantics, import identity and import scope undefined. The implementer correctly stopped instead of inventing them. Settling them in a short addendum (`docs/archive/llmwiki-blueprint/04a-WP02-CONTRACT-ADDENDUM.md`) worked. Each stop still cost a relaunch until the brief allowed the worker to decide minor gaps and list them as assumptions.
 
 ### The evaluation tested the wrong question
 

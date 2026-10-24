@@ -10,14 +10,15 @@ Sessions are evidence. Project notes are current knowledge. Search is the bridge
 
 | Layer | Folder | Use it for |
 |---|---|---|
-| CURRENT | `1-Projects/<P>/<P>.md` (state block) | what is true now |
-| HISTORICAL | `0-Sessions/YYYY/MM/` | what a past session did or decided (may be superseded) |
+| CURRENT | `1-Projects/<P>/<P>.md` (status page in the state block) | what is true now; every item cites its session evidence |
+| HISTORICAL | `0-Sessions/YYYY/MM/`, `1-Projects/<P>/History.md` | what a past session did or decided, and items retired from the status page with their reason |
+| PENDING / UNVERIFIED | status page pending block / stale index excerpt | awaiting reconciliation / run `mem index` and search again |
 | REFERENCE / ARCHIVED | `2-Areas`, `3-Resources` / `4-Archive` | reusable knowledge / retired projects |
 
 ## Retrieve (do this before answering any "what did we decide / how did we set up / why" question)
 
 1. `mem search "<specific terms>"`. Use names, file names, tools and error strings. Add `--layer current` or `--layer history` to narrow, `--semantic` for paraphrased recall.
-2. Read the source: `mem note "<path or name>" --section "Active decisions"` (or the whole note). Snippets are leads, not evidence.
+2. Read the source: `mem note "<path or name>" --section "Key decisions (decision, reason)"` (or the whole note). Snippets are leads, not evidence.
 3. If a HISTORICAL hit conflicts with the CURRENT project state, the project state wins. Say that the older decision was superseded, and when.
 4. Answer with the source path(s). If nothing is found, say so; never invent prior decisions.
 
@@ -29,7 +30,7 @@ QMD can be used directly too (see the `qmd` skill): collections `vault-projects`
 Slash commands: `/remember` saves one item now (`mem remember "…" --kind …`); `/obsidian` syncs the running session now (`mem capture --current`). Both route to the right project automatically: the working folder first, then edited files and the first prompt's paths or project names when the folder is generic.
 
 Capture is automatic. Claude Code and Codex hooks, plus the OpenCode plugin, record each session. It's captured after it ends, or after 20 idle minutes. Trivial sessions are skipped.
-- "Remember this" / "save this to memory": use `/remember` (`mem remember "<self-contained sentence>" --kind fact|decision|preference|next`). Manual edits to current state go **inside** the project note's `agentmem:state` block (keep the four headings). Never edit `0-Sessions/` notes: they are immutable.
+- "Remember this" / "save this to memory": use `/remember` (`mem remember "<self-contained sentence>" --kind fact|decision|preference|next`). Prefer `/remember` to change current state. A manual edit goes **inside** the project note's `agentmem:state` block and must keep the status-page format (seven sections, one cited item per line). Never edit `0-Sessions/` notes: they are immutable.
 - Force a capture of everything that's ready: `mem capture`. One specific session: `mem capture --agent claude --session <id> --transcript <path>`.
 - Privacy: `mem pause` stops all capture; `mem resume` restarts it.
 

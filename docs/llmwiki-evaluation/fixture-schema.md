@@ -1,6 +1,6 @@
 # WP-00 fixture interface
 
-This file fixes the interface between the synthetic fixtures (`tests/fixtures/knowledge/`) and the evaluator (`tools/evaluate_knowledge.py`), so that two people can build them in parallel. The blueprint is normative: [06](../llmwiki-blueprint/06-BENCHMARK-AND-TEST-PLAN.md) owns cases, metrics and gates, and [04](../llmwiki-blueprint/04-DATA-AND-INTERFACE-CONTRACTS.md) owns machine contracts. If this file disagrees with either, the blueprint wins and this file is amended.
+This file fixes the interface between the synthetic fixtures (`tests/fixtures/knowledge/`) and the evaluator (`tools/evaluate_knowledge.py`), so that two people can build them in parallel. The blueprint is normative: [06](../archive/llmwiki-blueprint/06-BENCHMARK-AND-TEST-PLAN.md) owns cases, metrics and gates, and [04](../archive/llmwiki-blueprint/04-DATA-AND-INTERFACE-CONTRACTS.md) owns machine contracts. If this file disagrees with either, the blueprint wins and this file is amended.
 
 All fixture content is synthetic. It must contain no vault content, real session titles, real project names or personal paths.
 
