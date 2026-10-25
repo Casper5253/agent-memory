@@ -69,11 +69,19 @@ figcaption b { color: var(--ink); }
 .blank { display: inline-block; background: #3a2a2a; color: #ffb3ad; padding: 0 6px; border-radius: 3px; }
 @media (max-width: 760px) { .tanks { grid-template-columns: 1fr; } .tank { min-height: 0; } }
 
-/* leaky pipe */
-.svgbox { background: var(--paper-2); border-radius: 14px; padding: 18px; overflow-x: auto; }
-.svgbox svg { width: 100%; height: auto; display: block; min-width: 560px; }
-svg text { font-family: var(--f-ui); }
 
+/* leak dots */
+.leak { background: var(--paper-2); border-radius: 14px; padding: 18px; }
+.leak-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-family: var(--f-ui); font-size: 0.95rem; margin-bottom: 12px; }
+.leak-head b { font-family: var(--f-head); font-weight: 400; font-size: 1.8rem; margin-right: 4px; }
+.leak-head b.r { color: var(--red); }
+.dots { display: grid; grid-template-columns: repeat(auto-fill, minmax(14px, 1fr)); gap: 5px; }
+.d { display: inline-block; width: 12px; height: 12px; border-radius: 50%; }
+.d.ok { background: var(--green); }
+.d.lost { border: 2px solid var(--red); background: transparent; }
+.dots .d { width: 100%; height: auto; aspect-ratio: 1; }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; font-family: var(--f-ui); font-size: 0.85rem; color: var(--muted); align-items: center; }
+.legend .d { margin-right: 6px; vertical-align: -1px; }
 /* before / after */
 .ba { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .sheet { border-radius: 12px; padding: 16px; font-family: var(--f-mono); font-size: 12px; line-height: 1.5; min-width: 0; }
@@ -184,25 +192,16 @@ footer { border-top: 3px solid var(--ink); margin: 80px auto 60px; padding-top: 
     <p>Then I asked a different question. Never mind whether each part works. If I start a brand-new session, does it actually know where the project stands? I scripted real agents through a week in the life of a project: decide something, quit, come back, change my mind, get killed mid-task. Then I read what the next session was handed.</p>
   </div>
   <figure>
-    <div class="svgbox">
-      <svg viewBox="0 0 900 290" role="img" aria-label="A pipe diagram: 213 sessions enter, 92 leak out before reaching the project note; other leaks are invented facts, shell work, and folders turning into projects.">
-        <defs><linearGradient id="pipe" x1="0" x2="1"><stop offset="0" stop-color="#1f4fd6"/><stop offset="1" stop-color="#138a52"/></linearGradient></defs>
-        <rect x="20" y="110" width="860" height="46" rx="23" fill="url(#pipe)" opacity="0.9"/>
-        <text x="40" y="95" font-size="15" font-weight="700" fill="currentColor">213 sessions captured</text>
-        <text x="880" y="95" font-size="15" font-weight="700" text-anchor="end" fill="currentColor">project note</text>
-        <g fill="#d7261e">
-          <path d="M210 156 q10 40 0 80 q-10 -40 0 -80z"/><path d="M420 156 q10 30 0 60 q-10 -30 0 -60z"/><path d="M600 156 q10 34 0 68 q-10 -34 0 -68z"/><path d="M760 156 q10 26 0 52 q-10 -26 0 -52z"/>
-        </g>
-        <g font-size="13.5" fill="currentColor">
-          <text x="210" y="262" text-anchor="middle" font-weight="700">92 never arrive</text><text x="210" y="280" text-anchor="middle" opacity="0.75">too long, parked, never drained</text>
-          <text x="420" y="240" text-anchor="middle" font-weight="700">invented facts</text><text x="420" y="258" text-anchor="middle" opacity="0.75">its own temp folder, filed as truth</text>
-          <text x="600" y="246" text-anchor="middle" font-weight="700">shell work lost</text><text x="600" y="264" text-anchor="middle" opacity="0.75">commits made outside edit tools</text>
-          <text x="760" y="230" text-anchor="middle" font-weight="700">ghost projects</text><text x="760" y="248" text-anchor="middle" opacity="0.75">every worktree a "project"</text>
-        </g>
-        <text x="450" y="139" font-size="15" font-weight="700" text-anchor="middle" fill="#fff">capture → summarize → rewrite the project note</text>
-      </svg>
+    <div class="leak">
+      <div class="leak-head"><span><b>213</b> sessions saved</span><span><b class="r">92</b> never reached the project note</span></div>
+      <div class="dots" id="dots" role="img" aria-label="213 dots, one per saved session. 92 are hollow red rings: sessions that never reached the project note."></div>
+      <div class="legend"><span><i class="d ok"></i>made it into the note</span><span><i class="d lost"></i>parked and forgotten</span></div>
     </div>
-    <figcaption><b>Where the memory went.</b> Out of 213 captured sessions, 92 never made it into the project note at all. A summarizer once filed its own temporary folder as a project fact. Decisions made through shell commands slipped past the filter, and a reversed decision came back as current.</figcaption>
+    <div class="gate" style="margin-top:14px">
+      <div class="ticket"><span class="stamp no">INVENTED</span><div class="t">"The temp folder is part of the project."</div><div class="rule">The summarizer filed its own scratch folder as a project fact, and the next session repeated it.</div></div>
+      <div class="ticket"><span class="stamp no">LOST</span><div class="t">git commit -m "switch back to SQLite"</div><div class="rule">Work done through shell commands looked trivial, so the reversal was never saved. The old decision came back.</div></div>
+    </div>
+    <figcaption><b>Where the memory went.</b> Each dot is one saved session. The red rings are sessions whose updates were too long, got parked, and were never picked up again. On top of that, invented facts got in, and decisions made outside the editing tools got lost.</figcaption>
   </figure>
   <div class="col">
     <p>The worst one was the quietest. One week I decided against something, and a later session cheerfully brought back the old decision, because the reversal had happened in a session the system decided wasn't worth saving. Memory that is confidently wrong is worse than no memory at all.</p>
@@ -386,6 +385,14 @@ footer { border-top: 3px solid var(--ink); margin: 80px auto 60px; padding-top: 
   AgentMem is a small Python tool that sits between Claude Code, Codex, OpenCode and an Obsidian vault. It's the memory half of my multi-agent setup. The team half is in <i>Herding three coding agents on one budget</i>. The source, the architecture notes and the full evaluation of the wiki detour live in the agent-memory repository on GitHub.
 </footer>
 
+<script>
+(function () {
+  var box = document.getElementById("dots"); if (!box) return;
+  var lost = new Set(); var seed = 7;
+  while (lost.size < 92) { seed = (seed * 9301 + 49297) % 233280; lost.add(Math.floor(seed / 233280 * 213)); }
+  for (var i = 0; i < 213; i++) { var d = document.createElement("i"); d.className = "d " + (lost.has(i) ? "lost" : "ok"); box.appendChild(d); }
+})();
+</script>
 <script>
 (function () {
   var steps = [
