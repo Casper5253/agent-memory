@@ -493,7 +493,7 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
             notes.update_project_note(note_path, project, date, email_allowlist=cfg.privacy_email_allowlist)
         text = notes.ensure_blocks(note_path.read_text(encoding="utf-8"))
         current_state = notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END)
-        pending = notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)
+        pending = '\n'.join(notes.pending_lines(note_path, text))
         order_time = int(order_override if order_override is not None else when.timestamp() * 1_000_000)
         order = (order_time, int(order_part))
         base_revision = hashlib.sha256(current_state.encode("utf-8")).hexdigest()

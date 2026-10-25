@@ -89,7 +89,7 @@ def startup_package(cfg, cwd: str) -> str:
             if note.exists():
                 try:
                     text = note.read_text(encoding='utf-8')
-                    pending = notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END)
+                    pending = '\n'.join(notes.pending_lines(note, text))
                     block = notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END)
                     try:
                         page = status.live_page(block)
