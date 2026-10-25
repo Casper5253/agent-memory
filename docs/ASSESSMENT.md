@@ -6,12 +6,11 @@
 
 | Item | Finding |
 |---|---|
-| Vault | `C:\Users\caspe\Documents\Notes\FDE Knowledge` (`OBSIDIAN_VAULT_PATH` set). Git repo, 76 notes, uncommitted changes. Old numbered layout (`00 Inbox` … `99 System`). |
-| Session notes | 43 Codex/Claude session notes spread over 16 `* Sessions/` folders, 11 of them under auto-created project folders named after prompt text (`can`, `caspe`, `i-want-to-evaluate-herdr-as`, …). |
+| Vault | The Obsidian vault (`OBSIDIAN_VAULT_PATH` set). Git repo with uncommitted changes. Old numbered layout. |
+| Session notes | Codex/Claude session notes spread over many `* Sessions/` folders, several under auto-created project folders named after prompt text. |
 | Raw spool | `.obsidian-sync/` = 356 MB of raw transcript byte ranges **inside the vault** (gitignored, but readable by any vault tool or search index). |
 | Capture | `~/.codex/obsidian-session-sync` (833 lines Python): Codex-only Stop/PreCompact/SessionEnd/SessionStart hooks, deterministic extraction, no LLM, no retrieval beyond SessionStart injection. |
 | Governance | Vault `AGENTS.md` names a retired "Hermes" curator and a stale path (`Documents\Casper\...`). |
-| Private vault | `Notes\Personal Vault` is a personal journal: **out of scope, never read or written.** |
 | Tooling | Python 3.11 (SQLite 3.45, FTS5 ok), Node 22, uv; no Bun. QMD not installed (`@tobilu/qmd` 2.8.3). |
 
 ## 2. Architecture
