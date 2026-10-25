@@ -1,284 +1,419 @@
-<title>Agents That Remember</title>
-<meta name="claude:viewport-fit-sides" content="cover">
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Goldfish No More</title>
+<meta name="description" content="How I taught three AI coding agents to remember where a project stands, and why the hard part was forgetting the right things.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@500;700;800&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-/* Layout: a single 680px reading column; figures break out to 960px. One terminal "screen" opens the piece. */
 :root {
-  --paper: #f5f7fa; --ink: #16202c; --muted: #586476; --rule: #d9dfe7; --wash: #e9edf3;
-  --lead: #5a4ed8; --codex: #0d8679; --oc: #b9770f; --warn: #c2402f;
-  --term: #111721; --term-ink: #d6dde8; --term-dim: #7d8899; --term-rule: #263142;
-  --f-display: "Schibsted Grotesk", "Segoe UI", system-ui, sans-serif;
-  --f-body: "Literata", Georgia, "Times New Roman", serif;
-  --f-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --paper: #f6f1e7; --paper-2: #ece4d3; --ink: #17130e; --muted: #6b6152; --rule: #d6cbb6;
+  --red: #d7261e; --blue: #1f4fd6; --green: #138a52; --gold: #c48a12;
+  --term: #101114; --term-ink: #e6e3dc; --term-dim: #8a877f;
+  --f-head: "Anton", "Impact", "Arial Narrow", sans-serif;
+  --f-body: "Newsreader", Georgia, serif;
+  --f-ui: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --paper: #0f141b; --ink: #e5e9ef; --muted: #98a3b3; --rule: #273141; --wash: #18202b;
-  --lead: #9b92ff; --codex: #3fc4b4; --oc: #e7a83d; --warn: #f07a68;
-  --term: #0a0e14; --term-ink: #d6dde8; --term-dim: #7d8899; --term-rule: #222c3b; color-scheme: dark } }
+  --paper: #121110; --paper-2: #1c1a17; --ink: #f1ece2; --muted: #a39a8a; --rule: #34302a;
+  --red: #ff5a4e; --blue: #7d9dff; --green: #3fcf8c; --gold: #f0b43c; color-scheme: dark } }
 :root[data-theme="dark"] {
-  --paper: #0f141b; --ink: #e5e9ef; --muted: #98a3b3; --rule: #273141; --wash: #18202b;
-  --lead: #9b92ff; --codex: #3fc4b4; --oc: #e7a83d; --warn: #f07a68;
-  --term: #0a0e14; --term-ink: #d6dde8; --term-dim: #7d8899; --term-rule: #222c3b; color-scheme: dark }
+  --paper: #121110; --paper-2: #1c1a17; --ink: #f1ece2; --muted: #a39a8a; --rule: #34302a;
+  --red: #ff5a4e; --blue: #7d9dff; --green: #3fcf8c; --gold: #f0b43c; color-scheme: dark }
 
-body { background: var(--paper); color: var(--ink); font-family: var(--f-body); font-size: 18px; line-height: 1.68;
-  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 96px; }
-.col { max-width: 680px; margin-inline: auto; width: 100%; }
-.wide { max-width: 960px; margin-inline: auto; width: 100%; }
-h1, h2, h3, .label, .kicker { font-family: var(--f-display); text-wrap: balance; }
-h1 { font-size: clamp(2.3rem, 6vw, 3.6rem); line-height: 1.04; letter-spacing: -0.025em; font-weight: 800; margin: 0; }
-h2 { font-size: 1.75rem; line-height: 1.2; letter-spacing: -0.015em; font-weight: 700; margin: 0; }
-p { margin: 0; }
-.kicker { font-size: 0.8rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
-code, .mono { font-family: var(--f-mono); font-size: 0.86em; }
-p code, li code { background: var(--wash); padding: 0.08em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
-a { color: var(--lead); }
-.dek { font-size: 1.28rem; line-height: 1.5; color: var(--muted); }
-.byline { font-family: var(--f-display); font-size: 0.9rem; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
-.byline b { color: var(--ink); font-weight: 700; }
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--f-body); font-size: 19px; line-height: 1.62;
+  padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); overflow-x: hidden; }
+.col { max-width: 700px; margin-inline: auto; }
+.wide { max-width: 1040px; margin-inline: auto; }
+p { margin: 0 0 1em; }
+a { color: var(--blue); }
+code { font-family: var(--f-mono); font-size: 0.82em; background: var(--paper-2); padding: 0.1em 0.35em; border-radius: 4px; }
 
-header.top { padding-block: 64px 36px; display: grid; gap: 22px; }
-article { display: grid; gap: 64px; }
-section { display: grid; gap: 22px; }
-.prose { display: grid; gap: 1.1em; }
-figure { margin: 0; display: grid; gap: 12px; min-width: 0; }
-figcaption { font-family: var(--f-display); font-size: 0.88rem; line-height: 1.5; color: var(--muted); max-width: 680px; }
+/* masthead */
+.mast { border-bottom: 3px solid var(--ink); padding: 18px 0 10px; display: flex; justify-content: space-between; gap: 12px; font-family: var(--f-ui);
+  font-size: 0.78rem; letter-spacing: 0.14em; text-transform: uppercase; }
+.mast b { color: var(--red); }
+.hero { padding: 38px 0 28px; display: grid; gap: 18px; }
+.kicker { font-family: var(--f-ui); font-weight: 700; font-size: 0.82rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--red); }
+h1 { font-family: var(--f-head); font-weight: 400; font-size: clamp(3.2rem, 11vw, 7.6rem); line-height: 0.9; letter-spacing: 0.005em; margin: 0; text-transform: uppercase; }
+h1 em { font-style: normal; color: var(--red); }
+.dek { font-size: clamp(1.15rem, 2.4vw, 1.45rem); line-height: 1.45; max-width: 760px; margin: 0; }
+.byline { font-family: var(--f-ui); font-size: 0.85rem; color: var(--muted); display: flex; gap: 16px; flex-wrap: wrap; }
+h2 { font-family: var(--f-head); font-weight: 400; text-transform: uppercase; font-size: clamp(2rem, 6vw, 3.2rem); line-height: 0.98; margin: 0 0 18px; }
+h2 .n { color: var(--red); margin-right: 10px; }
+section { margin: 72px auto; }
+.drop::first-letter { font-family: var(--f-head); float: left; font-size: 4.6em; line-height: 0.82; padding: 6px 10px 0 0; color: var(--red); }
+.pull { font-family: var(--f-head); text-transform: uppercase; font-size: clamp(1.9rem, 5.4vw, 3rem); line-height: 1; margin: 38px 0; padding: 18px 0;
+  border-block: 3px solid var(--ink); }
+.pull span { color: var(--red); }
+figure { margin: 34px 0; }
+figcaption { font-family: var(--f-ui); font-size: 0.86rem; line-height: 1.5; color: var(--muted); margin-top: 12px; }
 figcaption b { color: var(--ink); }
-.svgwrap { overflow-x: auto; }
-.svgwrap svg { width: 100%; height: auto; display: block; }
-svg text { font-family: var(--f-display); }
+.label { font-family: var(--f-ui); font-weight: 700; font-size: 0.74rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 
-.who { font-family: var(--f-display); font-weight: 700; white-space: nowrap; }
-.who.lead { color: var(--lead); } .who.codex { color: var(--codex); } .who.oc { color: var(--oc); }
+/* hero visual: three goldfish terminals */
+.tanks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.tank { background: var(--term); color: var(--term-ink); border-radius: 12px; padding: 14px; font-family: var(--f-mono); font-size: 12.5px; line-height: 1.55; min-height: 210px;
+  position: relative; overflow: hidden; }
+.tank .who { font-family: var(--f-ui); font-weight: 700; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px; }
+.tank .q { color: var(--term-dim); }
+.tank .fish { position: absolute; right: 10px; bottom: 6px; font-size: 42px; animation: swim 7s ease-in-out infinite; }
+.tank:nth-child(2) .fish { animation-delay: -2.3s; } .tank:nth-child(3) .fish { animation-delay: -4.6s; }
+@keyframes swim { 0%, 100% { transform: translateX(0) scaleX(1); } 45% { transform: translateX(-150px) scaleX(1); } 50% { transform: translateX(-150px) scaleX(-1); } 95% { transform: translateX(0) scaleX(-1); } }
+.blank { display: inline-block; background: #3a2a2a; color: #ffb3ad; padding: 0 6px; border-radius: 3px; }
+@media (max-width: 760px) { .tanks { grid-template-columns: 1fr; } .tank { min-height: 0; } }
 
-/* terminal: always dark, in both themes */
-.term { background: var(--term); color: var(--term-ink); border-radius: 10px; overflow: hidden; font-family: var(--f-mono); font-size: 13px; line-height: 1.55;
-  box-shadow: 0 30px 60px -30px rgba(10, 20, 40, 0.45); }
-.term-bar { display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-bottom: 1px solid var(--term-rule); color: var(--term-dim); font-size: 12px; }
-.term-bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--term-rule); display: inline-block; }
-.term-bar span { margin-left: 8px; }
-.panes { display: grid; grid-template-columns: 1.15fr 1fr; }
-.pane { padding: 12px 14px 16px; min-width: 0; display: grid; gap: 6px; align-content: start; }
-.pane.p-lead { grid-row: span 2; border-right: 1px solid var(--term-rule); }
-.pane.p-oc { border-top: 1px solid var(--term-rule); }
-.ptitle { font-weight: 500; font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
-.ptitle .st { color: var(--term-dim); }
-.p-lead .ptitle b { color: #a59cff; } .p-codex .ptitle b { color: #4fd0c0; } .p-oc .ptitle b { color: #f0b24a; }
-.line { color: var(--term-dim); overflow-wrap: anywhere; }
-.line.me { color: var(--term-ink); }
-.msg { border-left: 2px solid currentColor; padding-left: 8px; overflow-wrap: anywhere; }
-.msg.to-codex { color: #4fd0c0; } .msg.to-oc { color: #f0b24a; } .msg.to-lead { color: #a59cff; }
-.msg span { color: var(--term-ink); }
-.cursor { display: inline-block; width: 7px; height: 14px; background: var(--term-ink); vertical-align: -2px; animation: blink 1.1s steps(1) infinite; }
-@keyframes blink { 50% { opacity: 0; } }
-@media (max-width: 640px) { .panes { grid-template-columns: 1fr; } .pane.p-lead { grid-row: auto; border-right: 0; } .pane.p-codex { border-top: 1px solid var(--term-rule); } }
+/* leaky pipe */
+.svgbox { background: var(--paper-2); border-radius: 14px; padding: 18px; overflow-x: auto; }
+.svgbox svg { width: 100%; height: auto; display: block; min-width: 560px; }
+svg text { font-family: var(--f-ui); }
 
-.primer { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
-.primer > div { border-top: 3px solid var(--ink); padding-top: 12px; display: grid; gap: 6px; align-content: start; font-size: 0.95rem; line-height: 1.55; }
-.primer .label { color: var(--ink); }
-@media (max-width: 720px) { .primer { grid-template-columns: 1fr; } }
+/* before / after */
+.ba { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.sheet { border-radius: 12px; padding: 16px; font-family: var(--f-mono); font-size: 12px; line-height: 1.5; min-width: 0; }
+.sheet.before { background: var(--paper-2); color: var(--muted); max-height: 330px; overflow: hidden; position: relative; }
+.sheet.before::after { content: ""; position: absolute; inset: auto 0 0 0; height: 90px; background: linear-gradient(transparent, var(--paper-2)); }
+.sheet.after { background: var(--term); color: var(--term-ink); }
+.sheet h4 { font-family: var(--f-ui); margin: 10px 0 4px; font-size: 0.78rem; letter-spacing: 0.1em; text-transform: uppercase; color: #9fd8b8; }
+.sheet h4:first-child { margin-top: 0; }
+.sheet .ref { color: #7fa2ff; }
+.sheet .stale { text-decoration: line-through; color: var(--red); }
+@media (max-width: 760px) { .ba { grid-template-columns: 1fr; } }
 
-pre.code { margin: 0; background: var(--wash); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-family: var(--f-mono); font-size: 13.5px; line-height: 1.6; }
-pre.code .c { color: var(--muted); }
-pre.code .k { color: var(--codex); }
-pre.code .s { color: var(--oc); }
+/* the flip demo */
+.demo { border: 3px solid var(--ink); border-radius: 14px; overflow: hidden; }
+.demo-bar { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px; background: var(--ink); color: var(--paper); align-items: center; font-family: var(--f-ui); font-size: 0.9rem; }
+.demo-bar button { font: inherit; font-weight: 700; border: 0; border-radius: 999px; padding: 8px 14px; cursor: pointer; background: var(--paper); color: var(--ink); }
+.demo-bar button[aria-pressed="true"] { background: var(--red); color: #fff; }
+.demo-bar button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+.demo-body { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 0; min-height: 280px; }
+.pane { padding: 16px; min-width: 0; }
+.pane + .pane { border-left: 2px dashed var(--rule); }
+.card { background: var(--paper-2); border-radius: 10px; padding: 10px 12px; margin: 8px 0; font-size: 0.93rem; line-height: 1.4; transition: transform .5s ease, opacity .5s ease; }
+.card small { display: block; font-family: var(--f-mono); font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+.card.decision { border-left: 5px solid var(--blue); }
+.card.retired { border-left: 5px solid var(--muted); opacity: 0.8; }
+.card.new { animation: pop .5s ease; }
+@keyframes pop { from { transform: translateY(-12px) scale(0.97); opacity: 0; } to { transform: none; opacity: 1; } }
+.empty { color: var(--muted); font-family: var(--f-ui); font-size: 0.88rem; }
+.narr { padding: 12px 16px; border-top: 2px solid var(--ink); font-family: var(--f-ui); font-size: 0.92rem; background: var(--paper-2); min-height: 3.2em; }
+@media (max-width: 760px) { .demo-body { grid-template-columns: 1fr; } .pane + .pane { border-left: 0; border-top: 2px dashed var(--rule); } }
 
-.roles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.role { background: var(--wash); border-radius: 8px; padding: 16px; display: grid; gap: 8px; align-content: start; min-width: 0; font-size: 0.93rem; line-height: 1.5; }
-.role .meter { height: 6px; background: var(--rule); border-radius: 3px; overflow: hidden; }
-.role .meter i { display: block; height: 100%; }
-.role .cost { font-family: var(--f-display); font-size: 0.8rem; color: var(--muted); }
-@media (max-width: 720px) { .roles { grid-template-columns: 1fr; } }
+/* gatekeeper */
+.gate { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.ticket { position: relative; background: var(--paper-2); border-radius: 10px; padding: 14px 14px 16px; min-width: 0; overflow: hidden; }
+.ticket .t { font-family: var(--f-mono); font-size: 0.82rem; line-height: 1.45; }
+.ticket .rule { font-family: var(--f-ui); font-size: 0.85rem; margin-top: 10px; color: var(--muted); }
+.stamp { position: absolute; top: 12px; right: -6px; transform: rotate(10deg); font-family: var(--f-head); font-size: 1.35rem; letter-spacing: 0.04em; padding: 2px 10px;
+  border: 3px solid currentColor; border-radius: 6px; opacity: 0.88; }
+.stamp.no { color: var(--red); } .stamp.yes { color: var(--green); }
+@media (max-width: 760px) { .gate { grid-template-columns: 1fr; } }
 
-.pull { font-family: var(--f-display); font-size: 1.6rem; line-height: 1.25; font-weight: 700; letter-spacing: -0.01em; border-left: 4px solid var(--warn); padding-left: 18px; text-wrap: balance; }
+/* wiki mapping */
+.map { display: grid; grid-template-columns: minmax(0, 1fr) 46px minmax(0, 1fr); gap: 10px 0; align-items: stretch; }
+.map .h { font-family: var(--f-ui); font-weight: 700; font-size: 0.8rem; letter-spacing: 0.12em; text-transform: uppercase; padding-bottom: 6px; border-bottom: 3px solid var(--ink); }
+.map .c { background: var(--paper-2); border-radius: 10px; padding: 12px; font-size: 0.95rem; line-height: 1.4; }
+.map .c b { font-family: var(--f-ui); display: block; font-size: 0.85rem; margin-bottom: 3px; }
+.map .arrow { display: grid; place-items: center; font-family: var(--f-head); font-size: 1.6rem; color: var(--red); }
+.map .c.changed { outline: 3px solid var(--red); outline-offset: -3px; }
+.map .c.dropped { opacity: 0.55; text-decoration: line-through; }
 
-.router { border: 1px solid var(--rule); border-radius: 10px; display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); overflow: hidden; }
-.router form { padding: 18px; display: grid; gap: 16px; align-content: start; border-right: 1px solid var(--rule); font-family: var(--f-display); font-size: 0.92rem; }
-.router fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; min-width: 0; }
-.router legend { padding: 0; margin-bottom: 4px; }
-.seg { display: flex; flex-wrap: wrap; gap: 6px; }
-.seg input { position: absolute; opacity: 0; pointer-events: none; }
-.seg label { border: 1px solid var(--rule); border-radius: 999px; padding: 4px 11px; cursor: pointer; font-size: 0.86rem; }
-.seg label:hover { border-color: var(--muted); }
-.seg input:checked + label { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-.seg input:focus-visible + label { outline: 2px solid var(--lead); outline-offset: 2px; }
-.router input[type=range] { width: 100%; accent-color: var(--lead); }
-.rangeval { font-variant-numeric: tabular-nums; color: var(--ink); }
-.verdict { padding: 18px 20px; display: grid; gap: 14px; align-content: start; min-width: 0; background: var(--wash); }
-.verdict .big { font-family: var(--f-display); font-size: 1.45rem; font-weight: 800; line-height: 1.2; }
-.verdict .why { font-size: 0.98rem; }
-.trail { display: flex; flex-wrap: wrap; gap: 6px; font-family: var(--f-mono); font-size: 12px; }
-.trail span { background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 2px 7px; }
-.trail span.end { border-color: currentColor; font-weight: 500; }
-@media (max-width: 720px) { .router { grid-template-columns: 1fr; } .router form { border-right: 0; border-bottom: 1px solid var(--rule); } }
+/* short turns bug */
+.turns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.turn { border-radius: 12px; padding: 14px; background: var(--paper-2); min-width: 0; }
+.turn .verdict { font-family: var(--f-head); font-size: 1.5rem; text-transform: uppercase; margin-top: 8px; }
+.turn.bad .verdict { color: var(--red); } .turn.good .verdict { color: var(--green); }
+.turn.good { background: color-mix(in srgb, var(--green) 14%, var(--paper-2)); }
+@media (max-width: 760px) { .turns { grid-template-columns: 1fr; } }
 
-.legend { display: flex; flex-wrap: wrap; gap: 16px; font-family: var(--f-display); font-size: 0.85rem; color: var(--muted); }
-.legend i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.lessons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.lesson { border-top: 4px solid var(--ink); padding-top: 10px; }
+.lesson b { font-family: var(--f-head); font-weight: 400; text-transform: uppercase; font-size: 1.45rem; line-height: 1; display: block; margin-bottom: 6px; }
+@media (max-width: 760px) { .lessons { grid-template-columns: 1fr; } }
 
-.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); counter-reset: s; }
-.steps li { counter-increment: s; padding: 34px 14px 0 0; position: relative; font-size: 0.9rem; line-height: 1.45; }
-.steps li::before { content: counter(s); position: absolute; top: 0; left: 0; width: 24px; height: 24px; border-radius: 50%; background: var(--ink); color: var(--paper);
-  font-family: var(--f-display); font-weight: 700; font-size: 0.8rem; display: grid; place-items: center; }
-.steps li::after { content: ""; position: absolute; top: 11px; left: 30px; right: 6px; height: 2px; background: var(--rule); }
-.steps li:last-child::after { display: none; }
-.steps b { font-family: var(--f-display); display: block; margin-bottom: 4px; }
-@media (max-width: 720px) { .steps { grid-template-columns: 1fr; gap: 14px; } .steps li { padding: 0 0 0 38px; } .steps li::after { display: none; } }
-
-.layer { display: grid; grid-template-columns: 160px minmax(0, 1fr) minmax(0, 170px); gap: 18px; padding: 16px 0; border-top: 1px solid var(--rule); font-size: 0.93rem; line-height: 1.5; align-items: start; }
-.layer:last-child { border-bottom: 1px solid var(--rule); }
-.layer .life { font-family: var(--f-display); font-weight: 700; }
-.layer .life small { display: block; font-weight: 500; color: var(--muted); font-size: 0.8rem; }
-.layer .where { font-family: var(--f-mono); font-size: 0.8rem; color: var(--muted); }
-.bar-life { height: 6px; border-radius: 3px; background: var(--lead); margin-top: 8px; }
-@media (max-width: 720px) { .layer { grid-template-columns: 1fr; gap: 6px; } }
-
-.lessons { list-style: none; padding: 0; margin: 0; display: grid; gap: 18px; }
-.lessons li { display: grid; gap: 4px; padding-left: 18px; border-left: 2px solid var(--rule); }
-.lessons b { font-family: var(--f-display); font-size: 1.05rem; }
-
-hr.end { border: 0; border-top: 1px solid var(--rule); margin: 0; }
-.foot { font-family: var(--f-display); font-size: 0.85rem; color: var(--muted); line-height: 1.6; }
-@media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+footer { border-top: 3px solid var(--ink); margin: 80px auto 60px; padding-top: 16px; font-family: var(--f-ui); font-size: 0.88rem; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .tank .fish, .card.new { animation: none; } }
 </style>
+</head>
+<body>
 
-<header class="top col">
-  <div class="kicker">Field report · Agent memory</div>
-  <h1>Coding agents that remember where the project stands</h1>
-  <p class="dek">Every new coding-agent session starts from zero. We built AgentMem so that each one opens already knowing the project's current state, cited to the sessions that established it. The hard part was not storing memory. It was keeping the current state honest.</p>
-  <div class="byline"><span><b>October 2026</b></span><span>12 min read</span><span>Windows 11 · Claude Code · Codex · OpenCode · Obsidian</span></div>
-</header>
+<div class="wide">
+  <div class="mast"><span>Coding adventures</span><span><b>AgentMem</b> · October 2026</span></div>
 
-<div class="wide" style="margin-bottom:56px">
+  <header class="hero">
+    <div class="kicker">Three AI agents. One project. Zero memory.</div>
+    <h1>Goldfish <em>no more</em></h1>
+    <p class="dek">My coding agents forgot everything the moment a session ended. Teaching them to remember turned out to be easy. Teaching them what to <i>forget</i> took the rest of the month.</p>
+    <div class="byline"><span>By Casper</span><span>10 min read</span><span>Claude Code · Codex · OpenCode · Obsidian</span></div>
+  </header>
+
   <figure>
-    <div class="term" role="img" aria-label="A terminal showing the context a new agent session receives at startup: project name, live git state, a health line and status sections with cited items.">
-      <div class="term-bar"><i></i><i></i><i></i><span>new session · project "todo-cli" · injected at startup</span></div>
-      <div class="pane" style="padding:14px 16px 18px">
-        <div class="line me">Project: todo-cli</div>
-        <div class="line">Git (live at start): branch main, HEAD 4f2c9e1, clean</div>
-        <div class="line">Capture health: 1 session not yet captured</div>
-        <div class="line me">### Active work and blockers</div>
-        <div class="line">- Overdue filter is half done; list --overdue is not wired yet. (2026-10-24#e4)</div>
-        <div class="line me">### Next steps</div>
-        <div class="line">- Wire list --overdue and add its tests. (2026-10-24#e6)</div>
-        <div class="line me">### Key decisions (decision, reason)</div>
-        <div class="msg to-lead"><span>Store due dates as ISO dates only; week dates were ambiguous. (2026-10-24#e2)</span></div>
-        <div class="line">3 more items in 1-Projects/todo-cli/todo-cli.md</div>
-      </div>
+    <div class="tanks" role="img" aria-label="Three terminals, one per agent, each asking what was decided yesterday and getting no answer.">
+      <div class="tank"><div class="who" style="color:#b8a8ff">Claude · Monday</div>
+        <div>me: storage? let's use SQLite,</div><div>it's local only.</div><div class="q">✓ decided. db.py created.</div>
+        <div class="fish" aria-hidden="true">🐟</div></div>
+      <div class="tank"><div class="who" style="color:#5fe0cf">Codex · Tuesday</div>
+        <div>me: add the sync feature</div><div class="q">reading the repo…</div><div>codex: which database are we</div><div>using? <span class="blank">no idea</span></div>
+        <div class="fish" aria-hidden="true">🐟</div></div>
+      <div class="tank"><div class="who" style="color:#ffc15e">OpenCode · Wednesday</div>
+        <div>me: why SQLite again?</div><div class="q">searching files…</div><div>opencode: <span class="blank">I wasn't there</span></div>
+        <div class="fish" aria-hidden="true">🐟</div></div>
     </div>
-    <figcaption><b>What a new session sees, before anyone types.</b> The project's status page, live git state and a health line, capped at 4,000 characters. Every item links back to the exact passage of the session that produced it. The example is synthetic.</figcaption>
+    <figcaption><b>The problem in one picture.</b> Every session starts from zero. A decision made with one agent is invisible to the next, so I kept re-explaining my own project to it.</figcaption>
   </figure>
 </div>
 
 <article>
 
 <section class="col">
-  <div class="prose">
-    <p>We run three coding agents side by side: Claude Code, Codex and OpenCode. The companion piece, <i>Herding three coding agents on one budget</i>, covers how they split work. This one is about what they share across time. A decision made with one agent on Monday should still be known to a different agent on Tuesday, without anyone pasting it in.</p>
-    <p>The obvious answer is to save the sessions and search them. We did that first. It turned out that saving is easy, and that most of the work is in deciding what counts as true right now.</p>
+  <p class="drop">I work with three AI coding agents at once. Claude leads and plans, Codex reviews and takes the hard bugs, and OpenCode does the cheap, mechanical work. It's a great team, apart from one thing. None of them remember anything. Close the terminal, and the decision we spent twenty minutes on is gone. Open a new session tomorrow, and I'm explaining the database choice all over again, to an agent that confidently picks the other one.</p>
+  <p>So I built AgentMem, a shared memory for all three. The plan sounded simple. Save every session, summarize it, and keep one note per project saying where things stand. When a new session starts, hand it that note before anyone types a word.</p>
+  <p>The first version worked. At least it looked like it did.</p>
+</section>
+
+<section class="wide">
+  <div class="col">
+    <h2><span class="n">01</span>The memory that leaked</h2>
+    <p>Saving sessions was the easy part. Hooks in each agent fire when a turn ends, and a background worker picks up the transcript, strips out secrets, and asks a small model for a summary. The summaries landed in my Obsidian vault, and the project notes got rewritten from them. It was searchable and tidy, and all the tests were green.</p>
+    <p>Then I asked a different question. Never mind whether each part works. If I start a brand-new session, does it actually know where the project stands? I scripted real agents through a week in the life of a project: decide something, quit, come back, change my mind, get killed mid-task. Then I read what the next session was handed.</p>
+  </div>
+  <figure>
+    <div class="svgbox">
+      <svg viewBox="0 0 900 290" role="img" aria-label="A pipe diagram: 213 sessions enter, 92 leak out before reaching the project note; other leaks are invented facts, shell work, and folders turning into projects.">
+        <defs><linearGradient id="pipe" x1="0" x2="1"><stop offset="0" stop-color="#1f4fd6"/><stop offset="1" stop-color="#138a52"/></linearGradient></defs>
+        <rect x="20" y="110" width="860" height="46" rx="23" fill="url(#pipe)" opacity="0.9"/>
+        <text x="40" y="95" font-size="15" font-weight="700" fill="currentColor">213 sessions captured</text>
+        <text x="880" y="95" font-size="15" font-weight="700" text-anchor="end" fill="currentColor">project note</text>
+        <g fill="#d7261e">
+          <path d="M210 156 q10 40 0 80 q-10 -40 0 -80z"/><path d="M420 156 q10 30 0 60 q-10 -30 0 -60z"/><path d="M600 156 q10 34 0 68 q-10 -34 0 -68z"/><path d="M760 156 q10 26 0 52 q-10 -26 0 -52z"/>
+        </g>
+        <g font-size="13.5" fill="currentColor">
+          <text x="210" y="262" text-anchor="middle" font-weight="700">92 never arrive</text><text x="210" y="280" text-anchor="middle" opacity="0.75">too long, parked, never drained</text>
+          <text x="420" y="240" text-anchor="middle" font-weight="700">invented facts</text><text x="420" y="258" text-anchor="middle" opacity="0.75">its own temp folder, filed as truth</text>
+          <text x="600" y="246" text-anchor="middle" font-weight="700">shell work lost</text><text x="600" y="264" text-anchor="middle" opacity="0.75">commits made outside edit tools</text>
+          <text x="760" y="230" text-anchor="middle" font-weight="700">ghost projects</text><text x="760" y="248" text-anchor="middle" opacity="0.75">every worktree a "project"</text>
+        </g>
+        <text x="450" y="139" font-size="15" font-weight="700" text-anchor="middle" fill="#fff">capture → summarize → rewrite the project note</text>
+      </svg>
+    </div>
+    <figcaption><b>Where the memory went.</b> Out of 213 captured sessions, 92 never made it into the project note at all. A summarizer once filed its own temporary folder as a project fact. Decisions made through shell commands slipped past the filter, and a reversed decision came back as current.</figcaption>
+  </figure>
+  <div class="col">
+    <p>The worst one was the quietest. One week I decided against something, and a later session cheerfully brought back the old decision, because the reversal had happened in a session the system decided wasn't worth saving. Memory that is confidently wrong is worse than no memory at all.</p>
+  </div>
+</section>
+
+<section class="col">
+  <h2><span class="n">02</span>The wiki detour</h2>
+  <p>My first instinct was to go bigger. Andrej Karpathy had sketched a pattern he calls the <a href="https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f">LLM Wiki</a>. Instead of searching raw documents every time you ask something, you let the model build and maintain a living wiki. It ingests new sources, links them together, and periodically lints itself for contradictions. Knowledge gets compiled once and kept current, so it compounds.</p>
+  <p>I built a version of it: a claim store where every fact points at its evidence and every decision knows what it replaced. Then I benchmarked it against plain search, and on a set of made-up test questions it crushed it.</p>
+  <p>On questions pulled from my real repositories, though, the improved plain search was level with it or ahead. Worse, the store sometimes served an outdated decision as current, which is the exact bug I was trying to kill. And the benchmark itself was asking the wrong question. It tested whether memory can <i>answer</i> things. What I actually needed was memory that <i>tells</i> a new session where we are, before anyone asks.</p>
+  <div class="pull">I'd built a brilliant librarian. <span>I needed a good briefing.</span></div>
+  <p>So I kept the idea and dropped the second system. The rest of this story is the briefing.</p>
+</section>
+
+<section class="wide">
+  <div class="col">
+    <h2><span class="n">03</span>One page per project</h2>
+    <p>Every project now has a single status page. It has seven fixed sections: purpose, what works, latest progress, active work, open questions, key decisions, and next steps. That page is the only place that says what is true <i>now</i>. Everything else, every old session and every retired decision, is history. You can still search history. It just never gets to pretend it's current.</p>
+  </div>
+  <figure>
+    <div class="ba">
+      <div class="sheet before" aria-label="Before: a long, growing project note">
+        <div class="label" style="margin-bottom:8px">Before · the note that only grew</div>
+        Current state: storage uses SQLite (local only)<br>
+        Current state: switched to Postgres for multi-user<br>
+        Decided: dates stored as 20261016<br>
+        Decided: ISO dates only<br>
+        Working on: overdue filter<br>
+        Working on: overdue filter (done?)<br>
+        Next: run the tests<br>
+        Next: wait for review from the reviewer<br>
+        Note: the temp folder is part of the project<br>
+        Pending: 140 more lines from old sessions…<br>
+        Pending: …<br>Pending: …<br>Pending: …
+      </div>
+      <div class="sheet after" aria-label="After: a concise status page with cited items">
+        <div class="label" style="margin-bottom:8px;color:#9fd8b8">After · the status page</div>
+        <h4>Active work</h4>
+        - Overdue filter: list --overdue not wired yet <span class="ref">(oct-24 #e4)</span>
+        <h4>Next steps</h4>
+        - Wire list --overdue and test it <span class="ref">(oct-24 #e6)</span>
+        <h4>Key decisions</h4>
+        - Postgres, because multi-user needs concurrent writers <span class="ref">(oct-23 #e2)</span><br>
+        - ISO dates only; week dates were ambiguous <span class="ref">(oct-24 #e2)</span>
+        <h4>What works</h4>
+        - Due dates and priorities, sorted listing <span class="ref">(oct-22 #e5)</span>
+      </div>
+    </div>
+    <figcaption><b>Same project, two memories.</b> The old note kept everything, contradictions included. The status page keeps only what is true now. Every line links to the exact quote in the session that established it. The example is a made-up todo app.</figcaption>
+  </figure>
+  <div class="col">
+    <p>Those little <code>#e4</code> tags matter. When a session ends, its note gets numbered evidence entries, and each one is a quote from the actual transcript. A claim can only reach the status page if it points at one of those quotes, and if the quote really contains what the claim says. The summarizer's invented facts died right there. You can't cite a quote that doesn't exist.</p>
   </div>
 </section>
 
 <section class="wide">
-  <div class="col"><h2>First, the moving parts</h2></div>
-  <div class="primer">
-    <div><span class="label">Session note</span><p>One Markdown note per working session, written by a background worker after the session ends. It holds a short summary and numbered evidence entries, each quoting the transcript. Session notes are history and are never edited.</p></div>
-    <div><span class="label">Status page</span><p>One page per project with seven fixed sections: purpose, what works, latest progress, active work, open questions, key decisions and next steps. It is the only place that says what is true now.</p></div>
-    <div><span class="label">History</span><p>A per-project file that keeps every item that left the status page, with the reason it left and the evidence that replaced it. Search labels it, and the session notes, as historical.</p></div>
+  <div class="col">
+    <h2><span class="n">04</span>Change your mind. Watch it happen.</h2>
+    <p>Here is the move that broke the old system: deciding one thing on Monday and the opposite on Wednesday. Click through the week.</p>
   </div>
-</section>
-
-<section class="col">
-  <h2>Version one looked fine and was not</h2>
-  <div class="prose">
-    <p>The first version captured every session from all three agents, summarized it with a small model, and rewrote a project note from the summaries. Search worked, and unit tests passed. Then we stopped asking whether the parts worked and asked a different question. Does a brand-new session actually start with an accurate picture? We ran real agents through a scripted lifecycle (decide, end, resume, reverse a decision, get killed) and scored what the next session received.</p>
-    <p>It did badly:</p>
-  </div>
-  <ul class="lessons">
-    <li><b>Most work never reached the project note.</b> Updates over 8,000 characters were parked and never drained. 92 of 213 captured sessions never reached the project state.</li>
-    <li><b>The summarizer invented facts.</b> It treated its own temporary directory as a project fact, and the next session repeated it.</li>
-    <li><b>Shell work was invisible.</b> The quality gate counted only edits made through the agent's file tools. A Codex session that changed files and committed with shell commands was skipped. Its decision was lost, and a later session inherited a decision that had already been reversed.</li>
-    <li><b>Folders became projects.</b> Every git worktree an agent worked in became a new fragment project. The team's own task branches created ten of them.</li>
-  </ul>
-</section>
-
-<section class="col">
-  <h2>A detour through a knowledge wiki</h2>
-  <div class="prose">
-    <p>Our first plan for the fix came from Andrej Karpathy's <a href="https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f">LLM Wiki</a>. The idea is to stop retrieving from raw documents on every question, as typical RAG does. Instead, the model builds and maintains a persistent, interlinked Markdown wiki, so knowledge is compiled once and kept current. It has three layers: immutable raw sources, a wiki that the model owns, and a schema file (such as <code>AGENTS.md</code>) that tells the model how to maintain it. The model ingests new sources, answers queries with citations, and periodically lints the wiki for contradictions and stale claims.</p>
-    <p>We built a version of it for AgentMem: a project claim store of about 2,600 lines, with evidence-linked claims and explicit decision succession. We evaluated it carefully. On a sealed set of synthetic questions it answered 34 of 83, where the old search answered none.</p>
-    <p>Two things stopped us from adopting it as a second store. On 36 questions built from the git history of real repositories, the improved plain search was level with it or ahead: 10 wins to 7, with 11 ties, in a partial rerun. And it failed its own safety gate. In 5 cases it presented a superseded fact as current, which is the exact failure the project existed to remove.</p>
-    <p>The deeper problem was the question itself. Those tests asked whether memory can answer a question. Our real use is different. A new session needs the current state pushed to it before anyone asks anything. The store won the question tests while the page that sessions actually read kept falling behind.</p>
-    <p>In the end we kept the wiki's core and dropped the second store. The session transcripts and notes are the immutable raw sources. Each project's status page is a small wiki page that the model maintains, compiled once and kept current. The vault's <code>AGENTS.md</code> is the schema. The one change is to the lint step. In AgentMem, the checks for contradictions, stale claims and unsupported statements do not run as a periodic pass by the model. Code enforces them on every update, as the next sections describe. The claim store stays in the code, switched off.</p>
-  </div>
-  <p class="pull">The evaluation measured the system we were building, not the job we needed done.</p>
+  <figure>
+    <div class="demo" id="demo">
+      <div class="demo-bar" role="group" aria-label="Pick a day">
+        <span style="margin-right:6px">Pick a day:</span>
+        <button type="button" data-step="0" aria-pressed="true">Monday</button>
+        <button type="button" data-step="1" aria-pressed="false">Tuesday</button>
+        <button type="button" data-step="2" aria-pressed="false">Wednesday</button>
+        <button type="button" data-step="3" aria-pressed="false">Thursday</button>
+      </div>
+      <div class="demo-body">
+        <div class="pane"><div class="label">Status page · key decisions</div><div id="page"></div></div>
+        <div class="pane"><div class="label">History</div><div id="hist"></div></div>
+      </div>
+      <div class="narr" id="narr" aria-live="polite"></div>
+    </div>
+    <figcaption><b>Decisions get replaced. They never disappear.</b> When a newer session decides differently, the old decision moves to history with the reason and a link to the evidence that replaced it. The next session sees only the current call, and can still find out why it changed.</figcaption>
+  </figure>
 </section>
 
 <section class="wide">
-  <div class="col"><h2>How a session becomes current state</h2></div>
-  <ol class="steps">
-    <li><b>Start</b>The hook finds the project, from the repository root or the parent of a worktree, and injects its status page.</li>
-    <li><b>Capture</b>After each turn, a hook queues a small job. A detached worker reads the transcript from where the last capture ended.</li>
-    <li><b>Summarize</b>A small model writes the summary. Every claim must quote the digest, and specifics such as paths, hashes and numbers must appear in it.</li>
-    <li><b>Reconcile</b>The page is locked and re-read. The model proposes what to keep, add and retire. Code checks every proposal against fixed rules.</li>
-    <li><b>Retire</b>Retired items move to the project's history with their reason. The page and the history are written through a journal, so a crash finishes cleanly.</li>
-  </ol>
-</section>
-
-<section class="col">
-  <h2>Code decides what may leave the page</h2>
-  <div class="prose">
-    <p>The model is good at reading a session and proposing an update. It is not reliable at enforcing rules: the rules we left to the prompt alone broke in live runs. So the model proposes, and code decides:</p>
+  <div class="col">
+    <h2><span class="n">05</span>The model proposes. Code decides.</h2>
+    <p>A small model reads each finished session and proposes an update to the page: what to keep, what to add, what to retire. It's good at that. What it is <i>not</i> good at is following rules every single time. The rules I left to the prompt alone kept getting broken in live runs. So the model only proposes, and a plain piece of code checks every proposal before anything touches the page.</p>
   </div>
-  <ul class="lessons">
-    <li><b>Evidence or nothing.</b> A new item must cite an evidence anchor from the session note, and its wording must match the quoted text. Uncited summaries never change the page.</li>
-    <li><b>Like replaces like.</b> Only a newer decision can retire a decision. Only a next step, open question or active item can replace one of those. A side door through which a decision could be moved into "next steps" and then retired was found in review and closed.</li>
-    <li><b>Newer evidence wins.</b> Each item remembers when its evidence was recorded. A session that started earlier but finished later can still add what it learned, but it cannot retire anything newer.</li>
-    <li><b>No silent no-ops.</b> An update that adds nothing is logged and stays visibly pending; it is never counted as done. One bad item no longer blocks the good ones.</li>
-    <li><b>No omitted decisions.</b> If the summary contains a cited decision and the model leaves it out, code adds it, subject to the same rules.</li>
-    <li><b>Project facts only.</b> "Waiting for review" and "a test run is in progress" are agent process, not project state. Code refuses them.</li>
-    <li><b>Git is read live.</b> Branch, HEAD and working-tree state are read at session start and never stored, so they cannot go stale.</li>
-  </ul>
+  <figure>
+    <div class="gate">
+      <div class="ticket"><span class="stamp no">REJECTED</span>
+        <div class="t">+ "The temp folder is a project file."</div>
+        <div class="rule">No quote in the session says this. No evidence, no entry.</div></div>
+      <div class="ticket"><span class="stamp no">REJECTED</span>
+        <div class="t">- retire decision "Use Postgres"<br>&nbsp;&nbsp;because: next step "run tests"</div>
+        <div class="rule">Only a newer <i>decision</i> can retire a decision. A to-do can't overrule one.</div></div>
+      <div class="ticket"><span class="stamp no">REJECTED</span>
+        <div class="t">+ "Waiting for the reviewer's verdict."</div>
+        <div class="rule">That's what an agent is doing, not a fact about the project. Chatter stays off the page.</div></div>
+      <div class="ticket"><span class="stamp no">REJECTED</span>
+        <div class="t">- retire "ISO dates only" (Oct 24)<br>&nbsp;&nbsp;using evidence from Oct 22</div>
+        <div class="rule">Older evidence can never overwrite newer evidence, even if its session finished later.</div></div>
+      <div class="ticket"><span class="stamp yes">ADDED</span>
+        <div class="t">+ "Postgres, because multi-user needs concurrent writers" (#e2)</div>
+        <div class="rule">Cited, matches its quote, newer than what it replaces. The old decision moves to history.</div></div>
+      <div class="ticket"><span class="stamp yes">ADDED BY CODE</span>
+        <div class="t">+ decision the model forgot to include</div>
+        <div class="rule">If a session made a cited decision and the model left it out, code puts it in anyway.</div></div>
+    </div>
+    <figcaption><b>The bouncer at the door.</b> Every rejection is logged with its reason, and nothing is dropped silently. Git facts like the current branch are never stored at all. They are read live when a session starts, so they can't go stale.</figcaption>
+  </figure>
 </section>
 
 <section class="col">
-  <h2>Tests passed. Live runs failed.</h2>
-  <div class="prose">
-    <p>By the end the suite had 607 tests, and it passed at nearly every step. It still missed each defect below. Each was found by running real agents against the real vault and inspecting what the next session received:</p>
+  <h2><span class="n">06</span>Back to the wiki, sort of</h2>
+  <p>Funny thing. Once the status page settled, I looked back at Karpathy's sketch and realised I'd ended up building a version of it after all. It's just smaller, and it has a stricter editor.</p>
+  <figure>
+    <div class="map">
+      <div class="h">LLM Wiki</div><div></div><div class="h">AgentMem</div>
+      <div class="c"><b>Raw sources</b>Immutable documents the model reads but never edits</div><div class="arrow">→</div>
+      <div class="c"><b>Session notes</b>One per session, written once, quoted as evidence</div>
+      <div class="c"><b>The wiki</b>Pages the model maintains and keeps current</div><div class="arrow">→</div>
+      <div class="c"><b>Status pages</b>One per project, rewritten by the model, compiled once and kept current</div>
+      <div class="c"><b>Schema</b>A file like AGENTS.md describing how to maintain it</div><div class="arrow">→</div>
+      <div class="c"><b>Vault rules</b>The vault's own AGENTS.md</div>
+      <div class="c"><b>Lint</b>The model checks for contradictions now and then</div><div class="arrow">→</div>
+      <div class="c changed"><b>The bouncer</b>Code checks every single update, before it lands</div>
+      <div class="c"><b>Query</b>Answer questions from the wiki</div><div class="arrow">→</div>
+      <div class="c"><b>Search</b>Labelled current or historical, so an old answer never poses as a new one</div>
+    </div>
+    <figcaption><b>Same shape, one change.</b> The wiki's ideas survived. What changed is the lint step, which moved from an occasional model pass to a gate on every write. The separate claim store is still in the code, switched off.</figcaption>
+  </figure>
+</section>
+
+<section class="wide">
+  <div class="col">
+    <h2><span class="n">07</span>The bug that hid in plain sight</h2>
+    <p>The nastiest bug of the project only showed up once real agents were driving. Hundreds of tests had sailed past it. AgentMem skips trivial sessions, which is good, because nobody needs a note for "what time is it?". But it judged each <i>turn</i> on its own. Picture a session where you talk through a decision first and write the code afterwards:</p>
   </div>
-  <ul class="lessons">
-    <li><b>Short turns were never captured.</b> A turn judged trivial moved the capture cursor past its content, so a session made of short discussion turns was judged one turn at a time and never saved. This was probably losing discussion-only sessions all along.</li>
-    <li><b>A model left out a decision it was given.</b> The summary held the decision with citations. The update omitted it, and nothing noticed.</li>
-    <li><b>One weak question blocked a valid decision.</b> All-or-nothing validation rejected a whole update because one open question lacked support.</li>
-    <li><b>Search called current text unverified.</b> The search index cut snippets with an ellipsis, so the check that a hit is still on the page always failed.</li>
-    <li><b>Startup could show nothing.</b> When the first item of every section did not fit together, the startup package fell back to no items at all.</li>
-  </ul>
-  <div class="prose">
-    <p>Each fix came with a test that fails on the old code. But the tests came after the live runs, not before. Hundreds of passing unit tests did not demonstrate the product, and adjusting a test to match new behaviour twice hid a real defect. A small, fixed contract of ten observable criteria, checked live, did more than test volume.</p>
+  <figure>
+    <div class="turns">
+      <div class="turn bad"><div class="label">Turn 1</div><div>"Where should the notes live? Let's keep them in docs/."</div><div class="verdict">Trivial · skipped</div></div>
+      <div class="turn bad"><div class="label">Turn 2</div><div>"OK, write the file."</div><div class="verdict">Trivial · skipped</div></div>
+      <div class="turn good"><div class="label">Both turns together</div><div>A decision, a reason and a new file</div><div class="verdict">Worth keeping</div></div>
+    </div>
+    <figcaption><b>Death by small steps.</b> Each turn looked too small on its own, so a real session full of decisions was never saved. Now, a skipped stretch waits and gets judged again together with whatever comes next.</figcaption>
+  </figure>
+  <div class="col">
+    <p>That bug had probably been eating discussion-heavy sessions all along, and those are exactly the ones where decisions get made. No unit test caught it, because each test checked one turn. The only thing that caught it was running two real sessions end to end and noticing that the second one didn't know what the first had decided.</p>
   </div>
 </section>
 
 <section class="col">
-  <h2>What it still does not do</h2>
-  <div class="prose">
-    <p>OpenCode support rests on the shared pipeline and tests; it was not verified live in this release. A session killed before its first turn finishes is recovered only when a later hook or worker run notices it. The 112 captures from before citations were required stay visible as backlog but cannot update a page. Status items longer than 280 characters are left out of the startup package, with a pointer to the full page. These are documented and deferred until normal use shows they matter.</p>
+  <h2><span class="n">08</span>What a session sees now</h2>
+  <p>Open a new session in any of my projects, in any of the three agents, and before I type anything it already has the briefing:</p>
+  <figure>
+    <div class="tank" style="min-height:0">
+      <div class="who" style="color:#9fd8b8">new session · todo-cli · injected at start</div>
+      <div>Git (live): branch main, 4f2c9e1, clean</div>
+      <div class="q">Capture health: all sessions saved</div>
+      <div>### Active work</div><div class="q">- Overdue filter: list --overdue not wired yet (oct-24 #e4)</div>
+      <div>### Next steps</div><div class="q">- Wire list --overdue and test it (oct-24 #e6)</div>
+      <div>### Key decisions</div><div class="q">- Postgres, because multi-user needs concurrent writers (oct-23 #e2)</div>
+      <div class="q">2 more items in todo-cli.md</div>
+    </div>
+    <figcaption><b>The goldfish, briefed.</b> It's short enough to read in ten seconds. Every line can be traced to the moment it was decided, and anything older is one search away, clearly marked as history.</figcaption>
+  </figure>
+  <p>Ask it "what are we doing and what's next?" and it answers from the briefing, correctly, without opening a file. That was the whole point.</p>
+</section>
+
+<section class="wide">
+  <div class="col"><h2><span class="n">09</span>What I'd tell myself a month ago</h2></div>
+  <div class="lessons">
+    <div class="lesson"><b>Test the job, not the parts</b>Every component can pass while the product fails. The only test that mattered was a new session reading its briefing.</div>
+    <div class="lesson"><b>Let the model propose, let code decide</b>Models are great editors and unreliable rule-followers. Every rule that mattered ended up in code.</div>
+    <div class="lesson"><b>Make every claim show its receipt</b>Forcing each fact to quote its source killed invented facts. The summaries didn't get worse for it.</div>
+    <div class="lesson"><b>One place for "now"</b>Two systems that both describe the present will eventually disagree. Keep history huge and searchable, and keep "now" in one spot.</div>
   </div>
-</section>
-
-<section class="col">
-  <h2>What we would tell ourselves at the start</h2>
-  <ul class="lessons">
-    <li><b>Test the job, not the parts.</b> The question was never "can memory answer this?" It was "does a new session start with the truth?"</li>
-    <li><b>Let the model propose and code dispose.</b> Every invariant that mattered ended up in code.</li>
-    <li><b>Evidence beats summaries.</b> Requiring each claim to quote its source removed invented facts without making summaries worse.</li>
-    <li><b>One authority for now.</b> A second store that also states current facts creates a second truth. Keep history searchable, and keep "current" in one place.</li>
-    <li><b>Run it live early.</b> Every live run found something the suite had missed.</li>
-  </ul>
-</section>
-
-<section class="col">
-  <hr class="end">
-  <p class="foot">AgentMem is a few thousand lines of standard-library Python with a QMD search index and an Obsidian vault. It has 607 tests and runs on Windows 11 with Claude Code, Codex and OpenCode. The numbers come from the project's decision log and its live acceptance runs. The release documents, including the architecture, operations guide and acceptance evidence, are in <code>docs/release/</code> of the agent-memory repository. The knowledge-store evaluation and the case against adopting it are in <code>docs/llmwiki-evaluation/</code>.</p>
 </section>
 
 </article>
+
+<footer class="col">
+  AgentMem is a small Python tool that sits between Claude Code, Codex, OpenCode and an Obsidian vault. It's the memory half of my multi-agent setup. The team half is in <i>Herding three coding agents on one budget</i>. The source, the architecture notes and the full evaluation of the wiki detour live in the agent-memory repository on GitHub.
+</footer>
+
+<script>
+(function () {
+  var steps = [
+    { page: [{ t: "SQLite for storage, because it's local only", r: "mon #e3", cls: "decision new" }], hist: [],
+      narr: "Monday. A decision is made with Claude and lands on the page, citing the quote it came from." },
+    { page: [{ t: "SQLite for storage, because it's local only", r: "mon #e3", cls: "decision" }], hist: [],
+      narr: "Tuesday. A Codex session starts and is briefed. It knows about SQLite without anyone telling it." },
+    { page: [{ t: "Postgres, because multi-user needs concurrent writers", r: "wed #e2", cls: "decision new" }],
+      hist: [{ t: "SQLite for storage, because it's local only", r: "superseded by wed #e2", cls: "retired new" }],
+      narr: "Wednesday. Plans change. The newer decision replaces the old one, and the old one moves to history with its reason." },
+    { page: [{ t: "Postgres, because multi-user needs concurrent writers", r: "wed #e2", cls: "decision" }],
+      hist: [{ t: "SQLite for storage, because it's local only", r: "superseded by wed #e2", cls: "retired" }],
+      narr: "Thursday. A fresh session only sees Postgres. Ask it why we left SQLite, and it can find the answer in history." }
+  ];
+  var root = document.getElementById("demo"), page = document.getElementById("page"), hist = document.getElementById("hist"), narr = document.getElementById("narr");
+  function fill(el, items) {
+    el.textContent = "";
+    if (!items.length) { var e = document.createElement("div"); e.className = "empty"; e.textContent = "Nothing here yet."; el.appendChild(e); return; }
+    items.forEach(function (it) { var d = document.createElement("div"); d.className = "card " + it.cls; d.textContent = it.t;
+      var s = document.createElement("small"); s.textContent = it.r; d.appendChild(s); el.appendChild(d); });
+  }
+  function show(i) {
+    fill(page, steps[i].page); fill(hist, steps[i].hist); narr.textContent = steps[i].narr;
+    root.querySelectorAll("button[data-step]").forEach(function (b) { b.setAttribute("aria-pressed", String(+b.dataset.step === i)); });
+  }
+  root.querySelectorAll("button[data-step]").forEach(function (b) { b.addEventListener("click", function () { show(+b.dataset.step); }); });
+  show(0);
+})();
+</script>
+</body>
+</html>
