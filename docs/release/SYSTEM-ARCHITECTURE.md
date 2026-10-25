@@ -80,6 +80,7 @@ These are enforced in code, not left to the model:
 - **Displacement needs a reason.** Items leave the page only as superseded, resolved or outdated by live git, or as trimmed when a section is over its cap. Displaced items go to History.md with their reason.
 - **Compatible replacement.** A decision is superseded only by a decision. A question, next step or active item is replaced or resolved only by a compatible cited item.
 - **Chronology.** Each item remembers the order of its source evidence. Older evidence cannot displace, resolve or move a newer item. When a section is over its cap, the oldest evidence goes first. Overlapping sessions reconcile instead of being parked.
+- **Bounded pages.** The pending list shows at most 10 lines and a count. Older pending lines move verbatim to History.md, and retries still find their captures.
 - **No silent no-ops.** An update that adds nothing, or whose new items are all rejected, is logged with the reason and stays visibly pending. Updates that can never pass (uncited, or no new item accepted) are held from automatic retry but stay counted in the health line.
 - **Project facts only.** Agent process items ("idle", "awaiting review", "a run in progress") are refused and logged.
 - **The `updated` date only moves forward.** Failed retries never touch it.

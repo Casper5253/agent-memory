@@ -2,8 +2,8 @@
 
 **Recommendation: READY WITH LIMITATIONS.**
 
-- **Candidate.** `feature/agentmem-knowledge` at `8da52cf`, installed in `~/.agents/memory/app`. The installed copy is identical to the repository.
-- **Final gate.** The full test suite: 607 tests OK.
+- **Candidate.** `8da52cf`, plus two vault-hygiene additions (fragment retirement, bounded pending lists), published as `master` and installed in `~/.agents/memory/app`. The installed copy is identical to the repository.
+- **Final gate.** The full test suite: 607 tests OK at `8da52cf`, and 618 OK after the additions (`73c4c53`).
 - **Scope.** Local release. Nothing is pushed or deployed outside this machine.
 
 ## Architecture verdict: SOUND WITH DOCUMENTED LIMITATIONS
@@ -63,7 +63,6 @@ Live runs found defects that the unit suite did not. Each was fixed with a test 
 | Startup omits status items longer than 280 characters. The page pointer says how many more items there are. | P2 | Read the project page |
 | No command releases a retry hold, so held captures cannot be requeued without editing the manifest | P2 | Leave held, as designed; they stay visible in health |
 | 112 pre-citation captures stay held; they cannot update status pages | P2 | Their session notes remain searchable as HISTORICAL |
-| The 10 fragment project folders are routed to their parents, but their content is not merged into the parent pages (plan in `.audit/release/sweep/review.md`) | P2 | Nothing new reaches them; their notes remain searchable |
 | Some migrated status items are old legacy content until newer sessions replace them | P3 | Normal use refreshes them |
 | Older continuation notes from before F2 keep their aliased evidence references | P3 | Their session notes remain the source |
 | The `agent-memory-wp02` worktree holds access-denied temp directories and needs a manual cleanup | P3 | None needed for operation |
@@ -72,7 +71,6 @@ Live runs found defects that the unit suite did not. Each was fixed with a test 
 ## Deferred improvements
 
 - A `mem` command to release retry holds.
-- Merging fragment folder content into parent pages, using the reviewed plan.
 - Re-summarizing pre-citation captures from their transcripts as new derived evidence.
 - A live OpenCode check.
 
@@ -91,7 +89,13 @@ The knowledge store stays disabled (`knowledge_mode: "off"`) and is not resumed.
   - `.audit/release/live-G/report.md`
 - The capture log, `_meta/logs/capture.jsonl`.
 - Regression tests added in this phase: `tests/test_rel_housekeeping.py`, `test_release_f3_f5.py`, `test_release_deferred_capture.py`, `test_release_decisions.py`, and the F2 and search tests.
-- Full suite at `8da52cf`: 607 tests OK.
+- Full suite at `8da52cf`: 607 tests OK; at `73c4c53`: 618 tests OK.
+
+## Vault hygiene completed after the decision
+
+- The 10 fragment projects were retired with `tools/retire_fragments.py`. Every item was copied verbatim into its parent's History.md, and each folder was archived whole in `4-Archive/merged-fragments/`.
+- Pending lists on status pages are capped at 10 lines. Overflow moves verbatim into History.md (`tools/cap_pending.py` for existing pages). Project pages went from 844 KB to 90 KB in total.
+- Items created by the live acceptance runs were moved from the status pages to History.md with the reason `live-acceptance-test`.
 
 ## After this release
 

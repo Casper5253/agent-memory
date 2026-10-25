@@ -81,7 +81,7 @@ mem retry --session <id>      # one session
 
 `mem retry` also runs the worker.
 
-**Pending reconciliation.** A pending update is shown on the project page as `status update pending`. Re-run reconciliation for all pending captures:
+**Pending reconciliation.** A pending update is shown on the project page as `status update pending`. The page shows the 10 most recent pending lines and a count; older ones are in the project's `History.md`. Re-run reconciliation for all pending captures:
 
 ```
 mem consolidate --limit 20
