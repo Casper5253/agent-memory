@@ -19,13 +19,13 @@ DECISION = ('Record the heading level that set the section; while superseded, de
 class NoopTests(CaptureBase):
     def test_filtered_model_response_does_not_consolidate_capture(self):
         sid, _ = self.source()
-        summary = remember._summary(DECISION, 'decision', '')
+        summary = remember._summary(DECISION, 'fact', '')
         pipeline.finalize(self.cfg, self.man, self.man.get('claude', sid),
                           lambda *a, **kw: summary.copy(), fx.failing_llm)
         row = self.man.capture('claude', sid, 1)
         link = Path(row['note_path']).with_suffix('').as_posix()
         # A realistic decision using a real summary claim, but an absent file specific.
-        output = dict(sections={**status.empty(), 'decisions': [
+        output = dict(sections={**status.empty(), 'working_now': [
             dict(text=DECISION + ' in invented.py', ref=f'[[{link}#e1]]')]}, displaced=[])
         with patch.object(llm, '_run', return_value=output):
             result = pipeline.consolidate_pending(self.cfg, self.man)
@@ -39,15 +39,15 @@ class NoopTests(CaptureBase):
         page = (self.cfg.projects_dir / 'Demo App' / 'Demo App.md').read_text(encoding='utf-8')
         self.assertIn('status update pending', page)
 
-    def test_empty_or_partial_rejected_updates_stay_pending(self):
-        summary = remember._summary(DECISION, 'decision', '')
+    def test_empty_update_stays_pending_but_partial_update_applies(self):
         when = datetime(2026, 10, 24, tzinfo=timezone.utc)
         for entries in ([], [dict(text=DECISION, ref='[[demo#e1]]'), dict(text=DECISION + ' in invented.py', ref='[[demo#e1]]')]):
             with self.subTest(entries=entries):
+                summary = remember._summary(DECISION, 'decision' if entries else 'fact', '')
                 output = dict(sections={**status.empty(), 'decisions': entries}, displaced=[])
                 with patch.object(llm, '_run', return_value=output):
-                    self.assertFalse(pipeline.consolidate_into_project(
-                        self.cfg, 'Demo App', summary, 'demo', when, 'claude-haiku')[1])
+                    self.assertEqual(pipeline.consolidate_into_project(
+                        self.cfg, 'Demo App', summary, 'demo', when, 'claude-haiku')[1], bool(entries))
 
     def test_legacy_noop_marker_is_not_proof_of_accepted_status(self):
         summary = remember._summary(DECISION, 'decision', '')

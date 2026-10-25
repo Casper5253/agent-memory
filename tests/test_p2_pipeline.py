@@ -32,16 +32,20 @@ class PipelineStatusTests(StartupBase):
             self.assertEqual(notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END), state)
             self.assertIn('page not migrated', notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END))
 
-    def test_old_drop_restores_but_no_new_item_stays_pending(self):
+    def test_old_drop_restores_while_partial_update_applies(self):
         page = status.empty()
         page['purpose'] = [status.Item('i1', 'old exact claim', '[[old#e1]]')]
         self.write_state(status.render(page))
-        converter = Mock(return_value=({'sections': status.empty(), 'displaced': []}, 0))
+        converter = Mock(return_value=({'sections': {**status.empty(),
+            'active': [dict(text='new', ref='[[new#e1]]')],
+            'questions': [dict(text='Does absent.py work?', ref='[[new#e1]]')]}, 'displaced': []}, 0))
         with patch.object(pipeline, 'log') as log:
-            self.assertEqual(self.update(converter), (0.0, False))
+            self.assertEqual(self.update(converter), (0.0, True))
         self.assertTrue(any(call.kwargs.get('action') == 'restored' for call in log.call_args_list))
+        self.assertTrue(any(call.kwargs.get('action') == 'rejected' for call in log.call_args_list))
         text = (self.cfg.projects_dir / 'Alpha' / 'Alpha.md').read_text(encoding='utf-8')
         self.assertIn('old exact claim', text)
+        self.assertNotIn('status update pending', text)
 
     def test_uncited_summary_stays_pending_and_never_calls_model(self):
         converter = Mock()
