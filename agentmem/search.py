@@ -97,6 +97,17 @@ def _to_disk(cfg: Config, file_field: str) -> str:
     return file_field
 
 
+def _shows_line(line_text, excerpt):
+    """True when the excerpt shows the whole hit line, or ends partway through it (QMD cuts snippets)."""
+    if not line_text:
+        return False
+    if line_text in excerpt:
+        return True
+    head = line_text[:40]
+    start = excerpt.rfind(head)
+    return start >= 0 and line_text.startswith(excerpt[start:])
+
+
 def _located_label(path, label, snippet, line=None):
     if _project_history(path):
         return 'HISTORICAL'
@@ -105,11 +116,11 @@ def _located_label(path, label, snippet, line=None):
     try:
         text = Path(path).read_text(encoding="utf-8")
         normalized = " ".join(text.split())
-        excerpt = " ".join(snippet.split())
+        excerpt = re.sub(r"\s*(?:\.\.\.|…)\s*$", "", " ".join(snippet.split()))
         position, span_length = -1, 0
         if isinstance(line, int) and line > 0:
             lines = text.splitlines()
-            if line <= len(lines) and lines[line - 1].strip() and " ".join(lines[line - 1].split()) in excerpt:
+            if line <= len(lines) and _shows_line(" ".join(lines[line - 1].split()), excerpt):
                 position = len(" ".join("\n".join(lines[:line - 1]).split())) + 1
         if position < 0:
             # No usable line number (or a stale one): locate the excerpt in the full text, once.
