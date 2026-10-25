@@ -12,6 +12,7 @@ from urllib.parse import unquote
 
 from . import policy as p
 from .models import KnowledgeError
+from ..fsutil import NO_WINDOW
 
 
 @dataclass(frozen=True)
@@ -271,7 +272,7 @@ def repo_head(roots):
     if len(roots) != 1:
         return None
     try:
-        result = subprocess.run(["git", "-C", roots[0], "rev-parse", "HEAD"], capture_output=True, timeout=.5)
+        result = subprocess.run(["git", "-C", roots[0], "rev-parse", "HEAD"], capture_output=True, timeout=.5, creationflags=NO_WINDOW)
         head = result.stdout.decode("ascii").strip()
         return head if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", head) else None
     except (OSError, ValueError, subprocess.TimeoutExpired):

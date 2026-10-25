@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 from .config import CAPTURE_ENV
+from .fsutil import NO_WINDOW
 
 CONTEXT_CAP = 4000
 GIT_TIMEOUT_S = 2
@@ -28,7 +29,7 @@ def _git_line(cwd: str) -> str:
 
     def run(*args):
         try:
-            result = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
+            result = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_S, creationflags=NO_WINDOW)
         except (OSError, subprocess.TimeoutExpired):
             return None
         return result.stdout.strip() if result.returncode == 0 else None

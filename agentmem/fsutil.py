@@ -5,6 +5,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+# Child processes never open a console window, whatever console the caller has.
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
 if os.name == "nt":
     import msvcrt
 else:

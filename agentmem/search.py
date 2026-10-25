@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .config import Config
 from . import notes
+from .fsutil import NO_WINDOW
 
 COLLECTIONS = {
     "vault-projects": ("1-Projects", "CURRENT", "Current, reconciled state of active projects. Authoritative for 'what is true now'."),
@@ -40,7 +41,7 @@ def _qmd(args: list, timeout: int = 120, index: str = "") -> subprocess.Complete
     if base is None:
         raise FileNotFoundError("qmd not installed")
     env = dict(os.environ, NO_COLOR="1")
-    return subprocess.run(base + (["--index", index] if index else []) + args, capture_output=True, timeout=timeout, env=env)
+    return subprocess.run(base + (["--index", index] if index else []) + args, capture_output=True, timeout=timeout, env=env, creationflags=NO_WINDOW)
 
 
 def ensure_collections(cfg: Config) -> list:

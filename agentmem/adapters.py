@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from .config import CAPTURE_ENV
+from .fsutil import NO_WINDOW
 
 WRITE_TOOLS = {"edit", "write", "multiedit", "notebookedit", "apply_patch", "patch"}
 _INJECTED = re.compile(r"^\s*(?:<environment_context>|<user_instructions>|# AGENTS\.md instructions|<INSTRUCTIONS>|"
@@ -252,7 +253,7 @@ def export_opencode(session_id: str, timeout: int = 120) -> dict:
     if not exe:
         raise FileNotFoundError("opencode CLI not found")
     out = subprocess.run([exe, "export", session_id, "--pure"], capture_output=True, timeout=timeout,
-                         env=env, check=True)
+                         env=env, check=True, creationflags=NO_WINDOW)
     text = out.stdout.decode("utf-8", errors="replace")
     return json.loads(text[text.index("{"):])
 

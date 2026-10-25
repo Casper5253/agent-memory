@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 from .fsutil import atomic_write, file_lock
 from .logutil import log
+from .fsutil import NO_WINDOW
 
 HOME = Path.home()
 PROJECTS_ROOT = HOME / "Documents" / "Projects"
@@ -55,7 +56,7 @@ def repo_head(cwd):
     if not cwd or not Path(cwd).is_dir():
         return None
     try:
-        result = subprocess.run(["git", "-C", str(cwd), "rev-parse", "HEAD"], capture_output=True, timeout=0.5)
+        result = subprocess.run(["git", "-C", str(cwd), "rev-parse", "HEAD"], capture_output=True, timeout=0.5, creationflags=NO_WINDOW)
         head = result.stdout.decode("ascii").strip()
         return head if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", head) else None
     except (OSError, subprocess.TimeoutExpired, UnicodeError):

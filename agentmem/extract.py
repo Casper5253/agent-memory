@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from .adapters import Transcript
 from .redact import is_sensitive_path, redact
+from .fsutil import NO_WINDOW
 
 _DECISION = re.compile(r"(?i)\b(?:decided|decision|we(?:'ll| will) (?:use|go with|keep)|going with|chose|chosen|"
                        r"settled on|switch(?:ed|ing)? to|instead of|recommend(?:ation)?:|verdict)\b")
@@ -116,7 +117,7 @@ def _gate(d: Digest, min_prompts: int, min_chars: int) -> tuple:
 def _git(t: Transcript, *args: str) -> str | None:
     """Output of a git command run in the session directory, or None when git cannot answer (e.g. no commits yet)."""
     try:
-        result = subprocess.run(["git", "-C", t.cwd, *args], capture_output=True, text=True, timeout=4)
+        result = subprocess.run(["git", "-C", t.cwd, *args], capture_output=True, text=True, timeout=4, creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return None
     return result.stdout if result.returncode == 0 else None

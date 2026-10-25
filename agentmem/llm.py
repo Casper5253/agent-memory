@@ -18,6 +18,7 @@ import tempfile
 from .config import CAPTURE_ENV
 from .grounding import grounded
 from .redact import redact
+from .fsutil import NO_WINDOW
 
 
 class LLMError(Exception):
@@ -81,7 +82,7 @@ def _run(system: str, prompt: str, model: str, timeout: int) -> dict:
     try:
         with tempfile.TemporaryDirectory(prefix="agentmem-llm-") as neutral_dir:
             out = subprocess.run(args, input=prompt.encode("utf-8"), capture_output=True, timeout=timeout,
-                                 cwd=neutral_dir, env=env, shell=False)
+                                 cwd=neutral_dir, env=env, shell=False, creationflags=NO_WINDOW)
     except FileNotFoundError as e:
         raise LLMError("claude CLI not found") from e
     except subprocess.TimeoutExpired as e:

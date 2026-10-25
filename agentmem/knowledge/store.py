@@ -15,6 +15,7 @@ from . import policy as p
 from .models import (ApplyResult, BackupResult, CaptureIdentity, ImportResult,
                      KnowledgeError, ReviewRequest, ValidationError)
 from ..redact import redact
+from ..fsutil import NO_WINDOW
 
 SCHEMA_VERSION = 1
 
@@ -140,7 +141,7 @@ def _git_safe(path):
     command = ["git", "-c", "core.excludesFile=" + os.devnull, "-C", str(parent)]
     try:
         probe = subprocess.run(command + ["rev-parse", "--is-inside-work-tree"],
-                               capture_output=True, timeout=2, env=env)
+                               capture_output=True, timeout=2, env=env, creationflags=NO_WINDOW)
         if probe.returncode:
             # An existing .git marker makes an unreadable repository unsafe.
             if any((ancestor / ".git").exists() for ancestor in (parent, *parent.parents)):
@@ -149,7 +150,7 @@ def _git_safe(path):
         if probe.stdout.strip() != b"true":
             return
         ignored = subprocess.run(command + ["check-ignore", "--quiet", "--", str(path)],
-                                 capture_output=True, timeout=2, env=env)
+                                 capture_output=True, timeout=2, env=env, creationflags=NO_WINDOW)
         if ignored.returncode != 0:
             raise KnowledgeError("unignored_database")
     except (OSError, subprocess.TimeoutExpired):

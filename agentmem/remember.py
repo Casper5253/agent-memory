@@ -21,6 +21,7 @@ from .fsutil import atomic_write, create_once, file_lock
 from .logutil import log
 from .manifest import Manifest
 from .redact import redact, redact_session_note
+from .fsutil import NO_WINDOW
 
 KINDS = ("fact", "decision", "preference", "next")
 REMEMBERED = ("3-Resources", "Remembered.md")
@@ -147,7 +148,7 @@ def current_session(agent: str = "", cwd: str = "") -> "tuple[str, str, str] | N
     if agent in ("", "opencode") and shutil.which("opencode"):
         try:
             out = subprocess.run([shutil.which("opencode"), "session", "list", "--format", "json", "-n", "5", "--pure"],
-                                 capture_output=True, timeout=60, cwd=cwd)
+                                 capture_output=True, timeout=60, cwd=cwd, creationflags=NO_WINDOW)
             rows = json.loads(out.stdout.decode("utf-8", "replace") or "[]")
             rows = [r for r in rows if os.path.normcase(r.get("directory", "")) == os.path.normcase(cwd)] or rows
             if rows and (agent == "opencode" or time.time() * 1000 - rows[0].get("updated", 0) < 15 * 60_000):
