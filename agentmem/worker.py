@@ -95,12 +95,14 @@ def spawn_detached(extra_args=()) -> None:
     """Start `run.py worker` in the background without a console window; never blocks the hook."""
     runner = Path(__file__).resolve().parent.parent / "run.py"
     exe = Path(sys.executable)
-    pyw = exe.with_name("pythonw.exe")
-    cmd = [str(pyw if pyw.exists() else exe), "-I", str(runner), "worker", *extra_args]
+    if exe.name.lower() == "pythonw.exe":
+        exe = exe.with_name("python.exe")
+    cmd = [str(exe), "-I", str(runner), "worker", *extra_args]
     env = dict(os.environ, **{CAPTURE_ENV: "1"})
     kwargs = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, close_fds=True)
     if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED | NEW_PROCESS_GROUP | NO_WINDOW
+        # A hidden console, not none: a console-less worker makes every git, qmd and claude child open a window.
+        kwargs["creationflags"] = 0x00000200 | 0x08000000  # NEW_PROCESS_GROUP | NO_WINDOW
     else:
         kwargs["start_new_session"] = True
     subprocess.Popen(cmd, **kwargs)
