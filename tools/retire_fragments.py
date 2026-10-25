@@ -218,8 +218,9 @@ def apply_plan(plan):
     with ExitStack() as stack:
         stack.enter_context(file_lock(child(vault, '_meta/locks/worker.lock')))
         projects = {item[key] for item in plan['fragments'] for key in ('parent', 'fragment')}
-        for project in sorted(projects):
-            stack.enter_context(file_lock(child(vault, f'_meta/locks/project-{notes.slug(project, 12)}.lock')))
+        # Names can share a lock file ("Herdr Orchestration", "herdr-orchestration"); taking one twice deadlocks.
+        for name in sorted({notes.slug(project, 12) for project in projects}):
+            stack.enter_context(file_lock(child(vault, f'_meta/locks/project-{name}.lock')))
         db = database(vault, writable=True)
         written, moved = {}, []
         try:
