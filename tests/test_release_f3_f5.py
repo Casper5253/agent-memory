@@ -32,6 +32,24 @@ class ReleaseFixTests(StartupBase):
 
         self.assertEqual("CURRENT", label)
 
+    def test_multi_line_state_excerpt_cut_with_ellipsis_is_current(self):
+        self.write_state(status.render({
+            **status.empty(),
+            "decisions": [
+                status.Item("a", "Keep the status page as the only current-state record", "migration:2026-10-24"),
+                status.Item("b", "Live-check notes live in .audit/ rather than docs/; they are local evidence", "migration:2026-10-24"),
+            ],
+        }))
+        path = self.cfg.vault / "1-Projects" / "Alpha" / "Alpha.md"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        line = next(n for n, text in enumerate(lines, 1) if "Live-check notes" in text)
+        snippet = ("- Keep the status page as the only current-state record. migration:2026-10-24 "
+                   "- Live-check notes live in .audit/ rather than docs/; they are loc...")
+
+        label = search._located_label(path, "CURRENT", snippet, line=line)
+
+        self.assertEqual("CURRENT", label)
+
     def test_absent_excerpt_with_stale_hit_line_stays_unverified(self):
         self.write_state(status.render({
             **status.empty(),
