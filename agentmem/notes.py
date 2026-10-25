@@ -11,6 +11,9 @@ from .redact import redact
 STATE_BEGIN, STATE_END = "<!-- agentmem:state:begin -->", "<!-- agentmem:state:end -->"
 SESS_BEGIN, SESS_END = "<!-- agentmem:sessions:begin -->", "<!-- agentmem:sessions:end -->"
 PENDING_BEGIN, PENDING_END = "<!-- agentmem:pending:begin -->", "<!-- agentmem:pending:end -->"
+PENDING_CAP = 10
+PENDING_COUNT = '<!-- agentmem:pending-count -->'
+PENDING_EVENT = re.compile(r'(?m)^<!-- agentmem:pending-(overflow|resolved):([0-9a-f]{64}) -->\n')
 EMPTY_STATE = "### Current state\n- none yet\n\n### Active decisions\n- none\n\n### Superseded decisions\n- none\n\n### Open questions and next steps\n- none"
 
 
@@ -249,6 +252,55 @@ def project_history_path(path: Path) -> Path:
     return path.with_name("History.md")
 
 
+def pending_overflow(history: str) -> dict:
+    """Fold the keyed history events into the active overflow queue."""
+    active = {}
+    for event in PENDING_EVENT.finditer(history):
+        action, key = event.groups()
+        if action == 'resolved':
+            active.pop(key, None)
+        else:
+            end = history.find('\n', event.end())
+            line = history[event.end():end if end >= 0 else len(history)]
+            if hashlib.sha256(line.encode('utf-8')).hexdigest() != key:
+                raise ValueError('pending overflow record hash differs')
+            active[key] = line
+    return active
+
+
+def pending_lines(path: Path, text=None, history=None) -> list:
+    """Read pending work independently of the bounded page projection."""
+    if text is None:
+        text = path.read_text(encoding='utf-8')
+    if history is None:
+        file = project_history_path(path)
+        history = file.read_text(encoding='utf-8') if file.exists() else ''
+    visible = [line for line in get_block(text, PENDING_BEGIN, PENDING_END).splitlines()
+               if line.strip() and PENDING_COUNT not in line]
+    return list(dict.fromkeys([*pending_overflow(history).values(), *visible]))
+
+
+def project_pending(path, text, project, today, lines, history):
+    """Plan history events and a bounded view together for the existing write journal."""
+    previous = pending_overflow(history)
+    overflow = {hashlib.sha256(line.encode('utf-8')).hexdigest(): line for line in lines[:-PENDING_CAP]}
+    revision = hashlib.sha256(history.encode('utf-8')).hexdigest()
+    records = []
+    for key in sorted(previous.keys() - overflow.keys()):
+        records.append(dict(key=f'pending-resolved:{revision}:{key}',
+                            text=f'<!-- agentmem:pending-resolved:{key} -->'))
+    for key, line in overflow.items():
+        if key not in previous:
+            records.append(dict(key=f'pending-overflow:{revision}:{key}',
+                text=f'- {today} [pending-overflow]\n<!-- agentmem:pending-overflow:{key} -->\n{line}',
+                verbatim=True))
+    visible = lines[-PENDING_CAP:]
+    if overflow:
+        folder = path.parent.parent.name
+        visible += [f'- {len(overflow)} more pending items in [[{folder}/{project}/History|History.md]]. {PENDING_COUNT}']
+    return set_block(text, PENDING_BEGIN, PENDING_END, '\n'.join(visible)), records
+
+
 def state_order(text: str) -> tuple:
     header = text.split("\n---\n", 1)[0] if text.startswith("---\n") else ""
     match = re.search(r"(?m)^agentmem_state_order: (\d+):(\d+)$", header)
@@ -307,7 +359,9 @@ def append_project_history(path: Path, project: str, date: str, session_link: st
     for record in records or []:
         marker = '<!-- agentmem:history:' + hashlib.sha256(record['key'].encode('utf-8')).hexdigest() + ' -->'
         if marker not in text and not any(marker in entry for entry in additions):
-            additions.append(marker + '\n' + redact(record['text'], email_allowlist=email_allowlist))
+            # Overflow moves already-persisted lines; new capture text is redacted before projection.
+            body = record['text'] if record.get('verbatim') is True else redact(record['text'], email_allowlist=email_allowlist)
+            additions.append(marker + '\n' + body)
     if additions:
         atomic_write(path, text.rstrip("\n") + "\n\n" + "\n".join(additions) + "\n")
 
@@ -332,15 +386,33 @@ def recover_status_update(path):
     except (ValueError, KeyError, TypeError) as error:
         refused = journal.with_name(journal.name + '.refused-' + datetime.now().strftime('%Y%m%dT%H%M%S%f'))
         journal.rename(refused)
-        text = ensure_blocks(current)
-        pending = get_block(text, PENDING_BEGIN, PENDING_END)
         line = f'- [ ] status replay refused ({error}); review {refused.name}'
-        atomic_write(path, set_block(text, PENDING_BEGIN, PENDING_END, '\n'.join(filter(None, (pending, line)))))
+        update_project_note(path, path.stem, datetime.now().strftime('%Y-%m-%d'), pending_add=[line], touch=False)
         return refused
     append_project_history(project_history_path(path), plan['project'], plan['date'], '', [], '',
-                           records=plan['records'])
+                           records=plan['records'], email_allowlist=plan.get('email_allowlist'))
     atomic_write(path, plan['after'])
     journal.unlink()
+
+
+def _commit_project_update(path, before, after, records, project, today, email_allowlist=None, journal=False):
+    if journal or records:
+        plan = dict(before=before, after=after, records=records, project=project, date=today,
+                    email_allowlist=email_allowlist)
+        atomic_write(_status_journal(path), json.dumps(plan, ensure_ascii=False))
+        recover_status_update(path)
+    else:
+        atomic_write(path, after)
+
+
+def cap_project_pending(path: Path, project: str, today: str):
+    """Caller holds the project lock. Move already-persisted text without reprocessing it."""
+    recover_status_update(path)
+    before = path.read_text(encoding='utf-8')
+    history_path = project_history_path(path)
+    history = history_path.read_text(encoding='utf-8') if history_path.exists() else ''
+    after, records = project_pending(path, before, project, today, pending_lines(path, before, history), history)
+    _commit_project_update(path, before, after, records, project, today)
 
 
 def update_project_note(path: Path, project: str, today: str, *, state=None, pending_add=None, pending_clear=None,
@@ -393,20 +465,19 @@ def update_project_note(path: Path, project: str, today: str, *, state=None, pen
             text = touch_state_order(text, state_order_value)
         if evidence_order_values is not None:
             text = touch_evidence_orders(text, evidence_order_values)
-    if pending_add or pending_clear:
-        lines = [l for l in get_block(text, PENDING_BEGIN, PENDING_END).splitlines() if l.strip()]
-        if pending_clear:
-            lines = [l for l in lines if pending_clear not in l]
-        lines += [l for l in pending_add or [] if l not in lines]  # idempotent on retry
-        text = set_block(text, PENDING_BEGIN, PENDING_END, "\n".join(lines))
+    history_path = project_history_path(path)
+    history = history_path.read_text(encoding='utf-8') if history_path.exists() else ''
+    lines = pending_lines(path, text, history)
+    if pending_clear:
+        lines = [line for line in lines if pending_clear not in line]
+    lines += [redact(line, email_allowlist=email_allowlist) for line in pending_add or []]
+    lines = list(dict.fromkeys(lines))
+    text, overflow_records = project_pending(path, text, project, today, lines, history)
+    records += overflow_records
     if session_line:
         lines = [l for l in get_block(text, SESS_BEGIN, SESS_END).splitlines() if l.strip() and session_link not in l]
         text = set_block(text, SESS_BEGIN, SESS_END, "\n".join(([session_line] + lines)[:15]))
     text = redact(text, email_allowlist=email_allowlist)
     after = touch_updated(text, today) if touch else text
-    if status_result is not None:
-        plan = dict(before=before, after=after, records=records, project=project, date=today)
-        atomic_write(_status_journal(path), json.dumps(plan, ensure_ascii=False))
-        recover_status_update(path)
-    else:
-        atomic_write(path, after)
+    _commit_project_update(path, before, after, records, project, today, email_allowlist,
+                           journal=status_result is not None)

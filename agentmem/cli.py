@@ -127,7 +127,7 @@ def cmd_projects(args):
                 try:
                     state = notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END).split("### Active decisions")[0]
                     state = state.replace("### Current state", "").strip()
-                    pend = len([l for l in notes.get_block(text, notes.PENDING_BEGIN, notes.PENDING_END).splitlines() if l.strip()])
+                    pend = len(notes.pending_lines(note, text))
                 except ValueError:
                     state = "(no managed state block)"
             print(f"## {proj['name']}  [{proj.get('status','active')}]  last session: {last[0]['date'] if last else '-'}"
