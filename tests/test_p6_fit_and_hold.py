@@ -55,7 +55,11 @@ class NoProgressHoldTests(unittest.TestCase):
         def accepts_nothing(state, summary, link, date, timeout=0):
             return dict(sections=status.empty(), displaced=[]), 0.0
 
-        self.capture("no-progress", fx.fake_summarize, fx.failing_llm)
+        def facts_only(digest, timeout=0):
+            summary = fx.fake_summarize(digest, timeout)
+            summary['decisions'] = []
+            return summary
+        self.capture("no-progress", facts_only, fx.failing_llm)
         result = pipeline.consolidate_pending(self.cfg, self.man, fx.fake_summarize, accepts_nothing)
 
         self.assertEqual({"consolidated": 0, "still_pending": 1}, result)

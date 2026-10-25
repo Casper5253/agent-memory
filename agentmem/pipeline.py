@@ -516,8 +516,11 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                 source_orders = notes.evidence_orders(text, old)
                 if isinstance(result, status.Result):
                     result = status.proposed_update(result, old)
-                result = status.reconcile(old, result, status.evidence_support(summary, link),
+                allowed = status.evidence_support(summary, link)
+                result, decision_events = status.include_summary_decisions(old, result, summary, allowed)
+                result = status.reconcile(old, result, allowed,
                                           source_orders=source_orders, new_order=order)
+                result.events.extend(decision_events)
                 retained_orders = {item.ref: source_orders.get(item.ref, order)
                                    for items in result.sections.values() for item in items}
                 if ksources._privacy_for(cfg, project) == "excluded":
@@ -528,12 +531,10 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                         result.events.append(('rejected', f'{displaced.section}: new item removed ({displaced.reason})'))
                 for action, item in result.events:
                     log(cfg, 'status-item', project=project, note=link, action=action, item=item)
-                allowed = status.evidence_support(summary, link)
                 accepted = any(item.ref in allowed and status._matches_claim(item.text, item.ref, allowed)
                                for items in result.sections.values() for item in items)
-                if any(action == 'dropped' for action, _ in result.events) or not accepted:
-                    reason = ('new status item rejected by validation' if any(action == 'dropped' for action, _ in result.events)
-                              else 'no current item cites accepted new evidence (model omission or retention)')
+                if not accepted:
+                    reason = 'no current item cites accepted new evidence (model omission or retention)'
                     raise NoProgress(f'{reason}; new status items not accepted, reconciliation remains pending')
                 notes.update_project_note(note_path, project, date, status_result=result,
                                           update_key=f'{capture_id or link}:{order[0]}:{order[1]}', pending_clear=pending_ref,

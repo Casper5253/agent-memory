@@ -312,6 +312,34 @@ def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
     return result
 
 
+def include_summary_decisions(old, update, summary, allowed):
+    """Complete a valid proposal with cited decisions the model omitted."""
+    if (not isinstance(update, dict) or not isinstance(update.get('sections'), dict)
+            or set(update['sections']) != set(SECTIONS)
+            or any(not isinstance(items, list) for items in update['sections'].values())):
+        return update, []
+    update = copy.deepcopy(update)
+    present = [(item.text, item.ref) for item in old['decisions']]
+    for entry in update['sections']['decisions']:
+        entry = _decision_entry(entry, allowed)
+        if not _entry_problem(entry, allowed) and not agent_process(entry['text']):
+            present.append((entry['text'], entry['ref']))
+    events = []
+    for decision in summary.get('decisions') or []:
+        text = decision.get('decision') if isinstance(decision, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            continue
+        key = _claim_key(text)
+        ref = next((e.decision_ref for e in allowed.values() if isinstance(e, Evidence)
+                    and e.decision and _claim_key(e.decision) == key and e.decision_ref in allowed), '')
+        if not ref or any(ref == existing_ref or key == _claim_key(existing_text) for existing_text, existing_ref in present):
+            continue
+        update['sections']['decisions'].append(dict(text=text.strip(), ref=ref))
+        present.append((text, ref))
+        events.append(('added-omitted-decision', ref))
+    return update, events
+
+
 def proposed_update(result, old):
     """Revalidate typed model results against the current page and source orders."""
     if result.proposal is not None:
