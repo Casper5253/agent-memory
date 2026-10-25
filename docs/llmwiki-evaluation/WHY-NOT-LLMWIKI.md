@@ -12,6 +12,8 @@ Sources are local unless noted. `.audit/` is never committed. It holds the run l
 
 ## 1. What "LLMWiki" means here
 
+The pattern comes from Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). A model maintains a persistent Markdown wiki over immutable raw sources, guided by a schema file, through ingest, query and lint operations.
+
 The blueprint (`docs/archive/llmwiki-blueprint/00-EXECUTIVE-DECISION.md`) did not plan a full LLM-written wiki. It explicitly rejected that as direction C. The plan was direction B: add selected LLMWiki capabilities to AgentMem. That means a project knowledge store of evidence-linked claims, with explicit decision succession and a context package for each project.
 
 That store is built. It is about 2,600 lines in `agentmem/knowledge/`, installed and switched off with `knowledge_mode: "off"` (Measured). In the tests it is called arm K0. The old search is B1.
