@@ -30,6 +30,7 @@ _ASSIGN = re.compile(
     (?P<val>\[REDACTED\]|"[^"\n]{4,}"|'[^'\n]{4,}'|[^\s,;}\]]{6,})
     """
 )
+# Userinfo >255 chars is a rare miss vs unbounded; accepted for linearity.
 _URL_CREDS = re.compile(r"(?P<scheme>[a-z][a-z0-9+.\-]{0,31}://)[^\s:/@]{1,255}:[^\s@/]{1,255}@", re.I)
 _CANDIDATE = re.compile(r"[A-Za-z0-9+/_\-]{32,}={0,2}")
 _UUID = re.compile(r"^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$", re.I)

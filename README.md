@@ -51,7 +51,7 @@ mem pause | mem resume
 
 ```
 python -I -m unittest discover -s tests       # about 600 tests, no network; prove capture or reconciliation changes with a live session too
-python -m pytest tests -n 4 -p no:cacheprovider --basetemp=.audit/tmp/pytest   # faster (~90s vs ~3.5min); needs pytest-xdist
+python -m pytest tests -n 4 -p no:cacheprovider --basetemp=.audit/tmp/pytest   # faster (~90s); needs `pip install pytest-xdist`
 python -I install.py                           # redeploy app, hooks, plugin, skills, index (idempotent, backs up configs)
 ```
 
