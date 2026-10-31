@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools import knowledge_grader
-from tools.knowledge_grader import grade_query, lifecycle_check, UNCERTAINTY, RESOLUTION
+from tools.knowledge_grader import grade_query, lifecycle_check
 from agentmem.manifest import Manifest
 
 

@@ -13,7 +13,6 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
 from .config import CAPTURE_ENV
 from .fsutil import NO_WINDOW
