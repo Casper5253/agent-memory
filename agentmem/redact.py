@@ -23,13 +23,14 @@ _PATTERNS = [
 # key = value / key: value / "key": "value" for credential-looking keys: keep the key, mask the value.
 _ASSIGN = re.compile(
     r"""(?ix)
-    (?P<key>["']?[A-Za-z0-9_.\-]*(?:password|passwd|pwd|secret|token|api[_\-]?key|access[_\-]?key|
+    # {0,64} bounds the key prefix; unbounded * goes quadratic on long unbroken tokens.
+    (?P<key>["']?[A-Za-z0-9_.\-]{0,64}(?:password|passwd|pwd|secret|token|api[_\-]?key|access[_\-]?key|
         private[_\-]?key|client[_\-]?secret|auth(?:orization)?|credential|cookie|session[_\-]?id)["']?)
     (?P<sep>\s*[:=]\s*)
     (?P<val>\[REDACTED\]|"[^"\n]{4,}"|'[^'\n]{4,}'|[^\s,;}\]]{6,})
     """
 )
-_URL_CREDS = re.compile(r"(?P<scheme>[a-z][a-z0-9+.\-]*://)[^\s:/@]+:[^\s@/]+@", re.I)
+_URL_CREDS = re.compile(r"(?P<scheme>[a-z][a-z0-9+.\-]{0,31}://)[^\s:/@]{1,255}:[^\s@/]{1,255}@", re.I)
 _CANDIDATE = re.compile(r"[A-Za-z0-9+/_\-]{32,}={0,2}")
 _UUID = re.compile(r"^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$", re.I)
 _HEX = re.compile(r"^[0-9a-f]+$", re.I)
@@ -49,7 +50,7 @@ _CARD = re.compile(r"(?<![A-Z0-9])(?:\d[ -]?){12,18}\d(?![A-Z0-9])", re.I)
 _BSN = re.compile(r"(?<![A-Z0-9.\-])[1-9]\d{8}(?![A-Z0-9.\-])", re.I)
 _PHONE = re.compile(r"(?<![\w+])\+(?:\d[ -]?){7,14}\d(?!\d)")
 _NO_REPLY = re.compile(r"(?:(?:no-?reply|donotreply|do-not-reply)(?:[+.][^@]*)?@|[^@]*@(?:[^@]*\.)?noreply\.)", re.I)
-_EMAIL = re.compile(r"(?<![\w.+/@-])[A-Z0-9][A-Z0-9.!#$%&'*+/=?^_`{|}~-]*@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)*\.[A-Z]{2,}(?![A-Z])", re.I)
+_EMAIL = re.compile(r"(?<![\w.+/@-])[A-Z0-9][A-Z0-9.!#$%&'*+/=?^_`{|}~-]{0,63}@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)*\.[A-Z]{2,}(?![A-Z])", re.I)
 _BSN_KEYWORD = re.compile(r"\b(?:bsn|burgerservicenummer|sofi)\b", re.I)
 _IBAN_LENGTHS = {"NL": 18, "DE": 22, "GB": 22, "BE": 16, "FR": 27}
 _FRONTMATTER_SESSION = re.compile(
