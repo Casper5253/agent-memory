@@ -103,6 +103,11 @@ class Manifest:
         return self.db.execute("SELECT agent, session_id, event, ts FROM hook_events WHERE agent=? AND session_id=?"
                                " ORDER BY id", (agent, session_id)).fetchall()
 
+    def last_event_ts(self, agent, session_id, event):
+        row = self.db.execute("SELECT max(ts) FROM hook_events WHERE agent=? AND session_id=? AND event=?",
+                              (agent, session_id, event)).fetchone()
+        return row[0] or 0
+
     def unended(self):
         """Sessions whose latest recorded hook event is not an end: started (or resumed) and never closed."""
         return self.db.execute(

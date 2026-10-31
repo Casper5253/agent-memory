@@ -6,6 +6,7 @@ python -I install.py --uninstall     remove hooks/plugin/shims (vault, app and d
 """
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,8 @@ VAULT = H / "Documents" / "Notes" / "FDE Knowledge"
 CLAUDE_SETTINGS = H / ".claude" / "settings.json"
 CODEX_HOOKS = H / ".codex" / "hooks.json"
 OPENCODE_PLUGIN = H / ".config" / "opencode" / "plugins" / "agentmem.js"
+DEVIN_CONFIG = (H / "AppData" / "Roaming" / "devin" / "config.json") if os.name == "nt" \
+    else (H / ".config" / "devin" / "config.json")
 SKILLS_LOCAL = H / ".agents" / "pstack" / "local"
 MARK = "agents/memory/app/run.py"          # identifies our hook entries
 LEGACY_MARK = "obsidian-session-sync"       # retired Codex capture hooks we replace
@@ -111,6 +114,26 @@ def wire_codex(remove=False):
     print(f"codex hooks {'removed' if remove else 'installed'}: {CODEX_HOOKS} (Codex asks once to trust changed hooks)")
 
 
+def wire_devin(remove=False):
+    """Devin reads a "hooks" key in its user config; the .claude hook it also picks up remaps itself
+    to agent=devin via env detection, so this entry mainly guards read_config_from.claude being off."""
+    backup(DEVIN_CONFIG)
+    data = json.loads(DEVIN_CONFIG.read_text(encoding="utf-8")) if DEVIN_CONFIG.exists() else {}
+    hooks = data.setdefault("hooks", {})
+    for event in ("SessionStart", "Stop", "PostCompaction", "SessionEnd"):
+        groups = _strip(hooks.get(event))
+        if not remove:
+            groups.append({"hooks": [{"type": "command", "command": _hook_cmd("devin"), "timeout": 15}]})
+        if groups:
+            hooks[event] = groups
+        else:
+            hooks.pop(event, None)
+    if not hooks:
+        data.pop("hooks")
+    DEVIN_CONFIG.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    print(f"devin hooks {'removed' if remove else 'installed'}: {DEVIN_CONFIG}")
+
+
 def wire_opencode(remove=False):
     if remove:
         OPENCODE_PLUGIN.unlink(missing_ok=True)
@@ -153,6 +176,7 @@ def main():
     if a.uninstall:
         wire_claude(remove=True)
         wire_codex(remove=True)
+        wire_devin(remove=True)
         wire_opencode(remove=True)
         for s in ("mem.cmd", "mem"):
             (BIN / s).unlink(missing_ok=True)
@@ -166,6 +190,7 @@ def main():
     if not a.no_hooks:
         wire_claude()
         wire_codex()
+        wire_devin()
         wire_opencode()
     install_skills()
     if not a.no_index:

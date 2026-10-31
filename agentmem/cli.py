@@ -196,7 +196,10 @@ def _detect_agent() -> str:
         return "claude"
     if os.environ.get("CODEX_THREAD_ID"):
         return "codex"
-    return "opencode" if os.environ.get("OPENCODE") or os.environ.get("OPENCODE_SESSION") else "user"
+    if os.environ.get("OPENCODE") or os.environ.get("OPENCODE_SESSION"):
+        return "opencode"
+    from .hook import is_devin_env
+    return "devin" if is_devin_env() else "user"
 
 
 def cmd_capture(args):
@@ -352,7 +355,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_index)
 
     s = sub.add_parser("capture", help="capture now: a given session, or everything ready")
-    s.add_argument("--agent", choices=["claude", "codex", "opencode"])
+    s.add_argument("--agent", choices=["claude", "codex", "opencode", "devin"])
     s.add_argument("--session"), s.add_argument("--transcript"), s.add_argument("--cwd")
     s.add_argument("--current", action="store_true", help="capture the agent session running this command, now")
     s.add_argument("--budget", type=float, default=900)
@@ -364,7 +367,7 @@ def main(argv=None):
     s.add_argument("--why", help="rationale (for decisions)")
     s.add_argument("--project", help="override automatic routing")
     s.add_argument("--session", action="store_true", help="also sync the current session")
-    s.add_argument("--agent", choices=["claude", "codex", "opencode"])
+    s.add_argument("--agent", choices=["claude", "codex", "opencode", "devin"])
     s.add_argument("--cwd")
     s.set_defaults(fn=cmd_remember)
 
@@ -381,11 +384,11 @@ def main(argv=None):
     sub.add_parser("doctor", help="health checks").set_defaults(fn=cmd_doctor)
 
     s = sub.add_parser("hook", help=argparse.SUPPRESS)
-    s.add_argument("agent", choices=["claude", "codex"])
+    s.add_argument("agent", choices=["claude", "codex", "devin"])
     s.set_defaults(fn=cmd_hook)
 
     s = sub.add_parser("enqueue", help=argparse.SUPPRESS)
-    s.add_argument("--agent", required=True, choices=["claude", "codex", "opencode"])
+    s.add_argument("--agent", required=True, choices=["claude", "codex", "opencode", "devin"])
     s.add_argument("--session", required=True)
     s.add_argument("--event", default="turn", choices=["turn", "end"])
     s.add_argument("--transcript"), s.add_argument("--cwd")

@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 from .config import CAPTURE_ENV
 from .fsutil import NO_WINDOW
@@ -194,12 +195,21 @@ def _compact_ref(ref):
     return f"({date}{anchor[0]})" if date and anchor else ref
 
 
+def is_devin_env() -> bool:
+    """True inside a Devin CLI/Desktop session (its hooks inherit the agent's environment)."""
+    return bool(os.environ.get("CHISEL_SESSION_DB") or os.environ.get("DEVIN_TRACEPARENT")
+                or os.environ.get("AI_AGENT", "").startswith("devin"))
+
+
 def session_start(cfg, agent: str, sid: str, cwd: str) -> dict:
     """Record the start as a hook event (no capture is queued) and return the startup context, if any."""
     from .manifest import Manifest
     if sid:
         man = Manifest(cfg.manifest_path)
         try:
+            # Devin fires both the picked-up .claude hook and its own config hook; one context per start.
+            if time.time() - man.last_event_ts(agent, sid, "start") < 10:
+                return {}
             man.record_event(agent, sid, "start")
         finally:
             man.close()
@@ -220,11 +230,18 @@ def main(agent: str) -> int:
             return 0
         event = payload.get("hook_event_name") or payload.get("hookEventName") or ""
         sid = payload.get("session_id") or payload.get("sessionId") or ""
-        cwd = payload.get("cwd") or os.getcwd()
+        cwd = payload.get("cwd") or os.environ.get("DEVIN_PROJECT_DIR") or os.getcwd()
         src = payload.get("transcript_path") or ""
+        if sid and not src and (agent == "devin" or is_devin_env()):
+            # Devin picks up the .claude hook too. Its payloads carry no transcript_path, so remap
+            # argv's agent only when a Devin transcript actually exists for this session id.
+            from .adapters import find_devin_transcript
+            found = find_devin_transcript(sid)
+            if found:
+                agent, src = "devin", found
         if event == "SessionStart":
             out = session_start(cfg, agent, sid, cwd)
-        elif sid and event in ("Stop", "PreCompact", "SessionEnd", "SubagentStop"):
+        elif sid and event in ("Stop", "PreCompact", "PostCompaction", "SessionEnd", "SubagentStop"):
             if event == "SubagentStop":
                 return 0
             worker.enqueue(cfg, agent, sid, event="end" if event == "SessionEnd" else "turn", source=src, cwd=cwd)

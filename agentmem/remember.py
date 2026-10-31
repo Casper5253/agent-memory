@@ -133,9 +133,39 @@ def remember_item(cfg: Config, text: str, *, kind: str = "fact", project: str = 
 
 
 # ------------------------------------------------------------------------- current session
+def _devin_current(cwd: str) -> "tuple[str, str, str] | None":
+    """Newest Devin session for this directory from the session db; transcript when it exists."""
+    from .adapters import devin_data_dir, find_devin_transcript
+    import sqlite3
+    root = devin_data_dir()
+    db_path = root / "sessions.db" if root else None
+    if not db_path or not db_path.exists():
+        return None
+    try:
+        db = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        try:
+            rows = db.execute("SELECT id, working_directory FROM sessions WHERE hidden=0"
+                              " ORDER BY last_activity_at DESC").fetchall()
+        finally:
+            db.close()
+    except (sqlite3.Error, OSError):
+        return None
+    if not rows:
+        return None
+    match = next((r for r in rows if os.path.normcase(r[1] or "") == os.path.normcase(cwd)), rows[0])
+    return "devin", match[0], find_devin_transcript(match[0]) or ""
+
+
 def current_session(agent: str = "", cwd: str = "") -> "tuple[str, str, str] | None":
     """(agent, session_id, transcript) for the agent session running this command, best effort."""
     cwd = cwd or os.getcwd()
+    # Ambient Devin markers lose to another agent's explicit session env (e.g. tests, nested CLIs).
+    other = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
+    if (agent == "devin" or (agent == "" and not other)) and \
+            (os.environ.get("CHISEL_SESSION_DB") or os.environ.get("DEVIN_TRACEPARENT")):
+        found = _devin_current(cwd)
+        if found:
+            return found
     if (agent in ("", "claude")) and os.environ.get("CLAUDE_CODE_SESSION_ID"):
         sid = os.environ["CLAUDE_CODE_SESSION_ID"]
         hits = sorted((Path.home() / ".claude" / "projects").glob(f"*/{sid}.jsonl"), key=lambda p: p.stat().st_mtime)
@@ -161,7 +191,7 @@ def current_session(agent: str = "", cwd: str = "") -> "tuple[str, str, str] | N
 def capture_current(cfg: Config, agent: str = "", cwd: str = "", budget_s: float = 600) -> dict:
     found = current_session(agent, cwd)
     if not found:
-        return {"status": "no-current-session", "hint": "run inside a Claude Code, Codex or OpenCode session, or pass --agent/--session"}
+        return {"status": "no-current-session", "hint": "run inside a Claude Code, Codex, OpenCode or Devin session, or pass --agent/--session"}
     agent, sid, transcript = found
     from . import worker
     man = Manifest(cfg.manifest_path)

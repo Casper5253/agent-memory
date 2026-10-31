@@ -45,6 +45,8 @@ def _source_for(row) -> str:
         return adapters.find_codex_transcript(row["session_id"]) or ""
     if row["agent"] == "opencode":
         return row["session_id"]
+    if row["agent"] == "devin" and not (row["source"] and Path(row["source"]).exists()):
+        return adapters.find_devin_transcript(row["session_id"]) or ""
     return row["source"] or ""
 
 
@@ -69,6 +71,10 @@ def _source_range_hash(transcript):
         data = adapters.export_opencode(transcript.session_id)
         messages = data.get("messages") or []
         selected = messages[transcript.start:transcript.end]
+        raw = json.dumps(selected, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    elif transcript.agent == "devin":
+        data = json.loads(Path(transcript.source).read_text(encoding="utf-8"))
+        selected = (data.get("steps") or [])[transcript.start:transcript.end]
         raw = json.dumps(selected, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     else:
         path = Path(transcript.source)

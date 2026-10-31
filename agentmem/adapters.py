@@ -321,6 +321,104 @@ def _mark_finals(t: Transcript) -> None:
         last.final = True
 
 
+# --------------------------------------------------------------------------- Devin
+def devin_data_dir() -> "Path | None":
+    db = os.environ.get("CHISEL_SESSION_DB")
+    candidates = [Path(db).parent] if db else []
+    candidates += [Path.home() / "AppData" / "Roaming" / "devin" / "cli",
+                   Path.home() / ".config" / "devin" / "cli"]
+    for c in candidates:
+        if (c / "transcripts").is_dir() or (c / "sessions.db").exists():
+            return c
+    return None
+
+
+def devin_session_meta(session_id: str) -> dict:
+    """cwd and title from the Devin session db, read-only, empty when unreachable."""
+    root = devin_data_dir()
+    db_path = root / "sessions.db" if root else None
+    if not db_path or not db_path.exists():
+        return {}
+    import sqlite3
+    try:
+        db = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        try:
+            row = db.execute("SELECT working_directory, title FROM sessions WHERE id=?",
+                             (session_id,)).fetchone()
+        finally:
+            db.close()
+    except (sqlite3.Error, OSError):
+        return {}
+    return {"cwd": row[0] or "", "title": row[1] or ""} if row else {}
+
+
+def find_devin_transcript(session_id: str) -> "str | None":
+    root = devin_data_dir()
+    if not root:
+        return None
+    direct = root / "transcripts" / f"{session_id}.json"
+    if direct.exists():
+        return str(direct)
+    hits = sorted((root / "transcripts").glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for p in hits[:20]:
+        try:
+            if json.loads(p.read_text(encoding="utf-8")).get("session_id") == session_id:
+                return str(p)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def read_devin(path: str, start: int = 0, end=None) -> Transcript:
+    """Devin transcripts are one JSON document; the cursor is a step index, like OpenCode messages."""
+    p = Path(path)
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ValueError(f"devin transcript unreadable: {e}")
+    steps = data.get("steps") or []
+    stop = len(steps) if end is None else end
+    if start < 0 or stop < start or stop > len(steps):
+        raise ValueError("source truncated or invalid step range")
+    t = Transcript(agent="devin", session_id=data.get("session_id") or p.stem, source=str(p),
+                   start=start, end=stop,
+                   prefix_sha=hashlib.sha256(json.dumps(steps[:stop], sort_keys=True, ensure_ascii=False,
+                                                       separators=(",", ":")).encode("utf-8")).hexdigest())
+    meta = devin_session_meta(t.session_id)
+    t.cwd, t.title = meta.get("cwd", ""), meta.get("title", "")
+    for idx, st in enumerate(steps[start:stop], start=start):
+        src, ts = st.get("source"), st.get("timestamp", "")
+        t.started = t.started or ts
+        t.ended = ts or t.ended
+        if src == "user":
+            text = _clean_prompt(st.get("message", ""))
+            if text:
+                t.events.append(Event("user", "text", text, ts=ts, ordinal=len(t.events) + 1,
+                                      cursor_start=idx, cursor_end=idx + 1))
+        elif src == "agent":
+            text = (st.get("message") or "").strip()
+            if text:
+                t.events.append(Event("assistant", "text", text, ts=ts, ordinal=len(t.events) + 1,
+                                      cursor_start=idx, cursor_end=idx + 1))
+            for call in st.get("tool_calls") or []:
+                name = (call.get("function_name") or "").lower()
+                inp = call.get("arguments") or {}
+                ordinal = len(t.events) + 1
+                if name in ("exec", "write_to_process"):
+                    cmd = inp.get("command") or inp.get("text_input") or inp.get("bytes_input") or ""
+                    t.events.append(Event("assistant", "command", str(cmd), tool=name, ts=ts,
+                                          ordinal=ordinal, cursor_start=idx, cursor_end=idx + 1))
+                elif name in WRITE_TOOLS:
+                    fp = inp.get("file_path") or inp.get("notebook_path") or ""
+                    t.events.append(Event("assistant", "edit", tool=name, paths=[fp] if fp else [], ts=ts,
+                                          ordinal=ordinal, cursor_start=idx, cursor_end=idx + 1))
+                else:
+                    t.events.append(Event("assistant", "tool", tool=name, ts=ts,
+                                          ordinal=ordinal, cursor_start=idx, cursor_end=idx + 1))
+    _mark_finals(t)
+    return t
+
+
 def read(agent: str, session_id: str, source: str, start: int = 0, end=None) -> Transcript:
     if agent == "claude":
         return read_claude(source, start, end)
@@ -328,6 +426,8 @@ def read(agent: str, session_id: str, source: str, start: int = 0, end=None) -> 
         return read_codex(source, start, end)
     if agent == "opencode":
         return read_opencode(session_id, start, end=end)
+    if agent == "devin":
+        return read_devin(source, start, end)
     raise ValueError(f"unknown agent {agent!r}")
 
 
