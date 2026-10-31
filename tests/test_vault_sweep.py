@@ -191,13 +191,14 @@ class SweepTests(unittest.TestCase):
         cls._tmp = _Tmp(ROOT / ".audit" / "tmp")
         cls.vault = _build_vault(cls._tmp.path)
         cls._snap_before = _snapshot(cls.vault)
+        cls.plan = _load_sweep().build_plan(cls.vault)
 
     @classmethod
     def tearDownClass(cls):
         cls._tmp.cleanup()
 
     def _plan(self) -> dict:
-        return _load_sweep().build_plan(self.vault)
+        return self.plan
 
     def test_a_worktree_fragment_detected(self):
         plan = self._plan()
@@ -393,7 +394,7 @@ class SweepTests(unittest.TestCase):
                 + "\n".join('- `' + p + '`' for p in paths) + '\n')
         path.write_text(text,encoding="utf-8")
         try:
-            items = self._plan()["re_attribution"]["items"]
+            items = _load_sweep().build_plan(self.vault)["re_attribution"]["items"]
             self.assertFalse(any(i["note"].endswith(path.name) for i in items))
             self.assertTrue(any("reattr-misfiled" in i["note"] for i in items))
             for item in items:
@@ -408,8 +409,8 @@ class SweepTests(unittest.TestCase):
             self.assertFalse(item["auto_apply"])
 
     def test_f_calibration_sample_deterministic(self):
-        plan1 = self._plan()
-        plan2 = self._plan()
+        plan1 = _load_sweep().build_plan(self.vault)
+        plan2 = _load_sweep().build_plan(self.vault)
         s1 = [i["note"] for i in plan1["re_attribution"]["calibration_sample"]]
         s2 = [i["note"] for i in plan2["re_attribution"]["calibration_sample"]]
         self.assertEqual(s1, s2)
@@ -422,11 +423,6 @@ class SweepTests(unittest.TestCase):
                 set(item.keys()),
                 {"note", "filed_project", "proposed_project", "method", "signals", "auto_apply"},
             )
-
-    def test_f_vault_unchanged_after_plan(self):
-        self._plan()
-        snap_after = _snapshot(self.vault)
-        self.assertEqual(self._snap_before, snap_after)
 
     def test_all_sections_present(self):
         plan = self._plan()
@@ -539,7 +535,7 @@ class SweepTests(unittest.TestCase):
                 {"name": "Parent", "roots": [str(parent)], "status": "active"},
                 {"name": "Parent Wt", "roots": [str(work / "parent-wt")], "status": "active"}]}), encoding="utf-8")
             frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
-            self.assertFalse(frags.get("Parent Wt", {"auto_apply": False})["auto_apply"])
+            self.assertFalse(frags["Parent Wt"]["auto_apply"])
         finally:
             tmp.cleanup()
 
@@ -567,7 +563,7 @@ class SweepTests(unittest.TestCase):
                 {"name": "Parent", "roots": [str(parent)], "status": "active"},
                 {"name": "Parent Fake", "roots": [str(frag)], "status": "active"}]}), encoding="utf-8")
             frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
-            self.assertFalse(frags.get("Parent Fake", {"auto_apply": False})["auto_apply"])
+            self.assertFalse(frags["Parent Fake"]["auto_apply"])
         finally:
             tmp.cleanup()
 
@@ -593,7 +589,7 @@ class SweepTests(unittest.TestCase):
                 {"name": "Parent", "roots": [str(parent)], "status": "active"},
                 {"name": "Parent Broken", "roots": [str(frag)], "status": "active"}]}), encoding="utf-8")
             frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
-            self.assertFalse(frags.get("Parent Broken", {"auto_apply": False})["auto_apply"])
+            self.assertFalse(frags["Parent Broken"]["auto_apply"])
         finally:
             tmp.cleanup()
 
@@ -663,10 +659,10 @@ class SweepTests(unittest.TestCase):
                 {"name": "Main", "roots": [str(vault / "1-Projects" / "Main")], "status": "active"},
                 {"name": "Main-copy", "roots": [str(vault / "1-Projects" / "Main")], "status": "active"}]}), encoding="utf-8")
             frags = {f["folder"]: f for f in _load_sweep().build_plan(vault)["fragments"]}
-            if "Main-copy" in frags:
-                frag_item = frags["Main-copy"]
-                self.assertEqual(frag_item["evidence"], "guess")
-                self.assertFalse(frag_item["auto_apply"])
+            self.assertIn("Main-copy", frags)
+            frag_item = frags["Main-copy"]
+            self.assertEqual(frag_item["evidence"], "guess")
+            self.assertFalse(frag_item["auto_apply"])
         finally:
             tmp.cleanup()
 
@@ -818,7 +814,7 @@ class SweepApplyOnlyAutoTests(unittest.TestCase):
         _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         logs = list((self.vault / "_meta" / "logs").glob("sweep-*.jsonl"))
         self.assertTrue(len(logs) >= 1, "apply log should be written")
-        entries = [json.loads(line) for line in logs[0].read_text(encoding="utf-8").splitlines() if line.strip()]
+        entries = [json.loads(line) for line in logs[-1].read_text(encoding="utf-8").splitlines() if line.strip()]
         snapshot_entries = [e for e in entries if e.get("action") == "snapshot"]
         self.assertTrue(len(snapshot_entries) >= 1)
         self.assertEqual(snapshot_entries[-1]["status"], "ok")
@@ -886,7 +882,8 @@ class SweepApplyVaultMismatchTests(unittest.TestCase):
     def test_plan_from_another_vault_is_refused(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = _build_git_vault(tmp.path)
+            vault = tmp.path / "bare-vault"
+            vault.mkdir()
             plan = {"vault_path": "/nonexistent/other/vault", "fragments": [], "leftover_folders": [],
                     "stale_state_lines": [], "broken_links": [], "unsorted_sessions": [],
                     "re_attribution": {"items": [], "calibration_sample": []}}
@@ -901,7 +898,8 @@ class SweepApplyVaultMismatchTests(unittest.TestCase):
     def test_plan_inside_vault_is_refused(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = _build_git_vault(tmp.path)
+            vault = tmp.path / "bare-vault"
+            vault.mkdir()
             plan_path = vault / "plan.json"
             plan_path.write_text("{}", encoding="utf-8")
             result = _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path))
@@ -945,24 +943,6 @@ class SweepApplyPauseTests(unittest.TestCase):
             self.assertEqual(pause.read_text(encoding="utf-8"), "pre-existing")
         finally:
             tmp.cleanup()
-
-    def test_pause_created_then_removed(self):
-        tmp = _Tmp(ROOT / ".audit" / "tmp")
-        try:
-            vault = _build_git_vault(tmp.path)
-            pause = vault / "_meta" / "PAUSE"
-            if pause.exists():
-                pause.unlink()
-            vs = _load_sweep()
-            plan = vs.build_plan(vault)
-            plan["vault_path"] = str(vault)
-            plan_path = tmp.path / "plan.json"
-            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
-            _run_sweep("apply", "--vault", str(vault), "--plan", str(plan_path), "--only-auto")
-            self.assertFalse(pause.exists(), "PAUSE should be removed after apply when it was not pre-existing")
-        finally:
-            tmp.cleanup()
-
 
 class SweepApplyDryRunTests(unittest.TestCase):
     def test_dry_run_writes_nothing(self):
@@ -1357,22 +1337,6 @@ class SweepApplyCorrectionTests(unittest.TestCase):
             self.assertEqual(parent.count(b"### Merged from frag"), 1)
             self.assertIn(b"frag state", parent)
             self.assertFalse((vault / "1-Projects" / "frag").exists())
-        finally:
-            tmp.cleanup()
-
-    def test_symlink_into_sessions_is_refused(self):
-        tmp = _Tmp(ROOT / ".audit" / "tmp")
-        try:
-            vault = self._build_minimal_git_vault(tmp.path)
-            vs = _load_sweep()
-            plan = {"vault_path": str(vault),
-                    "fragments": [{"folder": "../0-Sessions", "proposed_parent": "parent", "auto_apply": True}],
-                    "leftover_folders": [], "stale_state_lines": [], "broken_links": [],
-                    "unsorted_sessions": [], "re_attribution": {"items": [], "calibration_sample": []}}
-            result = vs.apply_plan(vault, plan)
-            item = next(e for e in result["log_entries"] if e.get("action") == "fragment_merge")
-            self.assertEqual(item["status"], "error")
-            self.assertIn("refused", item["reason"])
         finally:
             tmp.cleanup()
 

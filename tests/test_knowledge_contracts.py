@@ -1,6 +1,5 @@
-"""WP-00 knowledge contracts: fixture schema, hook golden matrix, grader anti-gaming, evaluator isolation."""
+"""WP-00 knowledge contracts: fixture schema, grader anti-gaming, evaluator isolation."""
 import hashlib
-import io
 import json
 import os
 import shutil
@@ -16,10 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from agentmem.config import Config
-from agentmem.hook import main as hook_main
 from agentmem.manifest import Manifest
-import fixtures as fx
 
 
 SELFTEST = ROOT / "tests" / "fixtures" / "knowledge" / "selftest"
