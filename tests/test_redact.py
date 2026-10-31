@@ -100,6 +100,13 @@ class PersonalDataRedactionTests(unittest.TestCase):
                 self.assertEqual(redact_module.findings(value), [])
                 self.assertEqual(redact(value), value)
 
+    def test_long_unbroken_tokens_stay_linear(self):
+        import time
+        blob = "x" * 30000  # minified/base64-style blob; quadratic scans took ~50s here
+        started = time.monotonic()
+        self.assertEqual(redact(blob), blob)
+        self.assertLess(time.monotonic() - started, 5)
+
 
 if __name__ == "__main__":
     unittest.main()
