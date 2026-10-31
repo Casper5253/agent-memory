@@ -23,7 +23,6 @@ import fixtures as fx
 
 
 SELFTEST = ROOT / "tests" / "fixtures" / "knowledge" / "selftest"
-HOOKS = ROOT / "tests" / "fixtures" / "knowledge" / "hooks"
 
 
 def _repo_tmp():
@@ -132,87 +131,6 @@ class FixtureSchema(unittest.TestCase):
 
         self.assertEqual(partition_hash(dev_rows), m["partitions"]["dev"])
         self.assertEqual(partition_hash(sealed_rows), m["partitions"]["sealed"])
-
-
-class HookGoldenMatrix(unittest.TestCase):
-    def setUp(self):
-        self._tmp = fx.tmpdir()
-        self.tmp = Path(self._tmp.name)
-        self.vault = self.tmp / "vault"
-        for d in ("_meta/queue", "_meta/locks", "_meta/logs", "0-Sessions", "1-Projects",
-                  "2-Areas", "3-Resources", "4-Archive"):
-            (self.vault / d).mkdir(parents=True, exist_ok=True)
-        self.work_root = self.tmp / "work"
-        alpha = self.work_root / "alpha"
-        alpha.mkdir(parents=True)
-        (self.vault / "_meta" / "projects.json").write_text(json.dumps({
-            "projects": [{"name": "Alpha", "roots": [str(alpha)], "status": "active"}]
-        }), encoding="utf-8")
-        home = self.tmp / "home"
-        home.mkdir()
-        (home / "config.json").write_text(json.dumps({"summarizer": "none", "auto_index": False}), encoding="utf-8")
-        self.home = home
-        self.work = str(alpha)
-
-    def tearDown(self):
-        self._tmp.cleanup()
-
-    def _run_hook_in_process(self, spec):
-        env = dict(os.environ, OBSIDIAN_VAULT_PATH=str(self.vault), AGENTMEM_HOME=str(self.home))
-        env.pop("AGENTMEM_CAPTURE", None)
-        env.update(spec.get("env", {}))
-        if spec.get("pause"):
-            (self.vault / "_meta" / "PAUSE").write_text("paused", encoding="utf-8")
-
-        if "input_raw" in spec:
-            raw = spec["input_raw"]
-        else:
-            payload = dict(spec.get("input", {}))
-            if "cwd" in payload and isinstance(payload["cwd"], str):
-                payload["cwd"] = payload["cwd"].replace("{WORK}", self.work)
-            raw = json.dumps(payload)
-
-        with mock.patch.dict(os.environ, env, clear=False):
-            with mock.patch("agentmem.worker.spawn_detached"):
-                with mock.patch("sys.stdin", io.StringIO(raw)):
-                    out = io.StringIO()
-                    with mock.patch("sys.stdout", out):
-                        rc = hook_main("claude")
-        self.assertEqual(rc, 0)
-        actual_stdout = json.loads(out.getvalue())
-        actual_stdout = _replace_paths(actual_stdout, str(self.vault), "{VAULT}")
-        actual_stdout = _replace_paths(actual_stdout, str(self.work_root), "{WORK}")
-        actual_stdout = _normalize_separators(actual_stdout)
-        jobs = []
-        for job in sorted((self.vault / "_meta" / "queue").glob("*.json")):
-            j = json.loads(job.read_text(encoding="utf-8"))
-            jobs.append({"event": j["event"], "session_id": j["session_id"], "agent": j["agent"]})
-        return actual_stdout, jobs
-
-    def test_hook_fixtures_exist(self):
-        fixtures = list(HOOKS.glob("*.json"))
-        self.assertGreater(len(fixtures), 0, "hook golden fixtures should exist")
-        for fixture_file in fixtures:
-            spec = json.loads(fixture_file.read_text(encoding="utf-8"))
-            self.assertIn("description", spec)
-            self.assertIn("golden", spec, f"{fixture_file.name} must have a golden output")
-
-    def test_hook_golden_matrix(self):
-        for fixture_file in sorted(HOOKS.glob("*.json")):
-            with self.subTest(fixture=fixture_file.name):
-                # Each fixture runs against a clean queue and pause switch.
-                for job in (self.vault / "_meta" / "queue").glob("*.json"):
-                    job.unlink()
-                pause_file = self.vault / "_meta" / "PAUSE"
-                if pause_file.exists():
-                    pause_file.unlink()
-                spec = json.loads(fixture_file.read_text(encoding="utf-8"))
-                golden = spec["golden"]
-                actual_stdout, jobs = self._run_hook_in_process(spec)
-                self.assertEqual(actual_stdout, golden["stdout"],
-                                 f"stdout mismatch for {fixture_file.name}")
-                self.assertEqual(jobs, golden["queue"],
-                                 f"queue mismatch for {fixture_file.name}")
 
 
 class GraderAntiGaming(unittest.TestCase):

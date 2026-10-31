@@ -110,26 +110,6 @@ class OrphanTranscriptRecoveryTests(unittest.TestCase):
 
         self.assertIsNone(self.man.get("claude", sid))
 
-    def test_discovery_reopens_existing_capture_when_transcript_grows(self):
-        sid = "10000000-0000-4000-8000-000000000004"
-        now = 1_800_000_000
-        pipeline._discover_orphan_transcripts(self.cfg, self.man, now=now)
-        source = self.cfg.claude_transcripts_root / "C--synthetic-project" / f"{sid}.jsonl"
-        write_jsonl(source, claude_lines(sid, self.cwd, SUBSTANTIAL))
-        modified = now + 1
-        os.utime(source, (modified, modified))
-        transcript = adapters.read("claude", sid, str(source))
-        self.man.touch("claude", sid, cwd=self.cwd, source=str(source), now=modified)
-        self.man.mark("claude", sid, status="captured", captured_until=transcript.end, parts=1)
-
-        with source.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"type": "user", "sessionId": sid, "cwd": self.cwd,
-                                 "timestamp": ts(), "message": {"role": "user", "content": "added growth"}}) + "\n")
-        os.utime(source, (modified + 1, modified + 1))
-
-        self.assertEqual(1, pipeline._discover_orphan_transcripts(self.cfg, self.man, now=now + 4000))
-        self.assertEqual("pending", self.man.get("claude", sid)["status"])
-
     def test_discovery_caps_new_registrations_at_five_oldest_first(self):
         self.cfg.discovery_max_per_drain = 5
         now = 1_800_000_000

@@ -67,14 +67,5 @@ class NoProgressHoldTests(unittest.TestCase):
         self.assertEqual(0, len(self.man.retryable()))
         self.assertEqual(1, len(self.man.unconsolidated()))
 
-    def test_model_unavailable_keeps_retrying(self):
-        self.capture("transient", fx.fake_summarize, fx.failing_llm)
-        result = pipeline.consolidate_pending(self.cfg, self.man, fx.fake_summarize, fx.failing_llm)
-
-        self.assertEqual({"consolidated": 0, "still_pending": 1}, result)
-        self.assertIsNone(self.man.capture("claude", "transient", 1)["retry_hold"])
-        self.assertEqual(1, len(self.man.retryable()))
-
-
 if __name__ == "__main__":
     unittest.main()

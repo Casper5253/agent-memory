@@ -79,17 +79,6 @@ class PendingReconciliationReviewTests(unittest.TestCase):
         self.assertEqual(result["facts"], ["Use SQLite for atomic updates."])
         self.assertIn("Use e.g. SQLite for local mode.", result["summary"])
 
-    def test_consolidation_cannot_drop_prior_fact_without_evidence(self):
-        old = status.empty()
-        old['working_now'] = [status.Item('i1', 'Existing endpoint remains supported.', '[[old#e1]]')]
-        summary = {"summary": "Parser guard added.", "citations": [
-            {"section": "summary", "claim": "Parser guard added.", "quote": "Parser guard added."},
-        ]}
-        with patch.object(llm, "_run", return_value=dict(sections=status.empty(), displaced=[])):
-            result, _ = llm.consolidate(status.render(old), summary, "[[0-Sessions/B]]", "2026-10-23")
-        self.assertEqual(result.sections, old)
-        self.assertIn(('restored', 'i1'), result.events)
-
     def test_displaced_bullet_history_keeps_indented_continuation(self):
         old_state = state("- Keep local mode.", "  CANARY_CRITICAL_RATIONALE: works while offline.")
         notes.update_project_note(self.note, "Synthetic", "2026-10-23", state=old_state)

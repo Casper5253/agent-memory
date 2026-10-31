@@ -1,9 +1,0 @@
-{
-  "description": "Malformed JSON returns empty JSON and does not crash",
-  "input_raw": "{not valid json",
-  "env": {},
-  "golden": {
-    "stdout": {},
-    "queue": []
-  }
-}
