@@ -756,36 +756,35 @@ class SweepApplyOnlyAutoTests(unittest.TestCase):
         )
         cls._session_bytes_before = _session_bytes(cls.vault)
         cls._file_count_before = _count_files_in(cls.vault)
+        cls.apply_result = _run_sweep(
+            "apply", "--vault", str(cls.vault), "--plan", str(cls.plan_path), "--only-auto",
+        )
 
     @classmethod
     def tearDownClass(cls):
         cls._tmp.cleanup()
 
     def test_a_only_auto_applies_worktree_fragment(self):
-        result = _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(self.apply_result.returncode, 0, msg=self.apply_result.stderr)
         frag_dir = self.vault / "1-Projects" / "frag-a"
         self.assertFalse(frag_dir.exists(), "frag-a should have been moved to archive")
         archive = self.vault / "4-Archive" / "merged" / "frag-a"
         self.assertTrue(archive.exists(), "frag-a should be in 4-Archive/merged/")
 
     def test_b_only_auto_does_not_apply_guess_fragments(self):
-        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         look = self.vault / "1-Projects" / "look-alike-demo"
         self.assertTrue(look.exists(), "look-alike-demo (guess) should not be moved by --only-auto")
 
     def test_c_session_note_bytes_unchanged(self):
-        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         session_after = _session_bytes(self.vault)
         self.assertEqual(self._session_bytes_before, session_after)
 
     def test_d_file_count_never_drops(self):
-        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         count_after = _count_files_in(self.vault)
         self.assertGreaterEqual(count_after, self._file_count_before)
 
     def test_e_root_leftover_is_archived(self):
-        result = _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
+        result = self.apply_result
         leftover = self.vault / "Projects-Old"
         archived = self.vault / "4-Archive" / "Projects-Old"
         self.assertFalse(leftover.exists(), "listed top-level leftovers should be moved to the archive")
@@ -797,7 +796,6 @@ class SweepApplyOnlyAutoTests(unittest.TestCase):
         self.assertIn(leftover_entry["status"], {"ok", "skip"})
 
     def test_f_stale_line_prefixed(self):
-        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         demo_note = self.vault / "1-Projects" / "demo-app" / "demo-app.md"
         text = demo_note.read_text(encoding="utf-8")
         self.assertIn("(as of unknown commit)", text)
@@ -805,13 +803,9 @@ class SweepApplyOnlyAutoTests(unittest.TestCase):
 
     def test_g_pause_removed_when_not_preexisting(self):
         pause = self.vault / "_meta" / "PAUSE"
-        if pause.exists():
-            pause.unlink()
-        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         self.assertFalse(pause.exists(), "PAUSE should be removed after apply if it didn't exist before")
 
     def test_h_log_written(self):
-        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         logs = list((self.vault / "_meta" / "logs").glob("sweep-*.jsonl"))
         self.assertTrue(len(logs) >= 1, "apply log should be written")
         entries = [json.loads(line) for line in logs[-1].read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -821,7 +815,6 @@ class SweepApplyOnlyAutoTests(unittest.TestCase):
         self.assertIn("sha", snapshot_entries[-1])
 
     def test_i_rerun_is_noop(self):
-        _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         snap_after_first = _snapshot_content(self.vault)
         _run_sweep("apply", "--vault", str(self.vault), "--plan", str(self.plan_path), "--only-auto")
         snap_after_second = _snapshot_content(self.vault)
@@ -1026,7 +1019,22 @@ class SweepApplyFragmentPendingAppendTests(unittest.TestCase):
 class SweepApplyCorrectionTests(unittest.TestCase):
     """Regression tests for WP-S1 apply correction round 1."""
 
-    def _build_minimal_git_vault(self, tmp: Path) -> Path:
+    @classmethod
+    def setUpClass(cls):
+        cls._template_tmp = _Tmp(ROOT / ".audit" / "tmp")
+        cls._template_vault = cls._build_minimal_git_vault(cls._template_tmp.path)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._template_tmp.cleanup()
+
+    def _fresh_vault(self, tmp: Path) -> Path:
+        vault = tmp / "vault"
+        shutil.copytree(self._template_vault, vault)
+        return vault
+
+    @staticmethod
+    def _build_minimal_git_vault(tmp: Path) -> Path:
         vault = tmp / "vault"
         for d in ("_meta", "1-Projects/parent", "1-Projects/frag", "0-Sessions"):
             (vault / d).mkdir(parents=True, exist_ok=True)
@@ -1063,7 +1071,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_pause_is_not_part_of_snapshot_commit(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             vs = _load_sweep()
             plan = {"vault_path": str(vault), "fragments": [], "leftover_folders": [],
                     "stale_state_lines": [], "broken_links": [], "unsorted_sessions": [],
@@ -1086,7 +1094,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_embedded_repository_snapshot_warning_does_not_abort_after_backup(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             emb = vault / "emb"
             emb.mkdir()
             env = dict(os.environ)
@@ -1110,7 +1118,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_crlf_true_repo_config_reset_restores_bytes(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             env = dict(os.environ)
             env["GIT_CONFIG_NOSYSTEM"] = "1"
             subprocess.run(["git", "config", "core.autocrlf", "true"], cwd=str(vault), env=env, capture_output=True, timeout=10)
@@ -1156,7 +1164,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_crlf_stale_index_stat_snapshot_reset_restores_bytes(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             env = dict(os.environ)
             env["GIT_CONFIG_NOSYSTEM"] = "1"
             config = subprocess.run(
@@ -1229,7 +1237,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_projects_json_merges_roots_and_aliases(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             vs = _load_sweep()
             plan = {"vault_path": str(vault),
                     "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
@@ -1249,7 +1257,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_missing_parent_projects_entry_leaves_fragment_unchanged(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             pjson = vault / "_meta" / "projects.json"
             original = json.loads(pjson.read_text(encoding="utf-8"))
             original["projects"] = [entry for entry in original["projects"] if entry["name"].lower() != "parent"]
@@ -1274,7 +1282,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_stale_line_rerun_is_byte_for_byte_noop(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             note = vault / "1-Projects" / "parent" / "parent.md"
             note.write_bytes(
                 b"# P\nrepo head abc1234 commit\n" + note.read_bytes().split(b"\n", 1)[1]
@@ -1298,7 +1306,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_fragment_creates_pending_block_when_missing(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             note = vault / "1-Projects" / "parent" / "parent.md"
             note.write_bytes(b"# P no blocks\n")
             subprocess.run(["git", "add", "-A"], cwd=str(vault), capture_output=True, timeout=10)
@@ -1321,7 +1329,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
         from unittest.mock import patch
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             vs = _load_sweep()
             plan = {"vault_path": str(vault),
                     "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
@@ -1343,7 +1351,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_log_has_timestamp_file_and_sha_in_every_entry(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             vs = _load_sweep()
             plan = {"vault_path": str(vault),
                     "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
@@ -1367,7 +1375,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_path_safety_refuses_unsafe_items(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             bad_session = vault / "0-Sessions" / "evil.md"
             bad_session.write_bytes(b"evil\n")
             vs = _load_sweep()
@@ -1394,7 +1402,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_r2_restore_backup_preserves_embedded_repo_ignored_and_crlf_bytes(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             env = dict(os.environ)
             env["GIT_CONFIG_NOSYSTEM"] = "1"
             subprocess.run(["git", "config", "core.autocrlf", "true"], cwd=vault, env=env, check=True)
@@ -1465,7 +1473,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_restore_keeps_changes_made_after_the_sweep(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             plan = {"vault_path": str(vault),
                     "fragments": [{"folder": "frag", "proposed_parent": "parent", "auto_apply": True}],
                     "leftover_folders": [], "stale_state_lines": [], "broken_links": [], "unsorted_sessions": [],
@@ -1491,7 +1499,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
         from unittest.mock import patch
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             before = _snapshot_no_git(vault)
             head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=vault, capture_output=True,
                                   text=True, check=True).stdout.strip()
@@ -1524,7 +1532,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
         from unittest.mock import patch
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             pjson = (vault / "_meta" / "projects.json").read_bytes()
             parent_note = (vault / "1-Projects" / "parent" / "parent.md").read_bytes()
             fragment_files = _snapshot_no_git(vault / "1-Projects" / "frag")
@@ -1549,7 +1557,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_r2_rejects_self_and_non_child_fragment_and_leftover_names(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             vs = _load_sweep()
             pjson = (vault / "_meta" / "projects.json").read_bytes()
             parent_note = (vault / "1-Projects" / "parent" / "parent.md").read_bytes()
@@ -1575,7 +1583,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_r2_missing_parent_note_refuses_fragment_without_project_or_file_edits(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             parent_note = vault / "1-Projects" / "parent" / "parent.md"
             parent_note.unlink()
             before = (vault / "_meta" / "projects.json").read_bytes()
@@ -1594,7 +1602,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_r2_stale_duplicate_lines_use_plan_index_and_exact_text(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             note = vault / "1-Projects" / "parent" / "parent.md"
             note.write_bytes(
                 b"<!-- agentmem:state:begin -->\nrepo head abc1234 commit\n repo head abc1234 commit\n"
@@ -1624,7 +1632,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_r2_root_leftover_folder_is_archived(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             old = vault / "Projects-Old"
             old.mkdir()
             (old / "legacy.txt").write_bytes(b"archive me\xff")
@@ -1641,7 +1649,7 @@ class SweepApplyCorrectionTests(unittest.TestCase):
     def test_non_utf8_note_does_not_crash_and_cleans_up(self):
         tmp = _Tmp(ROOT / ".audit" / "tmp")
         try:
-            vault = self._build_minimal_git_vault(tmp.path)
+            vault = self._fresh_vault(tmp.path)
             note = vault / "1-Projects" / "parent" / "parent.md"
             note.write_bytes(note.read_bytes() + b"\xff\xfe latin\n")
             subprocess.run(["git", "add", "-A"], cwd=str(vault), capture_output=True, timeout=10)
