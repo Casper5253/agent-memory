@@ -347,6 +347,18 @@ class ContextCase(unittest.TestCase):
                 QmdClient("isolated").search("storage", timeout=.02)
         self.assertEqual(run.call_args.kwargs, dict(timeout=.02, index="isolated"))
 
+    def test_qmd_search_timeout_never_exceeds_configured_budget(self):
+        self.claim()
+        calls = []
+        class Client:
+            def search(self, *args, **kwargs):
+                calls.append(kwargs["timeout"])
+                return []
+        # 131072s is a far-from-zero monotonic tick where (t + .075) - t rounds to .07500000001164153.
+        build_context(self.store, replace(self.request, qmd_timeout_ms=75), Client(), clock=lambda: 131072.0)
+        self.assertEqual(len(calls), 1)
+        self.assertLessEqual(calls[0], .075)
+
     def test_cli_uses_configured_qmd_timeout_and_discloses_embedding(self):
         import io
         from contextlib import redirect_stdout

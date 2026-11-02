@@ -352,7 +352,8 @@ def build_context(store, request, qmd_client=None, tokenizer=None, clock=time.mo
         except KnowledgeError:
             return error_response("invalid_as_of")
     try:
-        backend_deadline = clock() + min(request.qmd_timeout_ms, 1500) / 1000 if qmd_client is not None else None
+        timeout_s = min(request.qmd_timeout_ms, 1500) / 1000
+        backend_deadline = clock() + timeout_s if qmd_client is not None else None
         for attempt in range(2):
             project, claims, relations, projections, warnings, invalid, partial, missing_partners = _snapshot(store, request)
             lexical = lexical_ranks(request.query, claims)
@@ -360,7 +361,7 @@ def build_context(store, request, qmd_client=None, tokenizer=None, clock=time.mo
             degraded = False
             if qmd_client is not None:
                 for semantic in ([False, True] if request.semantic else [False]):
-                    remaining = backend_deadline - clock()
+                    remaining = min(timeout_s, backend_deadline - clock())
                     if remaining <= 0:
                         degraded = True
                         warnings.add("qmd_timeout")
