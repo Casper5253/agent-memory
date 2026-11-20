@@ -15,6 +15,7 @@ class Config:
     vault: Path
     claude_transcripts_root: Path = field(default_factory=lambda: HOME / ".claude" / "projects")
     codex_transcripts_root: Path = field(default_factory=lambda: HOME / ".codex" / "sessions")
+    devin_transcripts_root: "Path | None" = None  # None: the Devin CLI data dir found at run time
     summarizer: str = "claude-haiku"      # "claude-haiku" | "none"
     settle_minutes: int = 20               # no new transcript bytes for this long == session over
     discovery_max_per_drain: int = 5
@@ -45,6 +46,8 @@ class Config:
         from .knowledge.policy import enum, integer, uuid_id
         self.claude_transcripts_root = Path(self.claude_transcripts_root)
         self.codex_transcripts_root = Path(self.codex_transcripts_root)
+        if self.devin_transcripts_root is not None:
+            self.devin_transcripts_root = Path(self.devin_transcripts_root)
         enum(self.knowledge_mode, ("off", "shadow", "active"))
         for name in ("knowledge_input_units", "knowledge_output_tokens", "knowledge_run_captures",
                      "knowledge_run_calls", "knowledge_run_seconds", "knowledge_qmd_timeout_ms",

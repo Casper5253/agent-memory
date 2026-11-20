@@ -31,6 +31,37 @@ class OrphanTranscriptRecoveryTests(unittest.TestCase):
             marker.rmdir()
         marker.write_text("gitdir: nonexistent", encoding="utf-8")
 
+    def test_devin_session_without_hook_is_captured_after_settle_window(self):
+        """20 Nov: no Devin hook importer loads on this build, so no Devin session was captured after 17 Nov."""
+        import sqlite3
+        sid = "synthetic-devin-one"
+        devin_cli = self.root / "devin-cli"
+        transcripts = devin_cli / "transcripts"
+        transcripts.mkdir(parents=True)
+        self.cfg.devin_transcripts_root = transcripts
+        db = sqlite3.connect(devin_cli / "sessions.db")
+        db.execute("CREATE TABLE sessions (id TEXT, working_directory TEXT, title TEXT)")
+        db.execute("INSERT INTO sessions VALUES (?,?,?)", (sid, self.cwd, "synthetic devin"))
+        db.commit()
+        db.close()
+        self.addCleanup(os.environ.pop, "CHISEL_SESSION_DB", None)
+        os.environ["CHISEL_SESSION_DB"] = str(devin_cli / "sessions.db")
+        pipeline._discover_orphan_transcripts(self.cfg, self.man, now=time.time() - 86400)
+        steps = []
+        for user, agent, files, commands in SUBSTANTIAL:
+            calls = [{"function_name": "write", "arguments": {"file_path": f}} for f in files]
+            calls += [{"function_name": "exec", "arguments": {"command": c}} for c in commands]
+            steps += [{"source": "user", "message": user, "timestamp": ts(30)},
+                      {"source": "agent", "message": agent, "timestamp": ts(25), "tool_calls": calls}]
+        source = transcripts / f"{sid}.json"
+        source.write_text(json.dumps({"session_id": sid, "steps": steps}), encoding="utf-8")
+        old = time.time() - (self.cfg.settle_minutes * 60 + 10)
+        os.utime(source, (old, old))
+        result = pipeline.process_ready(self.cfg, self.man, budget_s=30,
+                                        summarizer=fake_summarize, consolidator=fake_consolidate)
+        self.assertIn(("devin", sid, "captured"), result)
+        self.assertEqual("captured", self.man.get("devin", sid)["status"])
+
     def test_killed_unregistered_claude_transcript_is_registered_after_settle_window(self):
         sid = "10000000-0000-4000-8000-000000000005"
         transcripts = self.root / "claude-projects"

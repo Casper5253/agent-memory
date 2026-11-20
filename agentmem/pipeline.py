@@ -391,12 +391,24 @@ def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
     discovery_since = man.discovery_since(now)
     discovered = 0
     registered = 0
-    roots = (("claude", Path(cfg.claude_transcripts_root)), ("codex", Path(cfg.codex_transcripts_root)))
+    roots = [("claude", Path(cfg.claude_transcripts_root)), ("codex", Path(cfg.codex_transcripts_root))]
+    # This Devin build loads no hook importer reliably (none since 18 Nov), so its
+    # transcripts are discovered here instead of waiting for a hook.
+    devin_root = cfg.devin_transcripts_root
+    if devin_root is None and adapters.devin_data_dir() is not None:
+        devin_root = adapters.devin_data_dir() / "transcripts"
+    if devin_root is not None:
+        roots.append(("devin", devin_root))
     candidates = []
     for agent, root in roots:
         if not root.is_dir():
             continue
-        paths = root.glob("*/*.jsonl") if agent == "claude" else root.rglob("rollout-*.jsonl")
+        if agent == "claude":
+            paths = root.glob("*/*.jsonl")
+        elif agent == "devin":
+            paths = root.glob("*.json")
+        else:
+            paths = root.rglob("rollout-*.jsonl")
         for source in paths:
             try:
                 modified = source.stat().st_mtime
@@ -404,6 +416,8 @@ def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
                     uuid_pattern = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
                     if not re.fullmatch(uuid_pattern, source.stem):
                         continue
+                    known_id = source.stem
+                elif agent == "devin":
                     known_id = source.stem
                 else:
                     match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", source.name)
