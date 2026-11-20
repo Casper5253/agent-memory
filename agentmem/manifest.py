@@ -7,6 +7,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import NamedTuple
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -42,8 +43,58 @@ CREATE TABLE IF NOT EXISTS metadata (
 """
 
 
+# Failure classification, one table: the first substring matched in "<Type>: <message>" decides
+# the class. source-mutated / transcript-compacted / transcript-unreadable are permanent as soon
+# as the error confirms: the source state it describes cannot come back. transcript-missing is
+# different - a late or archived transcript raises the same string as a deleted one, so it turns
+# permanent only when a locator confirms the transcript is absent everywhere AND the session is
+# older than the grace period. Everything else is transient and keeps the capped backoff.
+ERROR_CLASSES = (
+    ("no transcript", "transcript-missing"),
+    ("no such file", "transcript-missing"),
+    ("filenotfounderror", "transcript-missing"),
+    ("calledprocesserror", "transcript-missing"),
+    ("source_change", "source-mutated"),
+    ("source truncated", "transcript-compacted"),
+    ("unreadable", "transcript-unreadable"),
+)
+DEFAULT_MAX_ATTEMPTS = 12          # transient errors go terminal after this many tries
+DEFAULT_MAX_AGE_S = 7 * 86400      # or once the session is this old
+DEFAULT_GRACE_S = 48 * 3600        # a missing transcript must stay missing for a session this old
+
+
+def error_cause(error: str) -> str:
+    low = (error or "").lower()
+    for needle, cause in ERROR_CLASSES:
+        if needle in low:
+            return cause
+    return "transient"
+
+
+def _permanent(cause: str, located: "bool | None", age_s: float, grace_s: float) -> bool:
+    """Permanent needs the cause table plus, for transcript-missing, a confirmed absent source
+    on a session past the grace period. located=None means the check could not run: keep retrying."""
+    if cause == "transient":
+        return False
+    if cause == "transcript-missing":
+        return located is False and age_s >= grace_s
+    return True
+
+
+def is_permanent_error(error: str) -> bool:
+    return error_cause(error) != "transient"
+
+
+class RetryPolicy(NamedTuple):
+    """Configured retry bounds plus the transcript locator used to verify missing-source errors."""
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    max_age_s: float = DEFAULT_MAX_AGE_S
+    grace_s: float = DEFAULT_GRACE_S
+    locate: object = None           # callable(row) -> bool | None
+
+
 class Manifest:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, migrate: "RetryPolicy | None" = None):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, timeout=30, isolation_level=None)
         self.db.row_factory = sqlite3.Row
@@ -55,6 +106,13 @@ class Manifest:
         # captured_until is the scan watermark; deferred_start keeps the start of scanned but uncaptured content.
         if "deferred_start" not in {row["name"] for row in self.db.execute("PRAGMA table_info(sessions)")}:
             self.db.execute("ALTER TABLE sessions ADD COLUMN deferred_start INTEGER")
+        # Migration reclassifies old error rows under the configured policy; a bare open without a
+        # policy does not migrate, so configured bounds are the only ones ever applied.
+        if migrate is not None and self.db.execute(
+                "SELECT value FROM metadata WHERE key='error_bounds_migrated'").fetchone() is None:
+            self.reclassify_errors(max_attempts=migrate.max_attempts, max_age_s=migrate.max_age_s,
+                                   grace_s=migrate.grace_s, locate=migrate.locate)
+            self.db.execute("INSERT INTO metadata(key, value) VALUES('error_bounds_migrated', '1')")
 
     def close(self):
         self.db.close()
@@ -121,9 +179,9 @@ class Manifest:
     def ready(self, settle_s: float, _max_attempts=None, now=None):
         """Sessions to capture now: ended or idle past the settle window, and not in retry backoff.
 
-        Errors are retried indefinitely under the capped backoff (see fail). The old attempt cap is gone: a
-        transient failure, such as a transcript that is not written yet, must not be given up on. Use failed()
-        to list the sessions that have exhausted a given number of attempts.
+        Errors retry under the capped backoff until fail() moves them terminal ('lost'): permanent
+        errors after one confirming retry, transient errors at the attempt cap or age limit. Terminal
+        rows are never returned; failed() lists live errors, revive() brings one back by hand.
         """
         now = now or time.time()
         return self.db.execute(
@@ -152,14 +210,83 @@ class Manifest:
                 (source, cwd, modified, time.time(), agent, session_id, end)).rowcount
             return changed == 1
 
-    def fail(self, agent, session_id, error: str, now=None):
+    def fail(self, agent, session_id, error: str, now=None, *,
+             max_attempts: int = DEFAULT_MAX_ATTEMPTS, max_age_s: float = DEFAULT_MAX_AGE_S,
+             grace_s: float = DEFAULT_GRACE_S, exists=None):
+        """Record a failed capture. exists(row) -> bool | None verifies a transcript-missing error
+        against the real source state; a locator that cannot tell leaves the error transient."""
         now = now or time.time()
         with self.tx() as db:
-            row = db.execute("SELECT attempts FROM sessions WHERE agent=? AND session_id=?", (agent, session_id)).fetchone()
+            row = db.execute("SELECT * FROM sessions WHERE agent=? AND session_id=?",
+                             (agent, session_id)).fetchone()
             attempts = (row["attempts"] if row else 0) + 1
-            backoff = min(3600, 60 * 2 ** (attempts - 1))
-            db.execute("UPDATE sessions SET status='error', attempts=?, next_try=?, last_error=?, updated=? WHERE agent=? AND session_id=?",
-                       (attempts, now + backoff, error[:500], now, agent, session_id))
+            created = row["created"] if row and row["created"] else now
+            last_activity = row["last_activity"] if row and row["last_activity"] else created
+            located = None
+            if exists is not None and row is not None:
+                try:
+                    located = exists(row)
+                except Exception:
+                    located = None
+            permanent = _permanent(error_cause(error), located, now - last_activity, grace_s)
+            terminal = ((permanent and attempts >= 2)
+                        or attempts >= max_attempts
+                        or now - created >= max_age_s)
+            if terminal:
+                db.execute("UPDATE sessions SET status='lost', attempts=?, next_try=0, last_error=?, updated=?"
+                           " WHERE agent=? AND session_id=?",
+                           (attempts, error[:500], now, agent, session_id))
+            else:
+                backoff = min(3600, 60 * 2 ** (attempts - 1))
+                db.execute("UPDATE sessions SET status='error', attempts=?, next_try=?, last_error=?, updated=?"
+                           " WHERE agent=? AND session_id=?",
+                           (attempts, now + backoff, error[:500], now, agent, session_id))
+
+    def reclassify_errors(self, *, max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+                          max_age_s: float = DEFAULT_MAX_AGE_S, grace_s: float = DEFAULT_GRACE_S,
+                          locate=None, now=None) -> int:
+        """Move existing error rows terminal under the same bounds fail() applies. Nothing is deleted."""
+        now = now or time.time()
+        rows = self.db.execute(
+            "SELECT agent, session_id, attempts, created, last_activity, last_error, source"
+            " FROM sessions WHERE status='error'").fetchall()
+        n = 0
+        with self.tx() as db:
+            for r in rows:
+                created = r["created"] or now
+                last_activity = r["last_activity"] or created
+                located = None
+                if locate is not None:
+                    try:
+                        located = locate(r)
+                    except Exception:
+                        located = None
+                permanent = _permanent(error_cause(r["last_error"] or ""), located,
+                                       now - last_activity, grace_s)
+                if ((permanent and r["attempts"] >= 2)
+                        or r["attempts"] >= max_attempts
+                        or now - created >= max_age_s):
+                    db.execute("UPDATE sessions SET status='lost', next_try=0, updated=?"
+                               " WHERE agent=? AND session_id=?", (now, r["agent"], r["session_id"]))
+                    n += 1
+        return n
+
+    def revive(self, session_id=None, include_lost=False) -> int:
+        """Bring failed captures back to pending for another try.
+
+        A bare revive keeps its old meaning: live 'error' rows only. Reviving terminal 'lost'
+        rows requires naming the session or passing include_lost=True. The capture cursor is
+        reset so a revived row restarts from the source start.
+        """
+        statuses = "('error','lost')" if (session_id or include_lost) else "('error')"
+        with self.tx() as db:
+            sql = ("UPDATE sessions SET status='pending', attempts=0, next_try=0, end_seen=1,"
+                   " captured_until=0, deferred_start=NULL WHERE status IN " + statuses)
+            params = ()
+            if session_id:
+                sql += " AND session_id=?"
+                params = (session_id,)
+            return db.execute(sql, params).rowcount
 
     def health(self, max_attempts: int):
         """Counts for the session-start hook: sessions not yet captured, retrying errors, exhausted errors, unended."""
@@ -167,10 +294,11 @@ class Manifest:
             "SELECT"
             " sum(status='pending') AS pending,"
             " sum(status='error' AND attempts < ?) AS retrying,"
-            " sum(status='error' AND attempts >= ?) AS failed"
+            " sum(status='error' AND attempts >= ?) AS failed,"
+            " sum(status='lost') AS terminal"
             " FROM sessions", (max_attempts, max_attempts)).fetchone()
         return {"pending": rows["pending"] or 0, "retrying": rows["retrying"] or 0, "failed": rows["failed"] or 0,
-                "unended": len(self.unended())}
+                "terminal": rows["terminal"] or 0, "unended": len(self.unended())}
 
     # ------------------------------------------------------------------ captures
     def capture(self, agent, session_id, part):
@@ -244,5 +372,10 @@ class Manifest:
         c = self.db.execute("SELECT count(*), coalesce(sum(cost_usd),0), max(captured_at), sum(consolidated=0) FROM captures").fetchone()
         errors = self.db.execute("SELECT agent, session_id, attempts, last_error FROM sessions WHERE status='error'"
                                  " ORDER BY updated DESC LIMIT 5").fetchall()
+        by_cause = {}
+        for r in self.db.execute("SELECT last_error, count(*) AS c FROM sessions WHERE status='lost' GROUP BY last_error"):
+            cause = error_cause(r["last_error"])
+            by_cause[cause] = by_cause.get(cause, 0) + r["c"]
         return {"sessions": s, "notes": c[0], "cost_usd": round(c[1], 4), "last_capture": c[2],
-                "unconsolidated": c[3] or 0, "errors": [dict(e) for e in errors]}
+                "unconsolidated": c[3] or 0, "errors": [dict(e) for e in errors],
+                "terminal": {"total": sum(by_cause.values()), "by_cause": by_cause}}

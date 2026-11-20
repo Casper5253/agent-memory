@@ -56,6 +56,8 @@ def _health_line(man, max_attempts: int, note=None, pending='') -> str:
     if health["failed"]:
         reason = man.failed(max_attempts)[0]["last_error"] or "unknown error"
         parts.append(f"{health['failed']} failed: {reason[:160]}")
+    if health["terminal"]:
+        parts.append(f"{_plural(health['terminal'], 'session')} terminal (mem stats)")
     backlog = len(man.unconsolidated())
     reason = re.search(r'status update pending \(([^;\n)]+)', pending)
     if backlog:
@@ -76,13 +78,13 @@ def _health_line(man, max_attempts: int, note=None, pending='') -> str:
 def startup_package(cfg, cwd: str) -> str:
     """Reserve health and omission pointer first, then admit complete status items in priority order."""
     from . import notes, projects, status
-    from .manifest import Manifest
+    from .pipeline import open_manifest
     project = projects.resolve_session(cwd, cfg.projects_map, create=False)
     head = [f"Agent memory: Obsidian vault at {cfg.vault}. Session notes (0-Sessions) are HISTORICAL; project notes (1-Projects) are CURRENT state.",
             'When asked what was previously decided, implemented or configured, search the vault first: '
             '`mem search "<terms>"` (memory skill), never guess.']
     page, pending, note, legacy, recent = status.empty(), '', None, '', ''
-    man = Manifest(cfg.manifest_path)
+    man = open_manifest(cfg)
     try:
         if project != projects.UNSORTED:
             note = projects.note_path(cfg.vault, project)
@@ -203,9 +205,9 @@ def is_devin_env() -> bool:
 
 def session_start(cfg, agent: str, sid: str, cwd: str) -> dict:
     """Record the start as a hook event (no capture is queued) and return the startup context, if any."""
-    from .manifest import Manifest
+    from .pipeline import open_manifest
     if sid:
-        man = Manifest(cfg.manifest_path)
+        man = open_manifest(cfg)
         try:
             # Devin fires both the picked-up .claude hook and its own config hook; one context per start.
             if time.time() - man.last_event_ts(agent, sid, "start") < 10:

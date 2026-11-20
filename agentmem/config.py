@@ -18,13 +18,15 @@ class Config:
     devin_transcripts_root: "Path | None" = None  # None: the Devin CLI data dir found at run time
     summarizer: str = "claude-haiku"      # "claude-haiku" | "none"
     settle_minutes: int = 20               # no new transcript bytes for this long == session over
-    discovery_max_per_drain: int = 5
+    discovery_max_per_drain: int = 25
     min_user_prompts: int = 2
     min_assistant_chars: int = 1500
     digest_char_cap: int = 45_000          # ~12k tokens fed to the summarizer, never the raw transcript
     llm_timeout_s: int = 180
     lock_timeout_s: float = 30.0
-    max_attempts: int = 5
+    max_attempts: int = 12                 # transient capture errors go terminal ('lost') after this
+    error_max_age_days: int = 7            # or once the session is this old
+    error_grace_hours: int = 48            # a missing transcript must stay missing for a session this old
     embeddings: bool = True
     auto_index: bool = True                # refresh QMD after a capture
     qmd_index: str = ""                    # named QMD index ("" = default, shared with the qmd skill/MCP)
@@ -51,7 +53,7 @@ class Config:
         enum(self.knowledge_mode, ("off", "shadow", "active"))
         for name in ("knowledge_input_units", "knowledge_output_tokens", "knowledge_run_captures",
                      "knowledge_run_calls", "knowledge_run_seconds", "knowledge_qmd_timeout_ms",
-                     "discovery_max_per_drain"):
+                     "discovery_max_per_drain", "max_attempts", "error_max_age_days", "error_grace_hours"):
             integer(getattr(self, name), 1)
         for name in ("knowledge_db", "knowledge_backup_dir"):
             value = getattr(self, name)

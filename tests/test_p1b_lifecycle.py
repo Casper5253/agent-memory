@@ -3,6 +3,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -89,14 +90,14 @@ class RetryTests(unittest.TestCase):
         self.addCleanup(self.man.close)
         self.man.touch('codex', 'missing-tx-0001', end=True, now=0)
 
-    def fail_times(self, times, error='FileNotFoundError: no transcript for codex:missing-tx-0001', now=0):
+    def fail_times(self, times, error='FileNotFoundError: no transcript for codex:missing-tx-0001', now=0, **kw):
         for _ in range(times):
-            self.man.fail('codex', 'missing-tx-0001', error, now=now)
+            self.man.fail('codex', 'missing-tx-0001', error, now=now, **kw)
             now += 10_000  # beyond the largest backoff, so the next fail is not gated
         return now
 
     def test_session_past_five_attempts_is_still_retried(self):
-        self.fail_times(5)
+        self.fail_times(5, error='TimeoutError: model call')
         ready = [r['session_id'] for r in self.man.ready(0, 5, now=10_000_000)]
         self.assertEqual(ready, ['missing-tx-0001'])
 
@@ -106,23 +107,24 @@ class RetryTests(unittest.TestCase):
         self.assertEqual([r['session_id'] for r in self.man.ready(0, 5, now=161)], ['missing-tx-0001'])
 
     def test_backoff_is_capped_at_one_hour(self):
-        self.fail_times(20, now=0)
-        self.man.fail('codex', 'missing-tx-0001', 'FileNotFoundError: x', now=1_000)
+        self.fail_times(20, error='TimeoutError: x', now=0, max_attempts=100)
+        self.man.fail('codex', 'missing-tx-0001', 'TimeoutError: x', now=1_000, max_attempts=100)
         self.assertEqual(self.man.get('codex', 'missing-tx-0001')['next_try'], 1_000 + 3600)
 
     def test_missing_transcript_is_never_marked_skipped(self):
-        self.fail_times(5)
+        self.man.mark('codex', 'missing-tx-0001', last_activity=1)  # past the 48h grace period
+        self.fail_times(5, now=1_000_000, exists=lambda row: False)
         row = self.man.get('codex', 'missing-tx-0001')
-        self.assertEqual(row['status'], 'error')
+        self.assertEqual(row['status'], 'lost')
         self.assertIsNone(row['skip_reason'])
 
     def test_failed_listing_names_each_session_with_its_reason(self):
-        self.fail_times(4)
+        self.fail_times(4, error='TimeoutError: model call')
         self.assertEqual(self.man.failed(5), [])
-        self.fail_times(1, now=50_000)
+        self.fail_times(1, error='TimeoutError: model call', now=50_000)
         failed = self.man.failed(5)
         self.assertEqual([(r['session_id'], r['attempts']) for r in failed], [('missing-tx-0001', 5)])
-        self.assertEqual(failed[0]['last_error'], 'FileNotFoundError: no transcript for codex:missing-tx-0001')
+        self.assertEqual(failed[0]['last_error'], 'TimeoutError: model call')
 
 
 class HealthTests(unittest.TestCase):
@@ -142,7 +144,12 @@ class HealthTests(unittest.TestCase):
             self.man.fail('codex', 'failed-0003', 'FileNotFoundError: y', now=0)
         self.man.touch('claude', 'done-0004', end=True, now=0)
         self.man.mark('claude', 'done-0004', status='captured')
-        self.assertEqual(self.man.health(5), {'pending': 1, 'retrying': 1, 'failed': 1, 'unended': 1})
+        self.man.touch('codex', 'gone-0005', end=True, now=0)
+        self.man.mark('codex', 'gone-0005', last_activity=time.time() - 4 * 86400)
+        for _ in range(2):
+            self.man.fail('codex', 'gone-0005', 'FileNotFoundError: no transcript for codex:gone-0005',
+                          now=0, exists=lambda row: False)
+        self.assertEqual(self.man.health(5), {'pending': 1, 'retrying': 1, 'failed': 1, 'terminal': 1, 'unended': 1})
 
 
 class MigrationTests(unittest.TestCase):

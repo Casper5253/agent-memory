@@ -19,7 +19,7 @@ from . import notes, pipeline, projects
 from .config import Config
 from .fsutil import atomic_write, create_once, file_lock
 from .logutil import log
-from .manifest import Manifest
+from .pipeline import open_manifest
 from .redact import redact, redact_session_note
 from .fsutil import NO_WINDOW
 
@@ -96,7 +96,7 @@ def remember_item(cfg: Config, text: str, *, kind: str = "fact", project: str = 
                                               if name != project and signal["score"] >= 3)
     project = attribution.project
     if pipeline.ksources._privacy_for(cfg, project) == "excluded":
-        man = Manifest(cfg.manifest_path)
+        man = open_manifest(cfg)
         try:
             sid = "remember-" + uuid.uuid4().hex[:8]
             man.touch(agent, sid, end=True)
@@ -120,7 +120,7 @@ def remember_item(cfg: Config, text: str, *, kind: str = "fact", project: str = 
     else:
         target = _remembered_list(cfg, f"- {when:%Y-%m-%d} ({kind}) {text} ([[{link}|source]])")
         consolidated = True
-    man = Manifest(cfg.manifest_path)
+    man = open_manifest(cfg)
     try:
         man.record_capture(agent=agent, session_id=f"remember-{item_id}", part=1, note_path=note.relative_to(cfg.vault).as_posix(),
                            project=project, title=summary["title"], date=f"{when:%Y-%m-%d}", start=0, end=0,
@@ -194,13 +194,13 @@ def capture_current(cfg: Config, agent: str = "", cwd: str = "", budget_s: float
         return {"status": "no-current-session", "hint": "run inside a Claude Code, Codex, OpenCode or Devin session, or pass --agent/--session"}
     agent, sid, transcript = found
     from . import worker
-    man = Manifest(cfg.manifest_path)
+    man = open_manifest(cfg)
     try:
         man.touch(agent, sid, cwd=cwd or os.getcwd(), source=transcript or None, end=True)
     finally:
         man.close()
     res = worker.run(cfg, budget_s=budget_s)
-    man = Manifest(cfg.manifest_path)
+    man = open_manifest(cfg)
     try:
         row = man.get(agent, sid)
         latest = man.capture(agent, sid, row["parts"]) if row and row["parts"] else None

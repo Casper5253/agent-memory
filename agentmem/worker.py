@@ -15,6 +15,7 @@ from .config import AGENTS, CAPTURE_ENV, Config
 from .fsutil import atomic_write, try_lock
 from .logutil import log
 from .manifest import Manifest
+from .pipeline import open_manifest
 
 
 def enqueue(cfg: Config, agent: str, session_id: str, *, event: str, source: str = "", cwd: str = "") -> Path:
@@ -47,7 +48,7 @@ def run(cfg: Config, budget_s: float = 900, summarizer=None, consolidator=None, 
     if lock is None:
         return {"status": "busy"}
     summary = {"status": "ok", "jobs": 0, "results": []}
-    man = Manifest(cfg.manifest_path)
+    man = open_manifest(cfg)
     try:
         deadline = time.monotonic() + budget_s
         while time.monotonic() < deadline:

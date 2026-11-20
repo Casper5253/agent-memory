@@ -99,7 +99,7 @@ class ReleaseFixTests(StartupBase):
         class RetryingOnly:
             @staticmethod
             def health(_max_attempts):
-                return {"pending": 0, "retrying": 1, "failed": 0}
+                return {"pending": 0, "retrying": 1, "failed": 0, "terminal": 0}
 
             @staticmethod
             def unconsolidated():

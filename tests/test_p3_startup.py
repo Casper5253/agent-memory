@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -71,10 +72,21 @@ class StartupPackageTests(StartupBase):
         self.man.touch('claude', 'waiting-0001', now=0)
         self.man.touch('codex', 'broken-0002', end=True, now=0)
         for _ in range(5):
-            self.man.fail('codex', 'broken-0002', 'FileNotFoundError: no transcript for codex:broken-0002', now=0)
+            self.man.fail('codex', 'broken-0002', 'TimeoutError: model call timed out', now=0)
+        self.man.touch('codex', 'gone-0003', end=True, now=0)
+        self.man.mark('codex', 'gone-0003', last_activity=time.time() - 4 * 86400)
+        for _ in range(2):
+            self.man.fail('codex', 'gone-0003', 'FileNotFoundError: no transcript for codex:gone-0003',
+                          now=0, exists=lambda row: False)
+        self.man.touch('codex', 'stuck-0004', end=True, now=0)
+        self.man.mark('codex', 'stuck-0004', status='error', attempts=99, last_error='TimeoutError: model call timed out')
+        # Post-migration state: an over-cap error row left when the configured cap was lowered.
+        self.man.db.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('error_bounds_migrated', '1')")
         package = hook.startup_package(self.cfg, str(self.repo))
         self.assertIn('1 session not yet captured', package)
-        self.assertIn('1 failed: FileNotFoundError: no transcript for codex:broken-0002', package)
+        self.assertIn('1 session retrying', package)
+        self.assertIn('1 session terminal', package)
+        self.assertIn('1 failed: TimeoutError: model call timed out', package)
 
     def test_capture_health_line_is_absent_when_everything_is_captured(self):
         package = hook.startup_package(self.cfg, str(self.repo))

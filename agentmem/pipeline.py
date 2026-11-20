@@ -22,7 +22,7 @@ from .config import Config
 from .fsutil import atomic_write, create_once, file_lock
 from .knowledge import sources as ksources
 from .logutil import log
-from .manifest import Manifest
+from .manifest import Manifest, RetryPolicy
 from .redact import redact, redact_session_note
 
 
@@ -48,6 +48,62 @@ def _source_for(row) -> str:
     if row["agent"] == "devin" and not (row["source"] and Path(row["source"]).exists()):
         return adapters.find_devin_transcript(row["session_id"]) or ""
     return row["source"] or ""
+
+
+def open_manifest(cfg: Config) -> Manifest:
+    """Manifest carrying the configured retry policy: bounds for the first-run error migration
+    and the transcript locator that verifies missing-source errors against real state."""
+    return Manifest(cfg.manifest_path, migrate=RetryPolicy(
+        max_attempts=cfg.max_attempts,
+        max_age_s=cfg.error_max_age_days * 86400,
+        grace_s=cfg.error_grace_hours * 3600,
+        locate=lambda row: transcript_located(cfg, row)))
+
+
+def _opencode_session_exists(session_id: str, db_path: "Path | None" = None) -> "bool | None":
+    """Whether the OpenCode store still holds the session; None when the store is unreachable."""
+    import sqlite3
+    path = Path(db_path) if db_path else Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+    if not path.exists():
+        return None
+    try:
+        db = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        try:
+            return db.execute("SELECT 1 FROM session WHERE id=?", (session_id,)).fetchone() is not None
+        finally:
+            db.close()
+    except (sqlite3.Error, OSError):
+        return None
+
+
+def transcript_located(cfg: Config, row) -> "bool | None":
+    """Whether the transcript still exists anywhere the adapters look: the recorded path, the
+    agent roots (Claude projects, Codex sessions and archived_sessions, Devin transcripts) or
+    the OpenCode store. False means absent everywhere; None means the check could not tell."""
+    agent, sid = row["agent"], row["session_id"]
+    source = row["source"] or ""
+    try:
+        if source and agent != "opencode" and Path(source).exists():
+            return True
+        if agent == "claude":
+            return next(Path(cfg.claude_transcripts_root).glob(f"*/{sid}.jsonl"), None) is not None
+        if agent == "codex":
+            if adapters.find_codex_transcript(sid):
+                return True
+            archive = Path(cfg.codex_transcripts_root).parent / "archived_sessions"
+            return next(archive.glob(f"rollout-*{sid}*.zst"), None) is not None
+        if agent == "devin":
+            root = cfg.devin_transcripts_root
+            if root is None and adapters.devin_data_dir() is not None:
+                root = adapters.devin_data_dir() / "transcripts"
+            if root is not None and Path(root, f"{sid}.json").exists():
+                return True
+            return bool(adapters.find_devin_transcript(sid))
+        if agent == "opencode":
+            return _opencode_session_exists(sid)
+    except OSError:
+        return None
+    return None
 
 
 def _excluded(cfg: Config, cwd: str) -> bool:
@@ -379,18 +435,8 @@ def _redact_values(value, email_allowlist=None):
     return value
 
 
-def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
-    """Register aged Claude and Codex JSONL transcripts before the ordinary settle-window drain.
-
-    It uses the configured roots and file modification time for the existing settle rule, then lets
-    normal parsing, gating, privacy, and retry handling decide whether to capture. OpenCode exports
-    require a known session id, so they remain hook-bound.
-    """
-    now = time.time() if now is None else now
-    settle_s = cfg.settle_minutes * 60
-    discovery_since = man.discovery_since(now)
-    discovered = 0
-    registered = 0
+def _discovery_candidates(cfg: Config, man: Manifest, now, settle_s, discovery_since) -> list:
+    """Aged transcripts not yet registered, oldest first. Each item: (modified, agent, path, known_id, row)."""
     roots = [("claude", Path(cfg.claude_transcripts_root)), ("codex", Path(cfg.codex_transcripts_root))]
     # This Devin build loads no hook importer reliably (none since 18 Nov), so its
     # transcripts are discovered here instead of waiting for a hook.
@@ -432,8 +478,36 @@ def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
                 candidates.append((modified, agent, source, known_id, known))
             except OSError:
                 continue
+    return sorted(candidates, key=lambda item: (item[0], str(item[2])))
 
-    for modified, agent, source, known_id, known in sorted(candidates, key=lambda item: (item[0], str(item[2]))):
+
+def discovery_backlog(cfg: Config, man: Manifest, now=None) -> dict:
+    """Captures still waiting, labelled by kind: transcripts queued behind the per-drain
+    discovery limit, manifest sessions already pending, and live errors awaiting retry."""
+    now = time.time() if now is None else now
+    candidates = _discovery_candidates(cfg, man, now, cfg.settle_minutes * 60, man.discovery_since(now))
+    counts = {"unregistered": 0, "pending": 0, "retrying": 0}
+    counts["unregistered"] = sum(1 for item in candidates if item[4] is None)
+    for row in man.db.execute(
+            "SELECT status, count(*) AS c FROM sessions WHERE status IN ('pending','error') GROUP BY status"):
+        counts["pending" if row["status"] == "pending" else "retrying"] = row["c"]
+    return counts
+
+
+def _discover_orphan_transcripts(cfg: Config, man: Manifest, now=None) -> int:
+    """Register aged Claude and Codex JSONL transcripts before the ordinary settle-window drain.
+
+    It uses the configured roots and file modification time for the existing settle rule, then lets
+    normal parsing, gating, privacy, and retry handling decide whether to capture. OpenCode exports
+    require a known session id, so they remain hook-bound.
+    """
+    now = time.time() if now is None else now
+    settle_s = cfg.settle_minutes * 60
+    discovery_since = man.discovery_since(now)
+    discovered = 0
+    registered = 0
+    candidates = _discovery_candidates(cfg, man, now, settle_s, discovery_since)
+    for modified, agent, source, known_id, known in candidates:
         if known is None and registered >= cfg.discovery_max_per_drain:
             continue
         try:
@@ -696,7 +770,10 @@ def process_ready(cfg: Config, man: Manifest, budget_s: float = 900, summarizer=
                 fresh = man.get(row["agent"], row["session_id"])  # re-read under the lock
                 outcome = finalize(cfg, man, fresh, summarizer, consolidator)
         except Exception as e:  # noqa: BLE001 - any failure is recorded and retried with backoff
-            man.fail(row["agent"], row["session_id"], f"{type(e).__name__}: {e}")
+            man.fail(row["agent"], row["session_id"], f"{type(e).__name__}: {e}",
+                     max_attempts=cfg.max_attempts, max_age_s=cfg.error_max_age_days * 86400,
+                     grace_s=cfg.error_grace_hours * 3600,
+                     exists=lambda r: transcript_located(cfg, r))
             log(cfg, "error", agent=row["agent"], session=row["session_id"], error=f"{type(e).__name__}: {e}",
                 trace=traceback.format_exc(limit=3))
             outcome = "error"

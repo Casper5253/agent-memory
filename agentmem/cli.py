@@ -48,9 +48,9 @@ def cmd_search(args):
 
 
 def cmd_sessions(args):
-    from .manifest import Manifest
+    from .pipeline import open_manifest
     cfg = _cfg(args)
-    man = Manifest(cfg.manifest_path)
+    man = open_manifest(cfg)
     try:
         rows = man.query_captures(project=args.project, agent=args.agent, since=args.since, until=args.until, limit=args.n)
     finally:
@@ -108,11 +108,11 @@ def _layer(cfg, path: Path) -> str:
 
 def cmd_projects(args):
     from . import notes
-    from .manifest import Manifest
+    from .pipeline import open_manifest
     from .projects import load_map
     cfg = _cfg(args)
     data = load_map(cfg.projects_map)
-    man = Manifest(cfg.manifest_path)
+    man = open_manifest(cfg)
     try:
         for proj in sorted(data["projects"], key=lambda p: p["name"].lower()):
             if proj.get("status") != "active" and not args.all:
@@ -142,12 +142,13 @@ def cmd_projects(args):
 
 # ----------------------------------------------------------------------------- operations
 def cmd_stats(args):
-    from .manifest import Manifest
+    from .pipeline import discovery_backlog, open_manifest
     from .search import qmd_cmd, _qmd
     cfg = _cfg(args)
-    man = Manifest(cfg.manifest_path)
+    man = open_manifest(cfg)
     try:
         s = man.stats()
+        s["discovery_backlog"] = discovery_backlog(cfg, man)
     finally:
         man.close()
     s["paused"] = cfg.paused()
@@ -204,7 +205,7 @@ def _detect_agent() -> str:
 
 def cmd_capture(args):
     from . import worker
-    from .manifest import Manifest
+    from .pipeline import open_manifest
     cfg = _cfg(args)
     if args.current:
         from .remember import capture_current
@@ -212,7 +213,7 @@ def cmd_capture(args):
                                          budget_s=args.budget), indent=2))
         return 0
     if args.session:
-        man = Manifest(cfg.manifest_path)
+        man = open_manifest(cfg)
         try:
             man.touch(args.agent, args.session, cwd=args.cwd, source=args.transcript, end=True)
         finally:
@@ -223,10 +224,9 @@ def cmd_capture(args):
 
 
 def cmd_consolidate(args):
-    from .manifest import Manifest
-    from .pipeline import consolidate_pending
+    from .pipeline import consolidate_pending, open_manifest
     cfg = _cfg(args)
-    man = Manifest(cfg.manifest_path)
+    man = open_manifest(cfg)
     try:
         print(json.dumps(consolidate_pending(cfg, man, limit=args.limit)))
     finally:
@@ -236,17 +236,11 @@ def cmd_consolidate(args):
 
 def cmd_retry(args):
     from . import worker
-    from .manifest import Manifest
+    from .pipeline import open_manifest
     cfg = _cfg(args)
-    man = Manifest(cfg.manifest_path)
+    man = open_manifest(cfg)
     try:
-        with man.tx() as db:
-            sql = "UPDATE sessions SET status='pending', attempts=0, next_try=0, end_seen=1 WHERE status='error'"
-            params = ()
-            if args.session:
-                sql += " AND session_id=?"
-                params = (args.session,)
-            n = db.execute(sql, params).rowcount
+        n = man.revive(args.session, include_lost=args.include_lost)
     finally:
         man.close()
     print(f"reset {n} failed session(s)")
@@ -377,6 +371,8 @@ def build_parser():
 
     s = sub.add_parser("retry", help="reset failed captures and run the worker")
     s.add_argument("--session")
+    s.add_argument("--include-lost", action="store_true",
+                   help="also revive terminal 'lost' rows, not just live errors")
     s.set_defaults(fn=cmd_retry)
 
     sub.add_parser("pause", help="stop all capture (PAUSE switch)").set_defaults(fn=cmd_pause)
