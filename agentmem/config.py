@@ -6,6 +6,7 @@ from pathlib import Path
 
 HOME = Path.home()
 RUNTIME = Path(os.environ.get("AGENTMEM_HOME", HOME / ".agents" / "memory"))
+AGENTS = ("claude", "codex", "opencode", "devin")
 CAPTURE_ENV = "AGENTMEM_CAPTURE"  # set inside any process the pipeline launches; hooks no-op when present
 
 

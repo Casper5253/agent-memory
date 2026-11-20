@@ -317,7 +317,7 @@ def cmd_worker(args):
     return 0
 
 
-def main(argv=None):
+def build_parser():
     p = argparse.ArgumentParser(prog="mem", description="Agent memory: search and maintain the shared Obsidian vault.")
     p.add_argument("--vault", help="override OBSIDIAN_VAULT_PATH")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -355,7 +355,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_index)
 
     s = sub.add_parser("capture", help="capture now: a given session, or everything ready")
-    s.add_argument("--agent", choices=["claude", "codex", "opencode", "devin"])
+    s.add_argument("--agent", choices=config_mod.AGENTS)
     s.add_argument("--session"), s.add_argument("--transcript"), s.add_argument("--cwd")
     s.add_argument("--current", action="store_true", help="capture the agent session running this command, now")
     s.add_argument("--budget", type=float, default=900)
@@ -367,7 +367,7 @@ def main(argv=None):
     s.add_argument("--why", help="rationale (for decisions)")
     s.add_argument("--project", help="override automatic routing")
     s.add_argument("--session", action="store_true", help="also sync the current session")
-    s.add_argument("--agent", choices=["claude", "codex", "opencode", "devin"])
+    s.add_argument("--agent", choices=config_mod.AGENTS)
     s.add_argument("--cwd")
     s.set_defaults(fn=cmd_remember)
 
@@ -384,11 +384,11 @@ def main(argv=None):
     sub.add_parser("doctor", help="health checks").set_defaults(fn=cmd_doctor)
 
     s = sub.add_parser("hook", help=argparse.SUPPRESS)
-    s.add_argument("agent", choices=["claude", "codex", "devin"])
+    s.add_argument("agent", choices=config_mod.AGENTS)
     s.set_defaults(fn=cmd_hook)
 
     s = sub.add_parser("enqueue", help=argparse.SUPPRESS)
-    s.add_argument("--agent", required=True, choices=["claude", "codex", "opencode", "devin"])
+    s.add_argument("--agent", required=True, choices=config_mod.AGENTS)
     s.add_argument("--session", required=True)
     s.add_argument("--event", default="turn", choices=["turn", "end"])
     s.add_argument("--transcript"), s.add_argument("--cwd")
@@ -398,7 +398,11 @@ def main(argv=None):
     s.add_argument("--delay", type=float, default=0)
     s.set_defaults(fn=cmd_worker)
 
-    args = p.parse_args(argv)
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     if args.cmd == "capture":
         args.agent_given = args.agent is not None
         args.agent = args.agent or "claude"

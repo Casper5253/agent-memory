@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 
 from . import pipeline, search
-from .config import CAPTURE_ENV, Config
+from .config import AGENTS, CAPTURE_ENV, Config
 from .fsutil import atomic_write, try_lock
 from .logutil import log
 from .manifest import Manifest
@@ -30,7 +30,7 @@ def drain_queue(cfg: Config, man: Manifest) -> int:
     for path in sorted(cfg.queue_dir.glob("*.json")):
         try:
             job = json.loads(path.read_text(encoding="utf-8"))
-            if job.get("agent") in ("claude", "codex", "opencode", "devin") and job.get("session_id"):
+            if job.get("agent") in AGENTS and job.get("session_id"):
                 man.touch(job["agent"], job["session_id"], cwd=job.get("cwd") or None, source=job.get("source") or None,
                           end=job.get("event") == "end", now=job.get("ts"))
                 man.record_event(job["agent"], job["session_id"], job.get("event") or "", job.get("ts"))
