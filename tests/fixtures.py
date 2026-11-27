@@ -48,7 +48,7 @@ def make_vault(tmp: Path, **overrides) -> Config:
     codex_root.mkdir(parents=True)
     opts = dict(summarizer="claude-haiku", settle_minutes=20, auto_index=False, embeddings=False,
                 claude_transcripts_root=claude_root, codex_transcripts_root=codex_root,
-                devin_transcripts_root=transcripts / "devin")
+                devin_transcripts_root=transcripts / "devin", snapshots_root=tmp / "snapshots")
     opts.update(overrides)
     return Config(vault=vault, **opts)
 

@@ -16,6 +16,7 @@ class Config:
     claude_transcripts_root: Path = field(default_factory=lambda: HOME / ".claude" / "projects")
     codex_transcripts_root: Path = field(default_factory=lambda: HOME / ".codex" / "sessions")
     devin_transcripts_root: "Path | None" = None  # None: the Devin CLI data dir found at run time
+    snapshots_root: Path = field(default_factory=lambda: RUNTIME / "snapshots")  # raw transcripts, outside the vault
     summarizer: str = "claude-haiku"      # "claude-haiku" | "none"
     settle_minutes: int = 20               # no new transcript bytes for this long == session over
     discovery_max_per_drain: int = 25
@@ -50,6 +51,7 @@ class Config:
         self.codex_transcripts_root = Path(self.codex_transcripts_root)
         if self.devin_transcripts_root is not None:
             self.devin_transcripts_root = Path(self.devin_transcripts_root)
+        self.snapshots_root = Path(self.snapshots_root)
         enum(self.knowledge_mode, ("off", "shadow", "active"))
         for name in ("knowledge_input_units", "knowledge_output_tokens", "knowledge_run_captures",
                      "knowledge_run_calls", "knowledge_run_seconds", "knowledge_qmd_timeout_ms",
@@ -93,6 +95,14 @@ class Config:
     @property
     def queue_dir(self) -> Path:
         return self.meta / "queue"
+
+    @property
+    def snapshots_dir(self) -> Path:
+        return self.snapshots_root
+
+    def snapshot_path(self, agent: str, session_id: str) -> Path:
+        """Where the end hook keeps its copy of the transcript, so a cleanup cannot lose it."""
+        return self.snapshots_dir / f"{agent}-{session_id}.snapshot"
 
     @property
     def locks_dir(self) -> Path:

@@ -40,14 +40,21 @@ def _parse_time(value: str) -> datetime:
     return datetime.now().astimezone()
 
 
-def _source_for(row) -> str:
-    if row["agent"] == "codex" and not (row["source"] and Path(row["source"]).exists()):
+def _source_for(cfg: Config, row) -> str:
+    """The live transcript if it is there, else the end-hook copy, else the agent finder."""
+    recorded = row["source"] or ""
+    if recorded and Path(recorded).exists():
+        return recorded
+    snap = cfg.snapshot_path(row["agent"], row["session_id"])
+    if snap.exists():
+        return str(snap)
+    if row["agent"] == "codex":
         return adapters.find_codex_transcript(row["session_id"]) or ""
     if row["agent"] == "opencode":
         return row["session_id"]
-    if row["agent"] == "devin" and not (row["source"] and Path(row["source"]).exists()):
+    if row["agent"] == "devin":
         return adapters.find_devin_transcript(row["session_id"]) or ""
-    return row["source"] or ""
+    return recorded
 
 
 def open_manifest(cfg: Config) -> Manifest:
@@ -84,6 +91,8 @@ def transcript_located(cfg: Config, row) -> "bool | None":
     source = row["source"] or ""
     try:
         if source and agent != "opencode" and Path(source).exists():
+            return True
+        if cfg.snapshot_path(agent, sid).exists():
             return True
         if agent == "claude":
             return next(Path(cfg.claude_transcripts_root).glob(f"*/{sid}.jsonl"), None) is not None
@@ -244,7 +253,7 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                            when=fields["date"], summarizer=fields.get("summarizer", "legacy"), cost=0,
                            prefix_sha="", evidence="legacy-note", related_projects=[])
         else:
-            source = _source_for(row)
+            source = _source_for(cfg, row)
             if not source:
                 raise FileNotFoundError(f"no transcript for {agent}:{sid}")
             if row["parts"] and agent == "opencode":
@@ -769,6 +778,10 @@ def process_ready(cfg: Config, man: Manifest, budget_s: float = 900, summarizer=
             with file_lock(cfg.locks_dir / f"session-{row['agent']}-{notes.slug(row['session_id'], 12)}.lock", timeout=5):
                 fresh = man.get(row["agent"], row["session_id"])  # re-read under the lock
                 outcome = finalize(cfg, man, fresh, summarizer, consolidator)
+                settled = man.get(row["agent"], row["session_id"])
+                if (settled and settled["status"] in ("captured", "skipped")
+                        and settled["deferred_start"] is None):
+                    cfg.snapshot_path(row["agent"], row["session_id"]).unlink(missing_ok=True)
         except Exception as e:  # noqa: BLE001 - any failure is recorded and retried with backoff
             man.fail(row["agent"], row["session_id"], f"{type(e).__name__}: {e}",
                      max_attempts=cfg.max_attempts, max_age_s=cfg.error_max_age_days * 86400,
