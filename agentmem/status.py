@@ -306,7 +306,7 @@ def reconcile(old, update, allowed, *, source_orders=None, new_order=(0, 0)):
                 kept.append(item)
         excess = max(0, len(kept) - SECTIONS[section][1])
         oldest = sorted(range(len(kept)), key=lambda n: (
-            source_orders.get(kept[n].ref, new_order), _ref_date(kept[n].ref), n))[:excess]
+            _ref_date(kept[n].ref), source_orders.get(kept[n].ref, new_order), n))[:excess]
         result.displaced += [Displaced(kept[n], section, 'limit') for n in oldest]
         result.sections[section] = [item for n, item in enumerate(kept) if n not in oldest]
     return result
