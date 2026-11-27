@@ -16,10 +16,73 @@ from .fsutil import NO_WINDOW
 CONTEXT_CAP = 4000
 GIT_TIMEOUT_S = 2
 STATE_CAP = 600
+PENDING_PREVIEW_CAP = 120
+INDEX_PREFIX = 'Note sections (mem note --section): '
+INDEX_LABELS = {
+    'Purpose and direction': 'Purpose',
+    'What works now': 'Works now',
+    'Latest progress': 'Latest',
+    'Active work and blockers': 'Active',
+    'Open questions': 'Questions',
+    'Key decisions (decision, reason)': 'Decisions',
+    'Next steps': 'Next steps',
+    'Pending reconciliation': 'Pending',
+    'Recent sessions': 'Sessions',
+    'Notes': 'Notes',
+}
+NOTE_HEADING = re.compile(r'(?m)^(#{2,3}) (.+)$')
+NOTE_DATE = re.compile(r'\d{4}-\d{2}-\d{2}')
 
 
 def _plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _note_sections(text: str):
+    """Leaf headings of a project note as (label, item count, newest ISO date), in note order."""
+    headings = list(NOTE_HEADING.finditer(text))
+    rows = []
+    for position, heading in enumerate(headings):
+        level = heading.group(1)
+        end = len(text)
+        for later in headings[position + 1:]:
+            if len(later.group(1)) <= len(level):
+                end = later.start()
+                break
+        if any(len(later.group(1)) > len(level) for later in headings[position + 1:] if later.start() < end):
+            continue  # a container heading: its child headings are the sections agents can ask for
+        body = text[heading.end():end]
+        items = [line for line in body.splitlines()
+                 if line.startswith('- ') and line[2:].strip().casefold() not in ('none', 'none yet')]
+        prose = [line for line in body.splitlines()
+                 if line.strip() and not line.startswith('- ') and not line.startswith('<!--')]
+        if not items and not prose:
+            continue
+        dates = NOTE_DATE.findall(body)
+        rows.append((INDEX_LABELS.get(heading.group(2).strip(), heading.group(2).strip()),
+                     len(items), max(dates) if dates else ''))
+    return rows
+
+
+def _note_index_variants(text: str) -> list:
+    """Section index lines from richest to smallest: names with counts and dates, counts, then names."""
+    rows = _note_sections(text)
+    if not rows:
+        return []
+    return [INDEX_PREFIX + body for body in (
+        '; '.join(f'{name} {count} {date}' if date else f'{name} {count}' for name, count, date in rows),
+        '; '.join(f'{name} {count}' for name, count, _ in rows),
+        '; '.join(name for name, _, _ in rows))]
+
+
+def _note_index(text: str, budget: int) -> "str":
+    """The richest section index that fits the remaining budget."""
+    if not text or budget <= 0:
+        return ''
+    for line in _note_index_variants(text):
+        if len(line) <= budget:
+            return line
+    return ''
 
 
 def _git_line(cwd: str) -> str:
@@ -46,7 +109,7 @@ def _git_line(cwd: str) -> str:
     return line
 
 
-def _health_line(man, max_attempts: int, note=None, pending='') -> str:
+def _health_line(man, max_attempts: int, pending='') -> str:
     health = man.health(max_attempts)
     parts = []
     if health["pending"]:
@@ -57,21 +120,23 @@ def _health_line(man, max_attempts: int, note=None, pending='') -> str:
         reason = man.failed(max_attempts)[0]["last_error"] or "unknown error"
         parts.append(f"{health['failed']} failed: {reason[:160]}")
     if health["terminal"]:
-        parts.append(f"{_plural(health['terminal'], 'session')} terminal (mem stats)")
+        parts.append(f"{_plural(health['terminal'], 'session')} terminal")
     backlog = len(man.unconsolidated())
     reason = re.search(r'status update pending \(([^;\n)]+)', pending)
     if backlog:
         why = reason[1][:100] if reason else 'reconciliation pending'
-        parts.append(f"{_plural(backlog, 'captured session')} awaiting consolidation ({why}); see {note or 'project notes'}")
+        parts.append(f"{_plural(backlog, 'captured session')} awaiting consolidation ({why})")
         preview = next((line for line in pending.splitlines() if 'status update pending' not in line and line.strip()), '')
         if preview:
             preview = re.sub(r'^- \[ \] \S+ \[\[[^\]]+\]\]\s*[^\w]*', '', preview)
-            parts.append('pending: ' + preview[:100])
+            preview = re.sub(r'\s*(?:capture-ref:\S+|\[\[[^\]]+\]\])\s*$', '', preview).strip()
+            if 0 < len(preview) <= PENDING_PREVIEW_CAP:
+                parts.append('pending: ' + preview)  # a complete short item, never a cut fragment
     elif 'status update pending' in pending:
         why = f' ({reason[1][:100]})' if reason else ''
-        parts.append(f"status update pending{why}; see {note}")
+        parts.append(f"status update pending{why}")
     if 'status replay refused' in pending:
-        parts.append(f'status replay refused; see {note}')
+        parts.append('status replay refused')
     return f"Capture health: {', '.join(parts)}" if parts else ""
 
 
@@ -84,14 +149,17 @@ def startup_package(cfg, cwd: str) -> str:
             'When asked what was previously decided, implemented or configured, search the vault first: '
             '`mem search "<terms>"` (memory skill), never guess.']
     page, pending, note, legacy, recent = status.empty(), '', None, '', ''
+    note_text, note_label = '', ''
     man = open_manifest(cfg)
     try:
         if project != projects.UNSORTED:
             note = projects.note_path(cfg.vault, project)
+            note_label = note.name
             head.append(f"Project: {project} - {note}")
             if note.exists():
                 try:
                     text = note.read_text(encoding='utf-8')
+                    note_text = text
                     pending = '\n'.join(notes.pending_lines(note, text))
                     block = notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END)
                     try:
@@ -111,29 +179,45 @@ def startup_package(cfg, cwd: str) -> str:
                 entries.append(f"{row['date'][:10]} {source}")
             if entries:
                 recent = 'Recent sessions: ' + '; '.join(entries)
-        head += [line for line in (_git_line(cwd), _health_line(man, cfg.max_attempts, note, pending)) if line]
+        head += [line for line in (_git_line(cwd), _health_line(man, cfg.max_attempts, pending)) if line]
     finally:
         man.close()
     count = sum(len(items) for items in page.values())
-    pointer = f"{count} more items in {note}" if count else ''
-    fixed = '\n'.join(head)
+    pointer = f"{count} more items in {note_label}" if count else ''
+    fixed = '\n'.join(head + ([pointer] if pointer else []))
     eligible = {key: [item for item in page[key] if len(item.text) <= 280] for key in status.STARTUP_ORDER}
     selection = {key: items[:1] for key, items in eligible.items()}
+    index_variants = _note_index_variants(note_text)
+    minimal_index = index_variants[-1] if index_variants else ''
+    if minimal_index and len('\n'.join(head + ([pointer] if pointer else []) + [minimal_index])) > CONTEXT_CAP:
+        minimal_index = ''  # not even the names fit with the mandatory lines: no index this session
 
     def fitted_lines(candidate):
         lines = _startup_lines(head, candidate)
         selected = sum(len(items) for items in candidate.values())
-        if legacy and len('\n'.join(lines + [legacy])) + (len(pointer) + 1 if selected < count else 0) <= CONTEXT_CAP:
-            lines.append(legacy)
         if selected < count:
-            lines.append(f"{count - selected} more items in {note}")
+            lines.append(f"{count - selected} more items in {note_label}")
+        if legacy:
+            if len('\n'.join(lines + [legacy] + ([minimal_index] if minimal_index else []))) <= CONTEXT_CAP:
+                lines.append(legacy)
+        if minimal_index:
+            lines.append(minimal_index)  # held against status items, then enriched once items are admitted
         return lines
 
     if len(fixed) > CONTEXT_CAP:
+        # Head alone overflows (a very long vault or note path): keep whole lines only, never a slice.
         health = next((line for line in head if line.startswith('Capture health:')), '')
-        priority = '\n'.join(line for line in (health, pointer) if line)
-        room = max(0, CONTEXT_CAP - len(priority) - 1)
-        return ('\n'.join(head[:3])[:room] + '\n' + priority)[-CONTEXT_CAP:]
+        essential = []
+        for line in (health, pointer):
+            if line and len('\n'.join(essential + [line])) <= CONTEXT_CAP:
+                essential.append(line)
+        chosen = []
+        for line in head:
+            if line in essential:
+                continue
+            if len('\n'.join(chosen + [line] + essential)) <= CONTEXT_CAP:
+                chosen.append(line)
+        return '\n'.join(chosen + essential)
     if len('\n'.join(fitted_lines(selection))) > CONTEXT_CAP:
         # Not every section's first item fits: admit first items in startup order while they fit.
         selection = {key: [] for key in eligible}
@@ -150,6 +234,11 @@ def startup_package(cfg, cwd: str) -> str:
                 if len('\n'.join(fitted_lines(trial))) <= CONTEXT_CAP:
                     selection = trial
     lines = fitted_lines(selection)
+    if minimal_index and minimal_index in lines:
+        base = [line for line in lines if line != minimal_index]
+        richer = _note_index(note_text, CONTEXT_CAP - len('\n'.join(base)) - (1 if base else 0))
+        if richer:  # upgrade to counts, then dates, only after status items are admitted
+            lines = base + [richer]
     recent_budget = CONTEXT_CAP - len('\n'.join(lines)) - (1 if recent else 0)
     recent = _fit_recent(recent, recent_budget)
     if recent:
@@ -170,13 +259,10 @@ def _fit_recent(recent, budget):
         kept.append(entry)
     if len(kept) == len(entries):
         return prefix + '; '.join(kept)
-    marker = '…'
-    if budget < len(prefix) + len(marker):
-        return ''
-    candidate = prefix + '; '.join(kept + [marker])
-    if len(candidate) <= budget:
-        return candidate
-    return prefix + '; '.join(kept) if kept else prefix + marker
+    if not kept:
+        return ''  # a lone marker says nothing; the section index names the sessions instead
+    candidate = prefix + '; '.join(kept + ['…'])
+    return candidate if len(candidate) <= budget else prefix + '; '.join(kept)
 
 
 def _startup_lines(head, selection):
