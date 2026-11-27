@@ -4,10 +4,12 @@ Every hit says whether it is CURRENT project state, a HISTORICAL session record,
 ARCHIVED, and carries its on-disk path so the caller can verify it.
 """
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Config
@@ -22,6 +24,220 @@ COLLECTIONS = {
     "vault-archive": ("4-Archive", "ARCHIVED", "Inactive projects and retired material. Historical only."),
 }
 LABEL_BY_FOLDER = {folder: label for folder, label, _ in COLLECTIONS.values()}
+
+STOPWORDS = frozenset("""
+a an and are as at be but by do does did for from has have how if in into is it its me my no not of
+on or our out over so than that the their them then there these they this to too us was were what when
+where which who why will with you your
+""".split())
+HISTORY_LINE = re.compile(r"^- (?:\[ \] )?(\d{4}-\d{2}-\d{2})\b")
+HISTORY_OVERFLOW = re.compile(r"^- (\d{4}-\d{2}-\d{2}) \[pending-overflow\]\s*$")
+HISTORY_MARKER = re.compile(r"^\s*<!--.*-->\s*$")
+HISTORY_CAPTURE_REF = re.compile(r"\s*capture-ref:\S+")
+HISTORY_TAG = re.compile(r"(\d{4}-\d{2}-\d{2})\s+\[(?!\[)([^\]]*)\]")
+HISTORY_CITATION = re.compile(r"\[\[[^\]]*\]\]")
+BM25_K1 = 1.2
+BM25_B = 0.75
+
+
+@dataclass(frozen=True)
+class HistoryEntry:
+    line: int
+    date: str
+    section: str
+    reason: str
+    text: str
+    citation: str
+
+
+def _history_continuations(lines, start):
+    extra = []
+    index = start
+    while index < len(lines) and lines[index].strip() and lines[index].startswith("  "):
+        extra.append(lines[index].strip())
+        index += 1
+    return extra, index
+
+
+def _history_text(raw, extra):
+    body = "- " + raw[6:] if raw.startswith("- [ ] ") else raw
+    body = HISTORY_CAPTURE_REF.sub("", body)
+    return " ".join(" ".join([body, *extra]).split())
+
+
+def _history_tags(body):
+    match = HISTORY_TAG.match(body)
+    if not match:
+        return "", ""
+    section, separator, reason = match[2].partition(";")
+    return section.strip(), reason.strip() if separator else ""
+
+
+def _last_citation(text):
+    citations = HISTORY_CITATION.findall(text)
+    return citations[-1] if citations else ""
+
+
+def _parse_history(text):
+    """Return (entry, first line, last line) for every dated History block, 1-based."""
+    lines = text.splitlines()
+    blocks = []
+    index = 0
+    while index < len(lines):
+        raw = lines[index]
+        if not raw.strip() or HISTORY_MARKER.match(raw):
+            index += 1
+            continue
+        overflow = HISTORY_OVERFLOW.match(raw)
+        if overflow:
+            inner = index + 1
+            while inner < len(lines) and (not lines[inner].strip() or HISTORY_MARKER.match(lines[inner])):
+                inner += 1
+            if inner < len(lines) and lines[inner].startswith("- "):
+                extra, end = _history_continuations(lines, inner + 1)
+                body = _history_text(lines[inner], extra)
+                dated = HISTORY_LINE.match(lines[inner])
+                entry = HistoryEntry(line=inner + 1, date=dated[1] if dated else overflow[1],
+                                     section="pending-overflow", reason="", text=body,
+                                     citation=_last_citation(body))
+                blocks.append((entry, index + 1, end))
+                index = end
+                continue
+            index += 1
+            continue
+        start = HISTORY_LINE.match(raw)
+        if start:
+            extra, end = _history_continuations(lines, index + 1)
+            body = _history_text(raw, extra)
+            section, reason = _history_tags(raw[2:])
+            entry = HistoryEntry(line=index + 1, date=start[1], section=section, reason=reason,
+                                 text=body, citation=_last_citation(body))
+            blocks.append((entry, index + 1, end))
+            index = end
+            continue
+        index += 1
+    return blocks
+
+
+def history_entries(text: str) -> list[HistoryEntry]:
+    return [entry for entry, _, _ in _parse_history(text)]
+
+
+def _meaningful_terms(query: str) -> list[str]:
+    seen = set()
+    terms = []
+    for word in re.findall(r"\w{3,}", (query or "").lower()):
+        if word in STOPWORDS or word in seen:
+            continue
+        seen.add(word)
+        terms.append(word)
+        if len(terms) >= 20:
+            break
+    return terms
+
+
+def _prefix_match(word, term):
+    # Four characters when the shorter word is a full prefix, for task/tasks.
+    shared = 0
+    for left, right in zip(word, term):
+        if left != right:
+            break
+        shared += 1
+    return shared >= 5 or (shared >= 4 and shared == min(len(word), len(term)))
+
+
+def _entry_hits(text, terms):
+    low = HISTORY_CITATION.sub(" ", text).lower()
+    words = set(re.findall(r"\w+", low))
+    hits = []
+    for term in terms:
+        if term in low or (len(term) >= 4 and term[:4] in low and any(_prefix_match(word, term) for word in words)):
+            hits.append(term)
+    return hits
+
+
+def _entry_score(text, terms):
+    return len(_entry_hits(text, terms))
+
+
+def _history_selection(blocks, terms, qmd_line=None, fallback=True):
+    query_terms = _meaningful_terms(terms)
+    if query_terms:
+        threshold = min(2, len(query_terms))
+        candidates = []
+        for entry, _, _ in blocks:
+            claim = HISTORY_CITATION.sub(" ", entry.text).lower()
+            hits = _entry_hits(entry.text, query_terms)
+            if len(hits) < threshold:
+                continue
+            candidates.append((entry, claim, hits, len(re.findall(r"\w+", claim))))
+        if candidates:
+            count = len(candidates)
+            frequency = {term: sum(1 for _, _, hits, _ in candidates if term in hits) for term in query_terms}
+            average = sum(length for _, _, _, length in candidates) / count
+            scored = []
+            for entry, claim, hits, length in candidates:
+                score = 0.0
+                for term in hits:
+                    frequency_term = frequency[term]
+                    inverse = math.log(1 + (count - frequency_term + 0.5) / (frequency_term + 0.5))
+                    if term in claim:
+                        tf = claim.count(term)
+                    else:
+                        tf = sum(1 for word in set(re.findall(r"\w+", claim)) if _prefix_match(word, term))
+                    score += inverse * tf * (BM25_K1 + 1) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * length / average))
+                scored.append((-score, -int(entry.date.replace("-", "")), -entry.line, entry))
+            scored.sort()
+            top = []
+            seen = set()
+            for row in scored:
+                entry = row[3]
+                key = " ".join(HISTORY_CITATION.sub(" ", entry.text).lower().split())
+                if key in seen:
+                    continue
+                seen.add(key)
+                top.append(entry)
+                if len(top) == 3:
+                    break
+            return sorted(top, key=lambda entry: (entry.date, entry.line), reverse=True)
+    if not fallback:
+        return []
+    if qmd_line is None:
+        return [blocks[-1][0]] if blocks else []
+    for entry, start, end in blocks:
+        if start <= qmd_line <= end:
+            return [entry]
+    return [min(blocks, key=lambda block: min(abs(qmd_line - block[1]), abs(qmd_line - block[2])))[0]] if blocks else []
+
+
+def _history_snippet(entries):
+    entries = list(entries)
+    if not entries:
+        return None
+
+    def compose(items):
+        prefix = f"{len(items)} matching entries, newest first." if len(items) >= 2 else ""
+        return "\n".join(([prefix] if prefix else []) + [entry.text for entry in items])
+
+    kept = []
+    for entry in entries:
+        trial = kept + [entry]
+        if len(compose(trial)) <= 1200:
+            kept = trial
+        elif not kept:
+            return entry.text[:1199].rstrip() + "…", entry.line
+        else:
+            break
+    return compose(kept), kept[0].line
+
+
+def _history_render(path, terms, qmd_line):
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    blocks = _parse_history(text)
+    return _history_snippet(_history_selection(blocks, terms, qmd_line))
 
 
 def qmd_cmd() -> "list | None":
@@ -140,14 +356,19 @@ def _located_label(path, label, snippet, line=None):
         return "UNVERIFIED"
 
 
-def _build_hit(cfg, it):
+def _build_hit(cfg, it, terms=""):
     path = _to_disk(cfg, it.get("file") or it.get("path") or "")
     snippet = re.sub(r"^@@[^@]*@@\s*(\([^)]*\))?\s*", "", " ".join(str(it.get("snippet") or "").split()))[:400]
     label = _label(os.path.relpath(path, cfg.vault) if os.path.isabs(path) else path)
+    line = it.get("line")
+    if _project_history(path):
+        rendered = _history_render(path, terms, line)
+        if rendered:
+            snippet, line = rendered
     return {
-        "label": _located_label(path, label, snippet, it.get("line")),
+        "label": _located_label(path, label, snippet, line),
         "path": path, "title": it.get("title", ""), "score": it.get("score"),
-        "line": it.get("line"), "docid": it.get("docid", ""),
+        "line": line, "docid": it.get("docid", ""),
         "snippet": snippet,
     }
 
@@ -204,7 +425,7 @@ def search(cfg: Config, terms: str, n: int = 8, layers=None, semantic: bool = Fa
             items = _qmd_search(cfg, terms, n, collections, semantic)
         except Exception as e:  # noqa: BLE001 - QMD down: degrade to a bounded scan, say so
             return fallback_search(cfg, terms, n, layers, reason=str(e))
-        return _rank_hits([_build_hit(cfg, it) for it in items], layers)
+        return _rank_hits([_build_hit(cfg, it, terms) for it in items], layers)
     try:
         superset_items = _qmd_search(cfg, terms, n, collections, semantic)
     except FileNotFoundError:
@@ -228,14 +449,14 @@ def search(cfg: Config, terms: str, n: int = 8, layers=None, semantic: bool = Fa
             it["_disk_path"] = _to_disk(cfg, it.get("file") or it.get("path") or "")
         per_term_hits.append(items)
     merged = _majority_merge(per_term_hits, len(words), n)
-    hits = [_build_hit(cfg, it) for it in superset_items]
+    hits = [_build_hit(cfg, it, terms) for it in superset_items]
     seen_paths = set(superset_paths)
     remaining = n - len(hits)
     for it in merged:
         if remaining <= 0:
             break
         if it["_disk_path"] not in seen_paths:
-            hits.append(_build_hit(cfg, it))
+            hits.append(_build_hit(cfg, it, terms))
             seen_paths.add(it["_disk_path"])
             remaining -= 1
     for it in superset_items:
@@ -260,17 +481,24 @@ def fallback_search(cfg: Config, terms: str, n: int, layers=None, reason: str = 
             except OSError:
                 continue
             low = text.lower()
+            is_history = _project_history(str(p))
+            blocks = _parse_history(text) if is_history else []
+            chosen = _history_selection(blocks, terms, None, fallback=False) if blocks else []
             matched = [w for w in words if w in low]
-            if not matched or len(matched) <= len(words) / 2:
+            if not chosen and (not matched or len(matched) <= len(words) / 2):
                 continue
-            score = sum(low.count(w) for w in words)
+            score = sum(low.count(w) for w in words) or len(chosen)
             if not score:
                 continue
             i = min((low.find(w) for w in matched), default=0)
             located_line = low[:i].count("\n") + 1
             snippet = " ".join(text[max(0, i - 120): i + 280].split())
+            if is_history:
+                rendered = _history_snippet(_history_selection(blocks, terms, located_line))
+                if rendered:
+                    snippet, located_line = rendered
             scored.append({"label": _located_label(p, file_label, snippet, located_line), "path": str(p), "title": p.stem, "score": score, "line": located_line,
-                           "docid": "", "snippet": " ".join(text[max(0, i - 120): i + 280].split())})
+                           "docid": "", "snippet": snippet})
     scored.sort(key=lambda h: -h["score"])
     scored = _rank_hits(scored, layers)
     for h in scored:
