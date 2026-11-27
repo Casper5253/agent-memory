@@ -15,6 +15,7 @@ class Config:
     vault: Path
     claude_transcripts_root: Path = field(default_factory=lambda: HOME / ".claude" / "projects")
     codex_transcripts_root: Path = field(default_factory=lambda: HOME / ".codex" / "sessions")
+    opencode_db: Path = field(default_factory=lambda: HOME / ".local" / "share" / "opencode" / "opencode.db")
     devin_transcripts_root: "Path | None" = None  # None: the Devin CLI data dir found at run time
     snapshots_root: Path = field(default_factory=lambda: RUNTIME / "snapshots")  # raw transcripts, outside the vault
     summarizer: str = "claude-haiku"      # "claude-haiku" | "none"
@@ -49,6 +50,7 @@ class Config:
         from .knowledge.policy import enum, integer, uuid_id
         self.claude_transcripts_root = Path(self.claude_transcripts_root)
         self.codex_transcripts_root = Path(self.codex_transcripts_root)
+        self.opencode_db = Path(self.opencode_db)
         if self.devin_transcripts_root is not None:
             self.devin_transcripts_root = Path(self.devin_transcripts_root)
         self.snapshots_root = Path(self.snapshots_root)

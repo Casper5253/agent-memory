@@ -1,6 +1,7 @@
 """Synthetic transcripts for all three agents, plus fake model functions. No network, no real agents."""
 import json
 import re
+import sqlite3
 import tempfile
 import time
 import os
@@ -117,6 +118,22 @@ def opencode_export(sid, cwd, turns):
         parts += [{"type": "text", "text": answer}]
         msgs.append({"info": {"id": f"a{i}", "role": "assistant", "time": {"created": base + i * 60_000 + 30_000}}, "parts": parts})
     return {"info": {"id": sid, "directory": cwd, "title": "OpenCode demo"}, "messages": msgs}
+
+
+def write_opencode_activity(path: Path, sid: str, updated_ms: int):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path)
+    try:
+        db.execute("CREATE TABLE IF NOT EXISTS session (id TEXT PRIMARY KEY)")
+        db.execute("CREATE TABLE IF NOT EXISTS message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)")
+        db.execute("CREATE TABLE IF NOT EXISTS part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)")
+        db.execute("INSERT OR REPLACE INTO session(id) VALUES (?)", (sid,))
+        db.execute("INSERT OR REPLACE INTO message VALUES ('m-' || ?, ?, ?, ?, '{}')", (sid, sid, updated_ms, updated_ms))
+        db.execute("INSERT OR REPLACE INTO part VALUES ('p-' || ?, 'm-' || ?, ?, ?, ?, '{}')",
+                   (sid, sid, sid, updated_ms, updated_ms))
+        db.commit()
+    finally:
+        db.close()
 
 
 SUBSTANTIAL = [

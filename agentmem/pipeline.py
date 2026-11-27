@@ -30,6 +30,10 @@ class NoProgress(llm.LLMError):
     """The model answered, but nothing new was accepted. Retrying the same input cannot change that."""
 
 
+class OpenCodeSourceChanging(Exception):
+    """The live OpenCode source moved before capture evidence was committed."""
+
+
 
 def _parse_time(value: str) -> datetime:
     if value:
@@ -83,6 +87,48 @@ def _opencode_session_exists(session_id: str, db_path: "Path | None" = None) -> 
         return None
 
 
+def _epoch_seconds(value) -> float:
+    return value / 1000 if value > 1e11 else float(value)
+
+
+def opencode_message_activity(cfg: Config, session_id: str) -> "float | None":
+    """Latest OpenCode message or part write time, or None when the store cannot prove one."""
+    import sqlite3
+    path = Path(cfg.opencode_db)
+    if not path.exists():
+        return None
+    try:
+        db = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        try:
+            latest = 0
+            for table in ("message", "part"):
+                row = db.execute(
+                    f"SELECT max(time_created), max(time_updated) FROM {table} WHERE session_id=?",
+                    (session_id,)).fetchone()
+                for value in row:
+                    if isinstance(value, (int, float)):
+                        latest = max(latest, value)
+        finally:
+            db.close()
+    except (sqlite3.Error, OSError):
+        return None
+    return _epoch_seconds(latest) if latest else None
+
+
+def _opencode_retry_at(cfg: Config, session_id: str, settle_s: float, now: float) -> "tuple[float | None, str]":
+    latest = opencode_message_activity(cfg, session_id)
+    if latest is None:
+        # No store at all can never prove quiet, so waiting would defer forever.
+        if not Path(cfg.opencode_db).exists():
+            return None, ""
+        if _opencode_session_exists(session_id, cfg.opencode_db) is False:
+            return None, ""
+        return now + settle_s, "opencode message activity is unknown"
+    if now - latest < settle_s:
+        return latest + settle_s, "opencode messages changed inside the settle window"
+    return None, ""
+
+
 def transcript_located(cfg: Config, row) -> "bool | None":
     """Whether the transcript still exists anywhere the adapters look: the recorded path, the
     agent roots (Claude projects, Codex sessions and archived_sessions, Devin transcripts) or
@@ -113,6 +159,19 @@ def transcript_located(cfg: Config, row) -> "bool | None":
     except OSError:
         return None
     return None
+
+
+def _normalized_cwd(cwd: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.expandvars(os.path.expanduser(cwd))))
+
+
+def _codex_memory_curation(cwd: str) -> bool:
+    if not cwd:
+        return False
+    actual = _normalized_cwd(cwd)
+    base = Path.home() / ".codex"
+    roots = [_normalized_cwd(str(base / name)) for name in ("memories", "memories_v2")]
+    return any(actual == root or actual.startswith(root + os.sep) for root in roots)
 
 
 def _excluded(cfg: Config, cwd: str) -> bool:
@@ -147,6 +206,14 @@ def _source_range_hash(transcript):
             source.seek(transcript.start)
             raw = source.read(transcript.end - transcript.start)
     return hashlib.sha256(raw).hexdigest()
+
+
+def _assert_opencode_source_unchanged(agent, sid, source, transcript) -> None:
+    if agent != "opencode":
+        return
+    current = adapters.read(agent, sid, source)
+    if current.prefix_sha != transcript.prefix_sha:
+        raise OpenCodeSourceChanging("OpenCode source changed before capture commit")
 
 
 def _receipt_path(cfg, agent, sid, part):
@@ -236,6 +303,11 @@ def finalize(cfg: Config, man: Manifest, row, summarizer=None, consolidator=None
 
 def _finalize_locked(cfg, man, row, summarizer, consolidator):
     agent, sid, part = row["agent"], row["session_id"], row["parts"] + 1
+    if agent == "codex" and _codex_memory_curation(row["cwd"] or ""):
+        man.mark(agent, sid, status="skipped", end_seen=0, skip_reason="internal memory curation",
+                 last_error=None, deferred_start=None)
+        log(cfg, "capture-skipped", agent=agent, session=sid, reason="internal memory curation")
+        return "skipped-internal"
     # Content judged trivial earlier is re-judged together with what followed it.
     range_start = row["deferred_start"] if row["deferred_start"] is not None else row["captured_until"]
     receipt = _load_receipt(cfg, agent, sid, part, range_start)
@@ -365,6 +437,7 @@ def _finalize_locked(cfg, man, row, summarizer, consolidator):
                         email_allowlist=cfg.privacy_email_allowlist)
                 except Exception:
                     log(cfg, "knowledge-packet-error", agent=agent, session=sid, part=part)
+            _assert_opencode_source_unchanged(agent, sid, source, t)
         if ksources._privacy_for(cfg, receipt["project"]) == "excluded":
             man.mark(agent, sid, status="skipped", end_seen=0, project=receipt["project"], skip_reason="project excluded",
                      deferred_start=None)
@@ -770,18 +843,35 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
 def process_ready(cfg: Config, man: Manifest, budget_s: float = 900, summarizer=None, consolidator=None) -> list:
     results = []
     deadline = time.monotonic() + budget_s
+    settle_s = cfg.settle_minutes * 60
     _discover_orphan_transcripts(cfg, man)
-    for row in man.ready(cfg.settle_minutes * 60, cfg.max_attempts):
+    for row in man.ready(settle_s, cfg.max_attempts):
         if time.monotonic() > deadline or cfg.paused():
             break
         try:
             with file_lock(cfg.locks_dir / f"session-{row['agent']}-{notes.slug(row['session_id'], 12)}.lock", timeout=5):
                 fresh = man.get(row["agent"], row["session_id"])  # re-read under the lock
-                outcome = finalize(cfg, man, fresh, summarizer, consolidator)
+                retry_at = reason = None
+                if fresh["agent"] == "opencode":
+                    retry_at, reason = _opencode_retry_at(cfg, fresh["session_id"], settle_s, time.time())
+                if retry_at is None:
+                    outcome = finalize(cfg, man, fresh, summarizer, consolidator)
+                else:
+                    man.mark(fresh["agent"], fresh["session_id"], next_try=retry_at)
+                    log(cfg, "capture-deferred", agent=fresh["agent"], session=fresh["session_id"], reason=reason)
+                    outcome = "deferred-active-source"
                 settled = man.get(row["agent"], row["session_id"])
                 if (settled and settled["status"] in ("captured", "skipped")
                         and settled["deferred_start"] is None):
                     cfg.snapshot_path(row["agent"], row["session_id"]).unlink(missing_ok=True)
+        except OpenCodeSourceChanging as e:
+            retry_at, reason = _opencode_retry_at(cfg, row["session_id"], settle_s, time.time())
+            if retry_at is None:
+                retry_at = time.time() + settle_s
+                reason = "opencode source changed before capture commit"
+            man.mark(row["agent"], row["session_id"], next_try=retry_at)
+            log(cfg, "capture-deferred", agent=row["agent"], session=row["session_id"], reason=reason)
+            outcome = "deferred-source-change"
         except Exception as e:  # noqa: BLE001 - any failure is recorded and retried with backoff
             man.fail(row["agent"], row["session_id"], f"{type(e).__name__}: {e}",
                      max_attempts=cfg.max_attempts, max_age_s=cfg.error_max_age_days * 86400,
