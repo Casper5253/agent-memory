@@ -50,6 +50,29 @@ class HistoryTests(unittest.TestCase):
             self.assertIn('old 1', history)
             self.assertIn('limit', history)
 
+    def test_older_capture_on_page_without_order_markers_keeps_newer_decisions(self):
+        with fixture_dir() as tmp:
+            path = Path(tmp) / 'Project.md'
+            old = status.empty()
+            old['decisions'] = [
+                status.Item(f'i{index}', f'Decision {day}', f'[[0-Sessions/2026-11-{day:02d}-session#e1]]')
+                for index, day in enumerate(range(3, 11), 1)
+            ]
+            notes.update_project_note(path, 'Project', '2026-11-10', state=status.render(old))
+            before = path.read_text(encoding='utf-8')
+            ref = '[[0-Sessions/2026-11-01-session#e7]]'
+            update = dict(sections={**status.empty(), 'decisions': [
+                dict(text='Use SQLite', ref=ref)]}, displaced=[])
+            result = status.reconcile(old, update, {ref: 'Use SQLite'},
+                                      source_orders=notes.evidence_orders(before, old), new_order=(10, 1))
+            notes.update_project_note(path, 'Project', '2026-11-27', status_result=result, update_key='session:1')
+
+            after = path.read_text(encoding='utf-8')
+            state = notes.get_block(after, notes.STATE_BEGIN, notes.STATE_END)
+            self.assertEqual(status.parse(state)['decisions'], old['decisions'])
+            history = path.with_name('History.md').read_text(encoding='utf-8')
+            self.assertIn(f'- 2026-11-27 [decisions; limit] Use SQLite {ref}', history.splitlines())
+
     def test_history_link_names_the_project_folder(self):
         with fixture_dir() as tmp:
             path = Path(tmp) / '1-Projects' / 'Alpha' / 'Alpha.md'

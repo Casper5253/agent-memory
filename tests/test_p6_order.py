@@ -34,6 +34,40 @@ class OverlappingSessionsTests(unittest.TestCase):
         self.assertEqual(result.sections, old)
         self.assertEqual([(d.item.text, d.reason) for d in result.displaced], [('Older direction', 'limit')])
 
+    def test_decision_cap_uses_evidence_date_before_order(self):
+        old = status.empty()
+        old['decisions'] = [
+            status.Item(f'i{day}', f'Decision {day}', f'[[2026-11-{day:02d}-session#e1]]')
+            for day in range(3, 11)
+        ]
+        for ref in ('[[2026-11-01-session#e7]]', '[[undated-session#e7]]'):
+            with self.subTest(ref=ref):
+                update = dict(sections={**status.empty(), 'decisions': [
+                    dict(text='Use SQLite', ref=ref)]}, displaced=[])
+                result = status.reconcile(old, update, {ref: 'Use SQLite'},
+                                          source_orders={item.ref: (20, 1) for item in old['decisions']},
+                                          new_order=(30, 1))
+                self.assertEqual(result.sections, old)
+                self.assertEqual([(d.item.ref, d.reason) for d in result.displaced], [(ref, 'limit')])
+
+    def test_decision_cap_breaks_same_day_ties_by_evidence_order(self):
+        day = '2026-11-03'
+        old = status.empty()
+        old['decisions'] = [
+            status.Item(f'i{index}', f'Decision {index}', f'[[{day}-session#e{index}]]')
+            for index in range(1, 9)
+        ]
+        ref = f'[[{day}-same-day#e1]]'
+        update = dict(sections={**status.empty(), 'decisions': [
+            dict(text='Use SQLite', ref=ref)]}, displaced=[])
+        orders = {item.ref: (20, 2) for item in old['decisions']}
+        earlier = old['decisions'][4]
+        orders[earlier.ref] = (20, 1)
+        result = status.reconcile(old, update, {ref: 'Use SQLite'}, source_orders=orders, new_order=(21, 1))
+        self.assertCountEqual([item.ref for item in result.sections['decisions']],
+                              [item.ref for item in old['decisions'] if item != earlier] + [ref])
+        self.assertEqual([(d.item.ref, d.reason) for d in result.displaced], [(earlier.ref, 'limit')])
+
     def test_legacy_page_uses_conservative_watermark_and_prunes_metadata(self):
         old = status.empty()
         old['decisions'] = [status.Item('i1', 'Use Postgres', '[[B#e1]]')]
