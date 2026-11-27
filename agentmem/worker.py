@@ -5,6 +5,7 @@ No daemon: every hook spawns a detached worker; if one is already running it tak
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -20,6 +21,34 @@ from .pipeline import open_manifest
 from .redact import redact
 
 
+def snapshot(cfg: Config, agent: str, session_id: str, source: str) -> "Path | None":
+    """Copy the transcript next to the queue so a later cleanup cannot take it.
+
+    Runs on the end hook, while the agent still knows the path. The copy holds the
+    transcript as the agent wrote it; capture redacts when it reads it.
+    """
+    path = Path(source)
+    if not path.is_file():
+        return None
+    dest = cfg.snapshot_path(agent, session_id)
+    if dest.resolve().is_relative_to(cfg.vault.resolve()):
+        log(cfg, "snapshot-refused", agent=agent, session=session_id, reason="inside vault")
+        return None
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = dest.with_suffix(".tmp")
+        shutil.copyfile(path, tmp)
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass  # Windows ignores most of the mode; never lose the copy over it
+        os.replace(tmp, dest)
+    except OSError as error:
+        log(cfg, "snapshot-error", agent=agent, session=session_id, error=str(error))
+        return None
+    return dest
+
+
 def enqueue(cfg: Config, agent: str, session_id: str, *, event: str, source: str = "", cwd: str = "") -> Path:
     """Queue one hook event, redacted before it touches disk and written atomically."""
     allow = cfg.privacy_email_allowlist
@@ -32,6 +61,8 @@ def enqueue(cfg: Config, agent: str, session_id: str, *, event: str, source: str
     name = f"{time.time_ns()}-{agent}-{uuid.uuid4().hex[:8]}.json"
     path = cfg.queue_dir / name
     atomic_write(path, json.dumps(job))
+    if event == "end" and source:
+        snapshot(cfg, agent, session_id, source)
     return path
 
 
