@@ -23,7 +23,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         self._tmp = fx.tmpdir()
         self.tmp = Path(self._tmp.name)
-        self.cfg = fx.make_vault(self.tmp)
+        self.cfg = fx.make_vault(self.tmp, opencode_db=self.tmp / "opencode.db")
         self.cwd = str(self.tmp / "work" / "demo-app")
         self.man = Manifest(self.cfg.manifest_path)
 
@@ -316,6 +316,7 @@ class Acceptance(Base):
         cx = "019f0000-0000-7000-8000-000000000001"
         self.end("codex", cx, self._codex(cx, fx.SUBSTANTIAL))
         export = fx.opencode_export("ses_demo1", self.cwd, fx.SUBSTANTIAL)
+        fx.write_opencode_activity(self.cfg.opencode_db, "ses_demo1", int((time.time() - 3600) * 1000))
         worker.enqueue(self.cfg, "opencode", "ses_demo1", event="turn", cwd=self.cwd)
         self.man.touch("opencode", "ses_demo1", now=time.time() - 3600)  # idle past the settle window
         with mock.patch.object(adapters, "export_opencode", return_value=export):
