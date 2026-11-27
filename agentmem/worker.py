@@ -3,6 +3,7 @@
 No daemon: every hook spawns a detached worker; if one is already running it takes the new jobs.
 """
 import json
+import math
 import os
 import subprocess
 import sys
@@ -16,10 +17,18 @@ from .fsutil import atomic_write, try_lock
 from .logutil import log
 from .manifest import Manifest
 from .pipeline import open_manifest
+from .redact import redact
 
 
 def enqueue(cfg: Config, agent: str, session_id: str, *, event: str, source: str = "", cwd: str = "") -> Path:
-    job = {"agent": agent, "session_id": session_id, "event": event, "source": source, "cwd": cwd, "ts": time.time()}
+    """Queue one hook event, redacted before it touches disk and written atomically."""
+    allow = cfg.privacy_email_allowlist
+    job = {"agent": redact(agent, email_allowlist=allow),
+           "session_id": redact(session_id, email_allowlist=allow),
+           "event": redact(event, email_allowlist=allow),
+           "source": redact(source, email_allowlist=allow),
+           "cwd": redact(cwd, email_allowlist=allow),
+           "ts": time.time()}
     name = f"{time.time_ns()}-{agent}-{uuid.uuid4().hex[:8]}.json"
     path = cfg.queue_dir / name
     atomic_write(path, json.dumps(job))
@@ -27,17 +36,34 @@ def enqueue(cfg: Config, agent: str, session_id: str, *, event: str, source: str
 
 
 def drain_queue(cfg: Config, man: Manifest) -> int:
+    """Record queued events, removing an entry only after the manifest committed it.
+
+    A kill at any point leaves the uncommitted entry in place. A replay after a
+    kill between the commit and the removal finds its timestamp already in the
+    event history and skips it, so one queue entry captures exactly once.
+    """
     n = 0
     for path in sorted(cfg.queue_dir.glob("*.json")):
         try:
             job = json.loads(path.read_text(encoding="utf-8"))
-            if job.get("agent") in AGENTS and job.get("session_id"):
-                man.touch(job["agent"], job["session_id"], cwd=job.get("cwd") or None, source=job.get("source") or None,
-                          end=job.get("event") == "end", now=job.get("ts"))
-                man.record_event(job["agent"], job["session_id"], job.get("event") or "", job.get("ts"))
-                n += 1
-        except (json.JSONDecodeError, OSError) as e:
+            agent, session_id = job["agent"], job["session_id"]
+            if agent not in AGENTS or not session_id:
+                raise ValueError("job has no valid agent and session")
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError, ValueError, OSError) as e:
             log(cfg, "bad-job", job=path.name, error=str(e))
+            path.unlink(missing_ok=True)
+            continue
+        event = job.get("event") or ""
+        stamp = job.get("ts")
+        if not isinstance(stamp, (int, float)) or isinstance(stamp, bool) or not math.isfinite(stamp):
+            stamp = path.stat().st_mtime
+        man.touch(agent, session_id, cwd=job.get("cwd") or None, source=job.get("source") or None,
+                  end=event == "end", now=stamp)
+        # The entry is still here because an earlier drain died; its committed
+        # event is already in the history at this timestamp.
+        if man.last_event_ts(agent, session_id, event) < stamp:
+            man.record_event(agent, session_id, event, stamp)
+        n += 1
         path.unlink(missing_ok=True)
     return n
 
