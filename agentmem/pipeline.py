@@ -17,12 +17,12 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from . import adapters, extract, llm, notes, projects
+from . import adapters, extract, llm, notes, projects, status
 from .config import Config
-from .fsutil import atomic_write, create_once, file_lock
+from .fsutil import atomic_write, create_once, file_lock, LockTimeout
 from .knowledge import sources as ksources
 from .logutil import log
-from .manifest import Manifest, RetryPolicy
+from .manifest import Manifest, RetryPolicy, REVIEW_HOLD
 from .redact import redact, redact_session_note
 
 
@@ -646,13 +646,16 @@ def _capture_identity(agent, sid, part):
 
 def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str, when: datetime,
                              summary_kind: str, consolidator=None, order_override=None, order_part: int = 1,
-                             capture_id=None, retry: bool = False, held: list = None, evidence_available=True) -> tuple:
+                             capture_id=None, retry: bool = False, held: list = None, evidence_available=True,
+                             complete_summary: bool = False, failure: list = None) -> tuple:
     """Reconcile one session into its project note. Returns (cost, consolidated?)."""
     from . import status
     if consolidator is None:
         consolidator = lambda state, current_summary, link, date, timeout: llm.consolidate(
             state, current_summary, link, date, timeout=timeout, email_allowlist=cfg.privacy_email_allowlist)
     if ksources._privacy_for(cfg, project) == "excluded":
+        if failure is not None:
+            failure.append("invalid")
         return 0.0, False
     note_path = projects.note_path(cfg.vault, project)
     date = f"{when:%Y-%m-%d}"
@@ -684,6 +687,8 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
             try:
                 old = status.live_page(current_state)
                 if not evidence_available:
+                    if failure is not None:
+                        failure.append("review")
                     raise NoProgress('legacy continuation lacks distinct evidence anchors; manual evidence repair required')
                 if not status.evidence_refs(summary, link):
                     raise llm.LLMError('uncited summary, status not updated')
@@ -693,7 +698,10 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                 if isinstance(result, status.Result):
                     result = status.proposed_update(result, old)
                 allowed = status.evidence_support(summary, link)
-                result, decision_events = status.include_summary_decisions(old, result, summary, allowed)
+                if complete_summary:
+                    result, decision_events = status.include_summary_items(old, result, summary, allowed, f"[[{link}]]")
+                else:
+                    result, decision_events = status.include_summary_decisions(old, result, summary, allowed)
                 result = status.reconcile(old, result, allowed,
                                           source_orders=source_orders, new_order=order)
                 result.events.extend(decision_events)
@@ -721,11 +729,21 @@ def consolidate_into_project(cfg: Config, project: str, summary: dict, link: str
                 return cost, True
             except (llm.LLMError, ValueError) as e:
                 log(cfg, "llm-fallback", step="consolidate", project=project, note=link, error=str(e))
-                if isinstance(e, NoProgress) and held is not None:
-                    held.append(str(e))
+                if isinstance(e, NoProgress):
+                    if held is not None and (failure is None or "review" not in failure):
+                        held.append(str(e))
+                    if failure is not None and "review" not in failure:
+                        failure.append("omission")
+                elif isinstance(e, llm.LLMError):
+                    if failure is not None:
+                        failure.append("transient")
+                elif failure is not None:
+                    failure.append("invalid")
                 reason = str(e)
         else:
             reason = "summary is deterministic or project consolidation is unavailable"
+            if failure is not None:
+                failure.append("deterministic")
         reason = " ".join(reason.split())
         pending_order = pending_order or order
         pending_lines = [f"- [ ] {date} [[{link}]] {pending_ref} — status update pending ({reason[:180]}; "
@@ -838,6 +856,250 @@ def consolidate_pending(cfg: Config, man: Manifest, summarizer=None, consolidato
                 man.hold_retry(row["agent"], row["session_id"], row["part"], "uncited summary")
                 log(cfg, "pending-retry-held", session=row["session_id"], part=row["part"], reason="uncited summary")
     return {"consolidated": done, "still_pending": failed}
+
+
+_STATUS_EVIDENCE_SECTIONS = frozenset((
+    "decision", "decisions", "rationale", "facts", "what_happened", "latest",
+    "next_steps", "next", "open_questions", "questions",
+))
+
+
+def _project_status_keys(cfg, project):
+    path = projects.note_path(cfg.vault, project)
+    if not path.exists():
+        return set()
+    try:
+        text = path.read_text(encoding="utf-8")
+        page = status.live_page(notes.get_block(text, notes.STATE_BEGIN, notes.STATE_END))
+        return {status._claim_key(item.text) for items in page.values() for item in items}
+    except Exception:
+        return set()
+
+
+def _held_cause(cfg, row, summary, link):
+    """Why a held summary cannot become a cited status item, or promotable when it can."""
+    decisions = summary.get("decisions") or []
+    facts = summary.get("facts") or []
+    next_steps = summary.get("next_steps") or []
+    questions = summary.get("open_questions") or []
+    if not any((decisions, facts, next_steps, questions)):
+        return "trivial"
+    try:
+        citations = status.evidence_refs(summary, f"[[{link}]]")
+        allowed = status.evidence_support(summary, f"[[{link}]]")
+    except Exception as error:
+        log(cfg, "held-cause-invalid", session=row["session_id"], part=row["part"], error=str(error))
+        return "invalid-evidence"
+    if not citations:
+        return "missing-evidence"
+    supported = {e.section for e in allowed.values() if e.section in _STATUS_EVIDENCE_SECTIONS}
+    if not supported:
+        return "nothing-new"
+    if supported & {"facts", "what_happened", "latest"}:
+        return "promotable"
+    keys = _project_status_keys(cfg, row["project"])
+    new_dec = dup_dec = new_nq = dup_nq = 0
+    for evidence in allowed.values():
+        if evidence.section in ("decision", "decisions", "rationale"):
+            text = evidence.decision
+            if not text:
+                continue
+            if status._claim_key(text) in keys:
+                dup_dec += 1
+            else:
+                new_dec += 1
+    target = link[2:-2] if link.startswith("[[") and link.endswith("]]") else link
+    offset = summary.get("_evidence_offset") or 0
+    if type(offset) is int and offset >= 0:
+        refs = [(f"[[{target}#e{n}]]", citation) for n, citation in enumerate(summary.get("citations") or [], offset + 1)
+                if isinstance(citation, dict) and isinstance(citation.get("claim"), str) and citation["claim"].strip()]
+        for source, cited_sections in (("next_steps", ("next_steps", "next")),
+                                       ("open_questions", ("open_questions", "questions"))):
+            for item in summary.get(source) or []:
+                text = item if isinstance(item, str) else item.get("text") if isinstance(item, dict) else None
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                key = status._claim_key(text)
+                ref = next((ref for ref, citation in refs
+                            if citation.get("section") in cited_sections and status._claim_key(citation.get("claim", "")) == key), "")
+                if not ref:
+                    continue
+                if key in keys:
+                    dup_nq += 1
+                else:
+                    new_nq += 1
+    if new_dec or new_nq:
+        return "promotable"
+    if dup_dec or dup_nq:
+        return "duplicate"
+    return "nothing-new"
+
+
+def _clear_held_pending(cfg, row):
+    link = Path(row["note_path"]).with_suffix("").as_posix()
+    capture_id = (None if row["summarizer"] == "remember" else
+                  _capture_identity(row["agent"], row["session_id"], row["part"]))
+    pending_ref = f"capture-ref:{capture_id}" if capture_id else f"[[{link}]]"
+    note_path = projects.note_path(cfg.vault, row["project"])
+    if not note_path.exists():
+        return True
+    try:
+        with file_lock(cfg.locks_dir / f"project-{notes.slug(row['project'], 12)}.lock", timeout=cfg.lock_timeout_s):
+            text = note_path.read_text(encoding="utf-8")
+            if not any(pending_ref in line for line in notes.pending_lines(note_path, text)):
+                return True
+            notes.update_project_note(note_path, row["project"], row["date"] or time.strftime("%Y-%m-%d"),
+                                      pending_clear=pending_ref, touch=False)
+            return True
+    except (OSError, ValueError, LockTimeout) as error:
+        log(cfg, "held-cleanup-failed", session=row["session_id"], part=row["part"], error=str(error))
+        return False
+
+
+def _hold_review(cfg, man, row, attempts=None):
+    man.hold_for_review(row["agent"], row["session_id"], row["part"], REVIEW_HOLD, attempts=attempts)
+    log(cfg, "held-review", session=row["session_id"], part=row["part"], attempts=attempts)
+
+
+def _retry_held(cfg, man, row, reason, now):
+    attempts = row["retry_attempts"] or 0
+    man.hold_retry(row["agent"], row["session_id"], row["part"], reason, attempts=attempts,
+                   next_try=now + min(3600, 60 * 2 ** max(0, attempts - 1)))
+    log(cfg, "held-retry", session=row["session_id"], part=row["part"], reason=reason, attempt=attempts)
+    return attempts
+
+
+def _close_held(cfg, man, row, reason):
+    if not _clear_held_pending(cfg, row):
+        return False
+    man.close_capture(row["agent"], row["session_id"], row["part"], reason)
+    log(cfg, "held-closed", session=row["session_id"], part=row["part"], reason=reason)
+    return True
+
+
+def triage_held(cfg: Config, man: Manifest, consolidator=None, limit: int = 20,
+                max_attempts: int = 3, now=None) -> dict:
+    """Give every held capture one deterministic outcome, with bounded retries for a real omission."""
+    now = time.time() if now is None else float(now)
+    counts = {"promoted": 0, "closed": 0, "retrying": 0, "review": 0, "by_reason": {}}
+    for row in man.held(now)[:limit]:
+        link = Path(row["note_path"]).with_suffix("").as_posix()
+        try:
+            summary = json.loads(row["summary_json"] or "{}")
+            if not isinstance(summary, dict):
+                raise ValueError("invalid summary")
+            path = _validated_path(cfg, row["note_path"])
+            persisted = path.read_bytes()
+            text = persisted.decode("utf-8")
+            receipt = _load_receipt(cfg, row["agent"], row["session_id"], row["part"], row["start_offset"] or 0)
+            _validate_pending_identity(cfg, man, row, text, summary, receipt)
+            fields = notes.session_metadata(text, note_type="memory" if row["summarizer"] == "remember" else "session")
+            if receipt and (receipt.get("project") != row["project"]
+                            or receipt.get("note_path") != row["note_path"]
+                            or receipt.get("start") != row["start_offset"]
+                            or receipt.get("end") != row["end_offset"]
+                            or not _receipt_section_present(text, receipt, row["part"])
+                            or summary != receipt["summary"]):
+                raise ValueError("capture_identity_conflict: held evidence mismatch")
+        except OSError as error:
+            log(cfg, "held-triage-read-error", session=row["session_id"], part=row["part"], error=str(error))
+            _retry_held(cfg, man, row, "transient-error", now)
+            counts["retrying"] += 1
+            continue
+        except (ValueError, json.JSONDecodeError) as error:
+            log(cfg, "held-triage-invalid", session=row["session_id"], part=row["part"], error=str(error))
+            if _close_held(cfg, man, row, "invalid-evidence"):
+                counts["closed"] += 1
+                counts["by_reason"]["invalid-evidence"] = counts["by_reason"].get("invalid-evidence", 0) + 1
+            else:
+                _retry_held(cfg, man, row, "cleanup-pending", now)
+                counts["retrying"] += 1
+            continue
+        cause = _held_cause(cfg, row, summary, link)
+        if cause != "promotable":
+            if cause in ("missing-evidence", "trivial", "invalid-evidence"):
+                if _close_held(cfg, man, row, cause):
+                    counts["closed"] += 1
+                    counts["by_reason"][cause] = counts["by_reason"].get(cause, 0) + 1
+                else:
+                    _retry_held(cfg, man, row, "cleanup-pending", now)
+                    counts["retrying"] += 1
+            else:
+                _hold_review(cfg, man, row, row["retry_attempts"] or 0)
+                counts["review"] += 1
+                counts["by_reason"]["needs-review"] = counts["by_reason"].get("needs-review", 0) + 1
+            continue
+        kind = row["summarizer"]
+        if kind == "deterministic" and cfg.summarizer != "none":
+            kind = "persisted"
+        session_when = _parse_time(fields.get("started")) if fields.get("started") else _parse_time(row["date"])
+        capture_id = (None if row["summarizer"] == "remember" else
+                      _capture_identity(row["agent"], row["session_id"], row["part"]))
+        held = []
+        failure = []
+        try:
+            cost, ok = consolidate_into_project(
+                cfg, row["project"], summary, link, session_when, kind, consolidator,
+                order_override=int(session_when.timestamp() * 1_000_000), order_part=int(row["part"]),
+                capture_id=capture_id, retry=True, held=held, complete_summary=True, failure=failure,
+                evidence_available=int(fields.get("part", row["part"])) == row["part"] or "_evidence_offset" in summary,
+            )
+        except Exception as error:  # noqa: BLE001 - a held row must never crash the worker
+            log(cfg, "held-triage-error", session=row["session_id"], part=row["part"], error=str(error))
+            cost, ok = 0.0, False
+            failure.append("transient")
+        if ok:
+            man.promote_capture(row["agent"], row["session_id"], row["part"], cost)
+            counts["promoted"] += 1
+            log(cfg, "held-promoted", session=row["session_id"], part=row["part"])
+            continue
+        if not failure or failure[0] == "transient":
+            _retry_held(cfg, man, row, "transient-error", now)
+            counts["retrying"] += 1
+            continue
+        if failure[0] == "invalid":
+            if _close_held(cfg, man, row, "invalid-evidence"):
+                counts["closed"] += 1
+                counts["by_reason"]["invalid-evidence"] = counts["by_reason"].get("invalid-evidence", 0) + 1
+            else:
+                _retry_held(cfg, man, row, "cleanup-pending", now)
+                counts["retrying"] += 1
+            continue
+        if failure[0] == "review":
+            _hold_review(cfg, man, row, row["retry_attempts"] or 0)
+            counts["review"] += 1
+            counts["by_reason"]["needs-review"] = counts["by_reason"].get("needs-review", 0) + 1
+            continue
+        if failure[0] == "deterministic":
+            _hold_review(cfg, man, row, row["retry_attempts"] or 0)
+            counts["review"] += 1
+            counts["by_reason"]["needs-review"] = counts["by_reason"].get("needs-review", 0) + 1
+            continue
+        cause = _held_cause(cfg, row, summary, link)
+        if cause != "promotable":
+            if cause in ("missing-evidence", "trivial", "invalid-evidence"):
+                if _close_held(cfg, man, row, cause):
+                    counts["closed"] += 1
+                    counts["by_reason"][cause] = counts["by_reason"].get(cause, 0) + 1
+                else:
+                    _retry_held(cfg, man, row, "cleanup-pending", now)
+                    counts["retrying"] += 1
+            else:
+                _hold_review(cfg, man, row, row["retry_attempts"] or 0)
+                counts["review"] += 1
+                counts["by_reason"]["needs-review"] = counts["by_reason"].get("needs-review", 0) + 1
+            continue
+        attempts = (row["retry_attempts"] or 0) + 1
+        if attempts >= max_attempts:
+            _hold_review(cfg, man, row, attempts)
+            counts["review"] += 1
+            counts["by_reason"]["needs-review"] = counts["by_reason"].get("needs-review", 0) + 1
+        else:
+            man.hold_retry(row["agent"], row["session_id"], row["part"], "model omission",
+                           attempts=attempts, next_try=now + min(3600, 60 * 2 ** (attempts - 1)))
+            counts["retrying"] += 1
+            log(cfg, "held-retry", session=row["session_id"], part=row["part"], attempt=attempts)
+    return counts
 
 
 def process_ready(cfg: Config, man: Manifest, budget_s: float = 900, summarizer=None, consolidator=None) -> list:

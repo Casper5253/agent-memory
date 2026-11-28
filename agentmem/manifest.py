@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS captures (
   note_path TEXT NOT NULL, project TEXT, title TEXT, date TEXT,
   start_offset INTEGER, end_offset INTEGER, summarizer TEXT,
   consolidated INTEGER NOT NULL DEFAULT 0, cost_usd REAL DEFAULT 0, digest_sha TEXT, captured_at REAL,
-  summary_json TEXT,
+  summary_json TEXT, retry_hold TEXT, retry_attempts INTEGER NOT NULL DEFAULT 0,
+  retry_next REAL DEFAULT 0, closed_reason TEXT,
   PRIMARY KEY (agent, session_id, part)
 );
 CREATE INDEX IF NOT EXISTS captures_project ON captures(project, date);
@@ -59,6 +60,7 @@ ERROR_CLASSES = (
     ("unreadable", "transcript-unreadable"),
 )
 DEFAULT_MAX_ATTEMPTS = 12          # transient errors go terminal after this many tries
+REVIEW_HOLD = "needs review"       # exhausted omissions stay visible, never retried automatically
 DEFAULT_MAX_AGE_S = 7 * 86400      # or once the session is this old
 DEFAULT_GRACE_S = 48 * 3600        # a missing transcript must stay missing for a session this old
 
@@ -101,8 +103,11 @@ class Manifest:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=30000")
         self.db.executescript(SCHEMA)
-        if "retry_hold" not in {row["name"] for row in self.db.execute("PRAGMA table_info(captures)")}:
-            self.db.execute("ALTER TABLE captures ADD COLUMN retry_hold TEXT")
+        capture_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(captures)")}
+        for column, declaration in (("retry_hold", "TEXT"), ("retry_attempts", "INTEGER NOT NULL DEFAULT 0"),
+                                    ("retry_next", "REAL DEFAULT 0"), ("closed_reason", "TEXT")):
+            if column not in capture_columns:
+                self.db.execute(f"ALTER TABLE captures ADD COLUMN {column} {declaration}")
         # captured_until is the scan watermark; deferred_start keeps the start of scanned but uncaptured content.
         if "deferred_start" not in {row["name"] for row in self.db.execute("PRAGMA table_info(sessions)")}:
             self.db.execute("ALTER TABLE sessions ADD COLUMN deferred_start INTEGER")
@@ -347,15 +352,47 @@ class Manifest:
                                " AND project != '' ORDER BY captured_at").fetchall()
 
     def retryable(self):
-        """Unconsolidated captures that automatic retries still attempt; held rows stay in unconsolidated()."""
+        """Unconsolidated captures with no hold or close reason."""
         return self.db.execute("SELECT * FROM captures WHERE consolidated=0 AND retry_hold IS NULL"
-                               " AND project IS NOT NULL AND project != '' ORDER BY captured_at").fetchall()
+                               " AND closed_reason IS NULL AND project IS NOT NULL AND project != ''"
+                               " ORDER BY captured_at").fetchall()
 
-    def hold_retry(self, agent, session_id, part, reason):
-        """Stop automatic retries for a capture that can never reconcile. The row, note and receipt are kept."""
+    def held(self, now=None):
+        """Held captures whose retry is due. Review rows are counted by stats, not retried."""
+        now = time.time() if now is None else float(now)
+        return self.db.execute("SELECT * FROM captures WHERE consolidated=0 AND retry_hold IS NOT NULL"
+                               " AND retry_hold != ? AND COALESCE(retry_next,0) <= ?"
+                               " AND project IS NOT NULL AND project != '' ORDER BY captured_at",
+                               (REVIEW_HOLD, now)).fetchall()
+
+    def hold_for_review(self, agent, session_id, part, reason=REVIEW_HOLD, attempts=None):
+        """Park an exhausted omission for a human, with no automatic retry."""
         with self.tx() as db:
-            db.execute("UPDATE captures SET retry_hold=? WHERE agent=? AND session_id=? AND part=?",
+            db.execute("UPDATE captures SET retry_hold=?, retry_attempts=COALESCE(?, retry_attempts),"
+                       " retry_next=0, closed_reason=NULL WHERE agent=? AND session_id=? AND part=?",
+                       ((reason or REVIEW_HOLD)[:200], attempts, agent, session_id, part))
+
+    def hold_retry(self, agent, session_id, part, reason, *, attempts=None, next_try=None):
+        """Stop automatic retries for now. attempts and next_try bound a retrying omission."""
+        with self.tx() as db:
+            db.execute("UPDATE captures SET retry_hold=?, retry_attempts=COALESCE(?, retry_attempts),"
+                       " retry_next=COALESCE(?, retry_next) WHERE agent=? AND session_id=? AND part=?",
+                       (reason[:200], attempts, next_try, agent, session_id, part))
+
+    def close_capture(self, agent, session_id, part, reason):
+        """Close a capture that cannot become a cited item. The note and summary stay."""
+        with self.tx() as db:
+            db.execute("UPDATE captures SET consolidated=1, retry_hold=NULL, closed_reason=?,"
+                       " retry_attempts=0, retry_next=0 WHERE agent=? AND session_id=? AND part=?",
                        (reason[:200], agent, session_id, part))
+
+    def promote_capture(self, agent, session_id, part, cost=0.0):
+        """Mark a held capture consolidated, clear its hold, and add the consolidation cost."""
+        with self.tx() as db:
+            db.execute("UPDATE captures SET consolidated=1, retry_hold=NULL, closed_reason=NULL,"
+                       " retry_attempts=0, retry_next=0, cost_usd=COALESCE(cost_usd,0)+?"
+                       " WHERE agent=? AND session_id=? AND part=?",
+                       (cost or 0.0, agent, session_id, part))
 
     def query_captures(self, project=None, agent=None, since=None, until=None, limit=50):
         sql, args = "SELECT * FROM captures WHERE 1=1", []
@@ -376,6 +413,13 @@ class Manifest:
         for r in self.db.execute("SELECT last_error, count(*) AS c FROM sessions WHERE status='lost' GROUP BY last_error"):
             cause = error_cause(r["last_error"])
             by_cause[cause] = by_cause.get(cause, 0) + r["c"]
+        held = {r[0]: r[1] for r in self.db.execute(
+            "SELECT retry_hold, count(*) FROM captures WHERE consolidated=0 AND retry_hold IS NOT NULL"
+            " GROUP BY retry_hold")}
+        closed = {r[0]: r[1] for r in self.db.execute(
+            "SELECT closed_reason, count(*) FROM captures WHERE consolidated=1 AND closed_reason IS NOT NULL"
+            " GROUP BY closed_reason")}
         return {"sessions": s, "notes": c[0], "cost_usd": round(c[1], 4), "last_capture": c[2],
                 "unconsolidated": c[3] or 0, "errors": [dict(e) for e in errors],
+                "held": held, "closed": closed,
                 "terminal": {"total": sum(by_cause.values()), "by_cause": by_cause}}

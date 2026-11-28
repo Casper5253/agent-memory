@@ -116,7 +116,10 @@ def run(cfg: Config, budget_s: float = 900, summarizer=None, consolidator=None, 
             results = pipeline.process_ready(cfg, man, deadline - time.monotonic(), summarizer, consolidator)
             summary["jobs"] += jobs
             summary["results"] += results
-            if not jobs and not results:
+            held = pipeline.triage_held(cfg, man, consolidator=consolidator, limit=20)
+            triaged = held["promoted"] + held["closed"]
+            summary["results"] += [("held", "", "triage")] * triaged
+            if not jobs and not results and not triaged:
                 break
         if index and cfg.auto_index and any(r[2] == "captured" for r in summary["results"]):
             summary["index"] = search.update_index(cfg)

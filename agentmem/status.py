@@ -142,19 +142,19 @@ def model_items(sections):
 
 def evidence_refs(summary, link):
     target = link[2:-2] if link.startswith('[[') and link.endswith(']]') else link
-    offset = summary.get('_evidence_offset', 0)
+    offset = summary.get('_evidence_offset') or 0
     if type(offset) is not int or offset < 0:
         raise ValueError('invalid evidence offset')
-    return {f'[[{target}#e{n}]]': citation['claim'] for n, citation in enumerate(summary.get('citations', []), offset + 1)
+    return {f'[[{target}#e{n}]]': citation['claim'] for n, citation in enumerate(summary.get('citations') or [], offset + 1)
             if isinstance(citation, dict) and isinstance(citation.get('claim'), str) and citation['claim'].strip()}
 
 
 def evidence_support(summary, link):
     target = link[2:-2] if link.startswith('[[') and link.endswith(']]') else link
-    offset = summary.get('_evidence_offset', 0)
+    offset = summary.get('_evidence_offset') or 0
     if type(offset) is not int or offset < 0:
         raise ValueError('invalid evidence offset')
-    citations = [(f'[[{target}#e{n}]]', citation) for n, citation in enumerate(summary.get('citations', []), offset + 1)
+    citations = [(f'[[{target}#e{n}]]', citation) for n, citation in enumerate(summary.get('citations') or [], offset + 1)
                  if isinstance(citation, dict) and isinstance(citation.get('claim'), str) and citation['claim'].strip()]
     decisions, reasons = {}, {}
     for decision in summary.get('decisions') or []:
@@ -337,6 +337,44 @@ def include_summary_decisions(old, update, summary, allowed):
         update['sections']['decisions'].append(dict(text=text.strip(), ref=ref))
         present.append((text, ref))
         events.append(('added-omitted-decision', ref))
+    return update, events
+
+
+def include_summary_items(old, update, summary, allowed, link):
+    """Complete a valid proposal with cited decisions, next steps and questions the model omitted."""
+    update, events = include_summary_decisions(old, update, summary, allowed)
+    if (not isinstance(update, dict) or not isinstance(update.get('sections'), dict)
+            or set(update['sections']) != set(SECTIONS)
+            or any(not isinstance(items, list) for items in update['sections'].values())):
+        return update, events
+    target = link[2:-2] if link.startswith('[[') and link.endswith(']]') else link
+    offset = summary.get('_evidence_offset') or 0
+    if type(offset) is not int or offset < 0:
+        return update, events
+    citations = [(f'[[{target}#e{n}]]', citation) for n, citation in enumerate(summary.get('citations') or [], offset + 1)
+                 if isinstance(citation, dict) and isinstance(citation.get('claim'), str) and citation['claim'].strip()]
+    for section, source, cited_sections in (('working_now', 'facts', ('facts',)),
+                                            ('latest', 'what_happened', ('what_happened', 'latest')),
+                                            ('next', 'next_steps', ('next_steps', 'next')),
+                                            ('questions', 'open_questions', ('open_questions', 'questions'))):
+        present = [(item.text, item.ref) for item in old[section]]
+        present += [(entry.get('text'), entry.get('ref')) for entry in update['sections'][section]
+                    if isinstance(entry, dict) and 'text' in entry]
+        for item in summary.get(source) or []:
+            text = item if isinstance(item, str) else item.get('text') if isinstance(item, dict) else None
+            if not isinstance(text, str) or not text.strip():
+                continue
+            key = _claim_key(text)
+            ref = next((ref for ref, citation in citations
+                        if citation.get('section') in cited_sections and _claim_key(citation.get('claim', '')) == key), '')
+            entry = dict(text=text.strip(), ref=ref)
+            if not ref or _entry_problem(entry, allowed) or agent_process(entry['text']):
+                continue
+            if any(ref == existing_ref or key == _claim_key(existing_text) for existing_text, existing_ref in present):
+                continue
+            update['sections'][section].append(entry)
+            present.append((entry['text'], ref))
+            events.append(('added-omitted-' + section, ref))
     return update, events
 
 
